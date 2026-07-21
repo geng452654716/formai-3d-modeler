@@ -36,6 +36,7 @@ export interface LocalCadFeatureRequest {
   operation: LocalCadFeatureOperation;
   center: { xMm: number; yMm: number; zMm: number };
   hitNormal: { x: number; y: number; z: number };
+  surfaceTangentU: { x: number; y: number; z: number } | null;
   surfaceGeometryType: string;
   surfaceUv: { u: number; v: number };
   radiusMm: number | null;
@@ -83,6 +84,8 @@ export interface LocalCadFeatureResult {
     boundsMm: { x: number; y: number; z: number };
     surfaceGeometryType?: string;
     surfaceUv?: { u: number; v: number };
+    /** OpenCascade 在当前曲面 UV 点击位置计算的单位 U 切向。 */
+    surfaceTangentU?: { x: number; y: number; z: number } | null;
     maximumAbsCurvaturePerMm?: number | null;
     minimumCurvatureRadiusMm?: number | null;
     curvatureRatio?: number | null;
@@ -126,7 +129,7 @@ export function createLocalCadFeaturePreview(
 export function describeLocalCadFeaturePreview(preview: LocalCadFeaturePreview) {
   const request = preview.request;
   if (request.operation === 'cut-slot') {
-    return `曲面槽孔预览：宽 ${request.widthMm!.toFixed(2)} 毫米、长 ${request.lengthMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；沿真实内法线显示。`;
+    return `曲面槽孔预览：宽 ${request.widthMm!.toFixed(2)} 毫米、长 ${request.lengthMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实内法线显示。`;
   }
   const diameterMm = request.radiusMm === null ? 0 : request.radiusMm * 2;
   if (preview.kind === 'additive') {
@@ -279,11 +282,15 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
   if (curvedFace && !['add-cylinder', 'cut-cylinder', 'cut-slot'].includes(plan.operation)) {
     throw new Error(`当前选中的是${describeCadSurfaceGeometryType(face.geometryType)}；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔`);
   }
+  if (curvedFace && plan.operation === 'cut-slot' && (!hit.surfaceTangentU || !finiteVector(hit.surfaceTangentU))) {
+    throw new Error('曲面槽孔缺少 OpenCascade 真实 U 切向，请重新点击目标面');
+  }
   return {
     sourceKind: 'cad-part', selectionRevision: selection.revision, partId: face.partId,
     stableFaceId: face.stableId, stableEdgeId: edgeOperation ? edge!.stableEdgeId : null, operation: plan.operation,
     center: { xMm: hit.pointMm.x, yMm: hit.pointMm.y, zMm: hit.pointMm.z },
-    hitNormal: { ...hit.normal }, surfaceGeometryType: face.geometryType, surfaceUv: { u: hit.surfaceUv!.u, v: hit.surfaceUv!.v }, radiusMm: dimension(plan.radiusMm), widthMm: dimension(plan.widthMm),
+    hitNormal: { ...hit.normal }, surfaceTangentU: hit.surfaceTangentU ? { ...hit.surfaceTangentU } : null,
+    surfaceGeometryType: face.geometryType, surfaceUv: { u: hit.surfaceUv!.u, v: hit.surfaceUv!.v }, radiusMm: dimension(plan.radiusMm), widthMm: dimension(plan.widthMm),
     heightMm: dimension(plan.heightMm), lengthMm: dimension(plan.lengthMm), depthMm: plan.depthMm,
     rotationDeg: plan.rotationDeg ?? 0,
     summary: summary.trim() || plan.reason.trim() || '稳定 CAD 局部特征', command: command.trim()

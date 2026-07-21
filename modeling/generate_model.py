@@ -566,6 +566,15 @@ def _record_vector(record: dict[str, Any], key: str, label: str) -> tuple[float,
     return vector
 
 
+def _optional_record_vector(
+    record: dict[str, Any], key: str, label: str
+) -> tuple[float, float, float] | None:
+    """读取可选三维向量，兼容升级前没有曲面切向的历史记录。"""
+    if record.get(key) is None:
+        return None
+    return _record_vector(record, key, label)
+
+
 
 def _record_surface_uv(record: dict[str, Any], label: str) -> tuple[float, float] | None:
     value = record.get("surfaceUv")
@@ -617,6 +626,7 @@ def _replay_local_features(
                 or "PLANE"
             ).strip()
             surface_uv = _record_surface_uv(record, f"{label}曲面 UV")
+            surface_tangent_u = _optional_record_vector(record, "surfaceTangentU", f"{label}曲面 U 切向")
             if surface_geometry_type != "PLANE" and surface_uv is None:
                 raise ValueError("曲面局部特征记录缺少真实 UV")
             if operation in ("fillet-edge", "chamfer-edge"):
@@ -666,6 +676,7 @@ def _replay_local_features(
                     target_face_descriptor=target_face,
                     surface_geometry_type=surface_geometry_type,
                     surface_uv=surface_uv,
+                    surface_tangent_u=surface_tangent_u,
                 )
             models[part_id] = application["model"]
             current_faces[part_id] = application["faces"]
@@ -675,6 +686,7 @@ def _replay_local_features(
                 "stableEdgeStatus": application.get("stableEdgeStatus"),
                 "targetFace": record.get("targetFace") or application["targetFace"],
                 "targetEdge": record.get("targetEdge") or application.get("targetEdge"),
+                "surfaceTangentU": application["validation"].get("surfaceTangentU"),
                 "replayStatus": "replayed",
                 "replayedRevision": replay_revision,
                 "failureReason": None,

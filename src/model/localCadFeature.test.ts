@@ -91,7 +91,12 @@ describe('稳定 CAD 面局部特征请求', () => {
     const curvedSelection: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER', stableId: 'face-cylinder' }],
-      hit: { ...selection.hit!, stableId: 'face-cylinder', normal: { x: 1, y: 0, z: 0 } }
+      hit: {
+        ...selection.hit!,
+        stableId: 'face-cylinder',
+        normal: { x: 1, y: 0, z: 0 },
+        surfaceTangentU: { x: 0, y: 1, z: 0 }
+      }
     };
     const request = buildLocalCadFeatureRequest(curvedSelection, '在这里开一个直径 4 毫米、深 6 毫米的圆孔');
     const preview = createLocalCadFeaturePreview(request);
@@ -122,10 +127,11 @@ describe('稳定 CAD 面局部特征请求', () => {
       '开长 14 毫米、宽 5 毫米、深 4 毫米、旋转 25 度的槽孔'
     ));
     expect(slotPreview?.request).toMatchObject({
-      operation: 'cut-slot', widthMm: 5, lengthMm: 14, depthMm: 4, rotationDeg: 25
+      operation: 'cut-slot', widthMm: 5, lengthMm: 14, depthMm: 4, rotationDeg: 25,
+      surfaceTangentU: { x: 0, y: 1, z: 0 }
     });
     expect(describeLocalCadFeaturePreview(slotPreview!)).toBe(
-      '曲面槽孔预览：宽 5.00 毫米、长 14.00 毫米、深 4.00 毫米，旋转 25.00 度；沿真实内法线显示。'
+      '曲面槽孔预览：宽 5.00 毫米、长 14.00 毫米、深 4.00 毫米，旋转 25.00 度；0 度沿真实 U 切向，沿真实内法线显示。'
     );
   });
 
@@ -169,7 +175,8 @@ describe('稳定 CAD 面局部特征请求', () => {
   it('接受曲面圆形凸台、圆孔和受限槽孔，并携带真实曲面类型与 UV', () => {
     const curved: CadFaceSelectionContext = {
       ...selection,
-      faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }]
+      faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }],
+      hit: { ...selection.hit!, surfaceTangentU: { x: 0, y: 1, z: 0 } }
     };
     const boss = buildLocalCadFeatureRequest(curved, '增加直径 4 毫米、高 2 毫米的凸台');
     expect(boss).toMatchObject({
@@ -179,7 +186,10 @@ describe('稳定 CAD 面局部特征请求', () => {
     const hole = buildLocalCadFeatureRequest(curved, '开直径 3 毫米、深 4 毫米的圆孔');
     expect(hole).toMatchObject({ operation: 'cut-cylinder', radiusMm: 1.5, depthMm: 4 });
     const slot = buildLocalCadFeatureRequest(curved, '开长 8 毫米、宽 3 毫米、深 4 毫米、旋转 15 度的槽孔');
-    expect(slot).toMatchObject({ operation: 'cut-slot', widthMm: 3, lengthMm: 8, depthMm: 4, rotationDeg: 15 });
+    expect(slot).toMatchObject({
+      operation: 'cut-slot', widthMm: 3, lengthMm: 8, depthMm: 4, rotationDeg: 15,
+      surfaceTangentU: { x: 0, y: 1, z: 0 }
+    });
   });
 
   it('拒绝曲面矩形、整面偏移和曲面边特征', () => {

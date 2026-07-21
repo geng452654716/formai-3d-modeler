@@ -52,6 +52,7 @@ function curvedFeature(
     widthMm: null,
     lengthMm: null,
     rotationDeg: 0,
+    surfaceTangentU: null,
     depthMm: 3,
     command: '增加曲面圆形凸台',
     diagnostics: {
@@ -123,13 +124,15 @@ describe('模型版本参数与开孔差异对比', () => {
       widthMm: 3,
       lengthMm: 8,
       rotationDeg: 0,
+      surfaceTangentU: { x: 0, y: 1, z: 0 },
       command: '创建曲面槽孔'
     });
     const after = curvedFeature({
       ...before,
       widthMm: 4,
       lengthMm: 10,
-      rotationDeg: 25
+      rotationDeg: 25,
+      surfaceTangentU: { x: 0, y: 0.8, z: 0.6 }
     });
     const [difference] = compareModelVersions(
       version('基础', { curvedFeatures: [before] }),
@@ -137,12 +140,18 @@ describe('模型版本参数与开孔差异对比', () => {
     ).curvedFeatureDifferences;
 
     expect(difference.label).toBe('曲面槽孔');
-    expect(difference.changedFields).toEqual(expect.arrayContaining(['槽孔宽度', '槽孔长度', '旋转角']));
+    expect(difference.changedFields).toEqual(expect.arrayContaining(['槽孔宽度', '槽孔长度', '旋转角', '曲面 U 切向']));
     expect(difference.fields).toContainEqual({
       field: 'rotationDeg',
       label: '旋转角',
       before: '0 度',
       after: '25 度'
+    });
+    expect(difference.fields).toContainEqual({
+      field: 'surfaceTangentU',
+      label: '曲面 U 切向',
+      before: '(0，1，0)',
+      after: '(0，0.8，0.6)'
     });
   });
 

@@ -51,6 +51,8 @@ export interface CadFaceSelectionHit {
   meshNormal: CadSelectionVector;
   surfaceUv: CadSurfaceUv | null;
   uvBounds: CadSurfaceUvBounds | null;
+  /** OpenCascade 在真实 UV 点击位置计算的单位 U 切向，用作曲面轮廓零度方向。 */
+  surfaceTangentU?: CadSelectionVector | null;
   precision: 'mesh' | 'opencascade';
   resolutionStatus: 'resolving' | 'resolved' | 'failed';
   pointDistanceMm: number | null;
@@ -294,7 +296,7 @@ export function buildCadFaceSelectionCommandContext(selection: CadFaceSelectionC
   ).join('、');
   const hitText = selection.hit
     ? selection.hit.resolutionStatus === 'resolved' && selection.hit.surfaceUv
-      ? `OpenCascade 精确命中坐标=(${selection.hit.pointMm.x.toFixed(3)}, ${selection.hit.pointMm.y.toFixed(3)}, ${selection.hit.pointMm.z.toFixed(3)}) 毫米；真实外法向=(${selection.hit.normal.x.toFixed(6)}, ${selection.hit.normal.y.toFixed(6)}, ${selection.hit.normal.z.toFixed(6)})；曲面 UV=(${selection.hit.surfaceUv.u.toFixed(9)}, ${selection.hit.surfaceUv.v.toFixed(9)})；选择网格投影距离=${selection.hit.pointDistanceMm?.toFixed(6) ?? '未知'} 毫米；法线点积=${selection.hit.normalDot?.toFixed(6) ?? '未知'}；${selection.edge ? `稳定边=${selection.edge.stableEdgeId}(${describeCadEdgeGeometryType(selection.edge.geometryType)}，长度 ${selection.edge.lengthMm.toFixed(3)} 毫米)；` : ''}本次选择网格三角面索引=${selection.hit.triangleIndex}`
+      ? `OpenCascade 精确命中坐标=(${selection.hit.pointMm.x.toFixed(3)}, ${selection.hit.pointMm.y.toFixed(3)}, ${selection.hit.pointMm.z.toFixed(3)}) 毫米；真实外法向=(${selection.hit.normal.x.toFixed(6)}, ${selection.hit.normal.y.toFixed(6)}, ${selection.hit.normal.z.toFixed(6)})；曲面 UV=(${selection.hit.surfaceUv.u.toFixed(9)}, ${selection.hit.surfaceUv.v.toFixed(9)})；${selection.hit.surfaceTangentU ? `真实 U 切向=(${selection.hit.surfaceTangentU.x.toFixed(6)}, ${selection.hit.surfaceTangentU.y.toFixed(6)}, ${selection.hit.surfaceTangentU.z.toFixed(6)})；` : ''}选择网格投影距离=${selection.hit.pointDistanceMm?.toFixed(6) ?? '未知'} 毫米；法线点积=${selection.hit.normalDot?.toFixed(6) ?? '未知'}；${selection.edge ? `稳定边=${selection.edge.stableEdgeId}(${describeCadEdgeGeometryType(selection.edge.geometryType)}，长度 ${selection.edge.lengthMm.toFixed(3)} 毫米)；` : ''}本次选择网格三角面索引=${selection.hit.triangleIndex}`
       : `当前仅有选择网格预览坐标=(${selection.hit.meshPointMm.x.toFixed(3)}, ${selection.hit.meshPointMm.y.toFixed(3)}, ${selection.hit.meshPointMm.z.toFixed(3)}) 毫米；网格法线=(${selection.hit.meshNormal.x.toFixed(6)}, ${selection.hit.meshNormal.y.toFixed(6)}, ${selection.hit.meshNormal.z.toFixed(6)})；精确解析状态=${selection.hit.resolutionStatus === 'resolving' ? '解析中' : `失败：${selection.hit.resolutionError ?? '未知错误'}`}；不得把网格坐标、网格法线或三角面索引冒充 OpenCascade 精确值；本次选择网格三角面索引=${selection.hit.triangleIndex}`
     : '框选模式没有唯一命中点，请以所列稳定面及其中心、法线作为局部范围。';
   const bounds = Object.entries(selection.partBoundsMm)

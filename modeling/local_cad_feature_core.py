@@ -285,11 +285,20 @@ def _target_edge(
     return candidates[0][1]
 
 
-def _local_x_direction(outward: cq.Vector, rotation_deg: float) -> cq.Vector:
-    """从世界轴确定性构造平面 X 轴，再绕外法线旋转。"""
-    axes = (cq.Vector(1, 0, 0), cq.Vector(0, 1, 0), cq.Vector(0, 0, 1))
-    reference = min(axes, key=lambda axis: abs(float(axis.dot(outward))))
-    projected = reference.sub(outward.multiply(float(reference.dot(outward))))
+def _local_x_direction(
+    outward: cq.Vector,
+    rotation_deg: float,
+    base_direction: cq.Vector | None = None,
+) -> cq.Vector:
+    """从指定面内基准或世界轴构造平面 X 轴，再绕外法线旋转。"""
+    if base_direction is None:
+        axes = (cq.Vector(1, 0, 0), cq.Vector(0, 1, 0), cq.Vector(0, 0, 1))
+        reference = min(axes, key=lambda axis: abs(float(axis.dot(outward))))
+        projected = reference.sub(outward.multiply(float(reference.dot(outward))))
+    else:
+        projected = base_direction.sub(outward.multiply(float(base_direction.dot(outward))))
+        if projected.Length <= 1e-9:
+            raise ValueError("曲面 U 切向与外法线退化，无法安全确定轮廓方向")
     base_x = projected.normalized()
     base_y = outward.cross(base_x).normalized()
     radians = math.radians(rotation_deg)
@@ -297,8 +306,11 @@ def _local_x_direction(outward: cq.Vector, rotation_deg: float) -> cq.Vector:
 
 
 
-def _surface_point_and_normal(face: cq.Face, surface_uv: tuple[float, float]) -> tuple[cq.Vector, cq.Vector]:
-    """在真实裁剪面 UV 上重新计算点和 OpenCascade 外法线。"""
+def _surface_frame(
+    face: cq.Face,
+    surface_uv: tuple[float, float],
+) -> tuple[cq.Vector, cq.Vector, cq.Vector]:
+    """在真实裁剪面 UV 上重新计算点、外法线和单位 U 切向。"""
     if len(surface_uv) != 2 or not all(math.isfinite(value) for value in surface_uv):
         raise ValueError("曲面 UV 必须是两个有限数值")
     u, v = (float(value) for value in surface_uv)
@@ -315,9 +327,23 @@ def _surface_point_and_normal(face: cq.Face, surface_uv: tuple[float, float]) ->
     magnitude = float(normal.Magnitude())
     if not math.isfinite(magnitude) or magnitude <= 1e-12:
         raise ValueError("OpenCascade 无法在记录 UV 位置计算真实外法线")
+    surface = BRep_Tool.Surface_s(face.wrapped)
+    properties = GeomLProp_SLProps(surface, u, v, 1, 1e-9)
+    if not properties.IsTangentUDefined():
+        raise ValueError("OpenCascade 无法在记录 UV 位置计算 U 切向")
+    tangent = gp_Dir()
+    properties.TangentU(tangent)
+    tangent_magnitude = math.sqrt(tangent.X() ** 2 + tangent.Y() ** 2 + tangent.Z() ** 2)
+    if not math.isfinite(tangent_magnitude) or tangent_magnitude <= 1e-12:
+        raise ValueError("记录 UV 位置的 U 切向退化，无法安全确定轮廓方向")
     return (
         cq.Vector(float(point.X()), float(point.Y()), float(point.Z())),
         cq.Vector(float(normal.X()) / magnitude, float(normal.Y()) / magnitude, float(normal.Z()) / magnitude),
+        cq.Vector(
+            float(tangent.X()) / tangent_magnitude,
+            float(tangent.Y()) / tangent_magnitude,
+            float(tangent.Z()) / tangent_magnitude,
+        ),
     )
 
 
@@ -551,6 +577,7 @@ def _planar_tool(
     length_mm: float | None,
     depth_mm: float,
     rotation_deg: float,
+    surface_x_direction: cq.Vector | None = None,
 ) -> cq.Workplane:
     if operation in ("offset-face-outward", "offset-face-inward"):
         return _whole_face_tool(
@@ -563,7 +590,11 @@ def _planar_tool(
     overlap_mm = max(0.05, min(0.25, diagonal * 0.002))
     adding = operation in ("add-cylinder", "add-rectangle")
     start = point.add(outward.multiply(-overlap_mm if adding else overlap_mm))
-    plane = cq.Plane(origin=start, xDir=_local_x_direction(outward, rotation_deg), normal=outward)
+    plane = cq.Plane(
+        origin=start,
+        xDir=_local_x_direction(outward, rotation_deg, surface_x_direction),
+        normal=outward,
+    )
     profile = cq.Workplane(plane)
     if operation in ("add-cylinder", "cut-cylinder"):
         profile = profile.circle(float(radius_mm))
@@ -604,6 +635,7 @@ def apply_planar_feature(
     target_face_descriptor: dict[str, Any] | None = None,
     surface_geometry_type: str | None = None,
     surface_uv: tuple[float, float] | None = None,
+    surface_tangent_u: tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
     """执行可验证的稳定面特征；曲面允许圆形凸台、圆孔和切平面安全近似槽孔。"""
     validate_planar_feature_inputs(
@@ -643,13 +675,19 @@ def apply_planar_feature(
     if curved_face:
         if surface_uv is None:
             raise ValueError("曲面局部特征缺少真实 UV，请重新点击目标面")
-        point, outward = _surface_point_and_normal(target_face, surface_uv)
+        point, outward, exact_surface_tangent_u = _surface_frame(target_face, surface_uv)
+        if operation == "cut-slot" and surface_tangent_u is not None:
+            requested_tangent = _unit_vector(surface_tangent_u, "记录曲面 U 切向")
+            tangent_dot = float(exact_surface_tangent_u.dot(requested_tangent))
+            if tangent_dot < 0.8:
+                raise ValueError("记录曲面 U 切向与当前 OpenCascade 曲面方向不一致，需要重新选择目标面")
     else:
         normal_values = current_descriptor.get("normal")
         if not isinstance(normal_values, list) or len(normal_values) != 3:
             raise ValueError("当前 OpenCascade 平面缺少可校验的外法线")
         outward = _unit_vector(tuple(float(value) for value in normal_values), "OpenCascade 面外法线")
         point = cq.Vector(*center)
+        exact_surface_tangent_u = None
 
     requested_normal = _unit_vector(hit_normal, "点击命中法线")
     normal_dot = float(outward.dot(requested_normal))
@@ -711,6 +749,7 @@ def apply_planar_feature(
         length_mm=length_mm,
         depth_mm=depth_mm,
         rotation_deg=rotation_deg,
+        surface_x_direction=exact_surface_tangent_u if curved_face and operation == "cut-slot" else None,
     )
     interference = {
         "interferenceCheckPassed": None,
@@ -790,6 +829,11 @@ def apply_planar_feature(
             "volumeDeltaMm3": volume_delta,
             "surfaceGeometryType": geometry_type,
             "surfaceUv": None if surface_uv is None else {"u": float(surface_uv[0]), "v": float(surface_uv[1])},
+            "surfaceTangentU": None if exact_surface_tangent_u is None else {
+                "x": float(exact_surface_tangent_u.x),
+                "y": float(exact_surface_tangent_u.y),
+                "z": float(exact_surface_tangent_u.z),
+            },
             **curvature,
             "localWallThicknessMm": local_wall_thickness,
             "remainingWallMm": remaining_wall,

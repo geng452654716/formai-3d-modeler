@@ -210,6 +210,7 @@ def edit_cad_feature(
     stable_edge_id: str | None = None,
     surface_geometry_type: str | None = None,
     surface_uv: tuple[float, float] | None = None,
+    surface_tangent_u: tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
     if not selection_revision.strip() or not part_id.strip() or not stable_face_id.strip():
         raise ValueError("稳定 CAD 面选择上下文不完整，请重新选择平面")
@@ -271,6 +272,12 @@ def edit_cad_feature(
             )
         if surface_uv is None or len(surface_uv) != 2 or not all(math.isfinite(value) for value in surface_uv):
             raise ValueError("曲面局部特征缺少有限的真实 UV，请重新点击目标面")
+        if operation == "cut-slot" and (
+            surface_tangent_u is None
+            or len(surface_tangent_u) != 3
+            or not all(math.isfinite(value) for value in surface_tangent_u)
+        ):
+            raise ValueError("曲面槽孔缺少有限的真实 U 切向，请重新点击目标面")
 
     step_file = _plain_file_name(target_part.get("stepFile"), "目标零件 STEP ")
     stl_file = _plain_file_name(target_part.get("stlFile"), "目标零件 STL ")
@@ -311,6 +318,7 @@ def edit_cad_feature(
             target_face_descriptor=requested_descriptor,
             surface_geometry_type=requested_geometry_type,
             surface_uv=surface_uv,
+            surface_tangent_u=surface_tangent_u,
         )
     edited = application["model"]
     new_face_sources = application["faceSources"]
@@ -408,6 +416,7 @@ def edit_cad_feature(
             "outwardNormal": outward,
             "surfaceGeometryType": requested_geometry_type,
             "surfaceUv": None if surface_uv is None else {"u": surface_uv[0], "v": surface_uv[1]},
+            "surfaceTangentU": validation.get("surfaceTangentU"),
             "targetFace": application["targetFace"],
             "targetEdge": application.get("targetEdge"),
             "createdRevision": revision,
@@ -547,6 +556,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--surface-geometry-type", required=True)
     parser.add_argument("--surface-u", type=float, required=True)
     parser.add_argument("--surface-v", type=float, required=True)
+    parser.add_argument("--surface-tangent-u-x", type=float)
+    parser.add_argument("--surface-tangent-u-y", type=float)
+    parser.add_argument("--surface-tangent-u-z", type=float)
     parser.add_argument("--radius", type=float)
     parser.add_argument("--width", type=float)
     parser.add_argument("--height", type=float)
@@ -560,6 +572,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_args()
     try:
+        tangent_components = (
+            arguments.surface_tangent_u_x,
+            arguments.surface_tangent_u_y,
+            arguments.surface_tangent_u_z,
+        )
+        if any(value is not None for value in tangent_components) and not all(
+            value is not None for value in tangent_components
+        ):
+            raise ValueError("曲面 U 切向必须同时提供三个有限分量，或全部留空")
         edit_cad_feature(
             output_dir=arguments.output,
             operation=arguments.operation,
@@ -569,6 +590,8 @@ def main() -> int:
             stable_edge_id=arguments.stable_edge_id,
             surface_geometry_type=arguments.surface_geometry_type,
             surface_uv=(arguments.surface_u, arguments.surface_v),
+            surface_tangent_u=tangent_components
+            if all(value is not None for value in tangent_components) else None,
             center=(arguments.center_x, arguments.center_y, arguments.center_z),
             hit_normal=(arguments.normal_x, arguments.normal_y, arguments.normal_z),
             radius_mm=arguments.radius,

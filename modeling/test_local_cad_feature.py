@@ -171,6 +171,7 @@ class LocalCadFeatureTests(unittest.TestCase):
             point = hit["projectedPointMm"]
             normal = hit["outwardNormal"]
             surface_uv = hit["surfaceUv"]
+            surface_tangent_u = hit["surfaceTangentU"]
 
             result = edit_cad_feature(
                 root,
@@ -185,6 +186,11 @@ class LocalCadFeatureTests(unittest.TestCase):
                 "在曲面这里开直径 4 毫米、深 4 毫米的圆孔",
                 surface_geometry_type="CYLINDER",
                 surface_uv=(surface_uv["u"], surface_uv["v"]),
+                surface_tangent_u=(
+                    surface_tangent_u["x"],
+                    surface_tangent_u["y"],
+                    surface_tangent_u["z"],
+                ),
             )
 
             self.assertNotEqual(result["revision"], manifest["revision"])
@@ -238,6 +244,7 @@ class LocalCadFeatureTests(unittest.TestCase):
             point = hit["projectedPointMm"]
             normal = hit["outwardNormal"]
             surface_uv = hit["surfaceUv"]
+            surface_tangent_u = hit["surfaceTangentU"]
 
             result = edit_cad_feature(
                 root, "cut-slot", manifest["revision"], "curved-part", face["stableId"],
@@ -247,6 +254,11 @@ class LocalCadFeatureTests(unittest.TestCase):
                 width_mm=3.0, length_mm=6.0, rotation_deg=20.0,
                 surface_geometry_type="CYLINDER",
                 surface_uv=(surface_uv["u"], surface_uv["v"]),
+                surface_tangent_u=(
+                    surface_tangent_u["x"],
+                    surface_tangent_u["y"],
+                    surface_tangent_u["z"],
+                ),
             )
 
             feature = result["updatedCadResult"]["localFeatures"][0]
@@ -254,6 +266,7 @@ class LocalCadFeatureTests(unittest.TestCase):
             self.assertEqual(feature["widthMm"], 3.0)
             self.assertEqual(feature["lengthMm"], 6.0)
             self.assertEqual(feature["rotationDeg"], 20.0)
+            self.assertEqual(feature["surfaceTangentU"], surface_tangent_u)
             self.assertAlmostEqual(feature["curvedDiagnostics"]["curvatureRatio"], 0.3, places=6)
             self.assertTrue(feature["curvedDiagnostics"]["interferenceCheckPassed"])
             persisted = json.loads((root / "generation-result.json").read_text(encoding="utf-8"))

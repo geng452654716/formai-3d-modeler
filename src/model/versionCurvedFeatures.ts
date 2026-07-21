@@ -30,6 +30,7 @@ export function captureVersionCurvedFeatures(
       widthMm: feature.widthMm ?? null,
       lengthMm: feature.lengthMm ?? null,
       rotationDeg: feature.rotationDeg ?? 0,
+      surfaceTangentU: feature.surfaceTangentU ? { ...feature.surfaceTangentU } : null,
       depthMm: feature.depthMm,
       command: feature.command,
       diagnostics

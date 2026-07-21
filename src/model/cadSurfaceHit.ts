@@ -27,6 +27,7 @@ export interface CadSurfaceHitResult {
   surfaceUv: CadSurfaceUv;
   uvBounds: CadSurfaceUvBounds;
   outwardNormal: CadSelectionVector;
+  surfaceTangentU: CadSelectionVector;
   normalDot: number;
   trimmedFaceState: 'inside' | 'on-boundary';
   units: 'mm';
@@ -84,6 +85,7 @@ export function applyCadSurfaceHitResult(
     throw new Error('OpenCascade 曲面命中结果与稳定面几何类型不一致');
   }
   if (!finiteVector(result.projectedPointMm) || !finiteVector(result.outwardNormal)
+    || !finiteVector(result.surfaceTangentU)
     || !finiteUv(result.surfaceUv) || !finiteUvBounds(result.uvBounds)
     || !Number.isFinite(result.pointDistanceMm)
     || !Number.isFinite(result.maximumPointDistanceMm)
@@ -101,6 +103,7 @@ export function applyCadSurfaceHitResult(
       normal: result.outwardNormal,
       surfaceUv: result.surfaceUv,
       uvBounds: result.uvBounds,
+      surfaceTangentU: result.surfaceTangentU,
       precision: 'opencascade',
       resolutionStatus: 'resolved',
       pointDistanceMm: result.pointDistanceMm,
@@ -124,6 +127,7 @@ export function failCadSurfaceHitSelection(
       normal: selection.hit.meshNormal,
       surfaceUv: null,
       uvBounds: null,
+      surfaceTangentU: null,
       precision: 'mesh',
       resolutionStatus: 'failed',
       pointDistanceMm: null,

@@ -288,7 +288,8 @@ const curvedSelection = {
     meshPointMm: { x: 10, y: 0, z: 0 },
     meshNormal: { x: 1, y: 0, z: 0 },
     surfaceUv: { u: 0, v: 10 },
-    uvBounds: { uMin: 0, uMax: Math.PI * 2, vMin: 0, vMax: 20 }
+    uvBounds: { uMin: 0, uMax: Math.PI * 2, vMin: 0, vMax: 20 },
+    surfaceTangentU: { x: 0, y: 1, z: 0 }
   }
 } satisfies CadFaceSelectionContext;
 
@@ -305,6 +306,7 @@ const updatedCurvedCadResult = {
     outwardNormal: { x: 1, y: 0, z: 0 },
     surfaceGeometryType: 'CYLINDER',
     surfaceUv: { u: 0, v: 10 },
+    surfaceTangentU: { x: 0, y: 1, z: 0 },
     radiusMm: 2,
     depthMm: 4,
     command: '在这里开一个直径 4 毫米、深 4 毫米的圆孔',
@@ -352,6 +354,7 @@ function curvedFeatureResult(): LocalCadFeatureResult {
       boundsMm: { x: 20, y: 20, z: 20 },
       surfaceGeometryType: 'CYLINDER',
       surfaceUv: { u: 0, v: 10 },
+      surfaceTangentU: { x: 0, y: 1, z: 0 },
       maximumAbsCurvaturePerMm: 0.1,
       minimumCurvatureRadiusMm: 10,
       curvatureRatio: 0.2,
@@ -387,6 +390,7 @@ const updatedCurvedSlotCadResult = {
     outwardNormal: { x: 1, y: 0, z: 0 },
     surfaceGeometryType: 'CYLINDER',
     surfaceUv: { u: 0, v: 10 },
+    surfaceTangentU: { x: 0, y: 1, z: 0 },
     radiusMm: null,
     widthMm: 3,
     lengthMm: 6,
@@ -438,6 +442,7 @@ function curvedSlotFeatureResult(): LocalCadFeatureResult {
       boundsMm: { x: 20, y: 20, z: 20 },
       surfaceGeometryType: 'CYLINDER',
       surfaceUv: { u: 0, v: 10 },
+      surfaceTangentU: { x: 0, y: 1, z: 0 },
       maximumAbsCurvaturePerMm: 0.1,
       minimumCurvatureRadiusMm: 10,
       curvatureRatio: 0.3,
@@ -662,6 +667,7 @@ describe('稳定 CAD 局部特征命令链', () => {
       widthMm: 3,
       lengthMm: 6,
       rotationDeg: 20,
+      surfaceTangentU: { x: 0, y: 1, z: 0 },
       depthMm: 4,
       diagnostics: {
         curvatureRatio: 0.3,

@@ -460,7 +460,19 @@ function LoadedCadMesh({
       .applyMatrix4(coordinateTransform)
       // 仅用于避免预览和实体表面闪烁，不改变送给 OpenCascade 的毫米参数。
       .addScaledVector(direction, request.depthMm / 2 + 0.02);
-    const quaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), direction);
+    const tangent = request.surfaceTangentU
+      ? new Vector3(request.surfaceTangentU.x, request.surfaceTangentU.y, request.surfaceTangentU.z)
+        .applyNormalMatrix(new Matrix3().getNormalMatrix(coordinateTransform))
+      : null;
+    const quaternion = tangent && tangent.lengthSq() >= 1e-12
+      ? (() => {
+          tangent.addScaledVector(direction, -tangent.dot(direction)).normalize();
+          const localZ = tangent.clone().cross(direction).normalize();
+          return new Quaternion().setFromRotationMatrix(
+            new Matrix4().makeBasis(tangent, direction, localZ)
+          );
+        })()
+      : new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), direction);
     return {
       center,
       quaternion,
@@ -469,7 +481,7 @@ function LoadedCadMesh({
       widthMm: request.widthMm,
       lengthMm: request.lengthMm,
       depthMm: request.depthMm,
-      rotationRad: request.rotationDeg * Math.PI / 180,
+      rotationRad: request.rotationDeg * Math.PI / 180 * (preview.kind === 'subtractive' ? -1 : 1),
       color: preview.status === 'blocked'
         ? '#f59e0b'
         : preview.status === 'failed' ? '#fb7185'
@@ -553,6 +565,7 @@ function LoadedCadMesh({
                 meshNormal: { x: normalCad.x, y: normalCad.y, z: normalCad.z },
                 surfaceUv: null,
                 uvBounds: null,
+                surfaceTangentU: null,
                 precision: 'mesh',
                 resolutionStatus: 'resolving',
                 pointDistanceMm: null,

@@ -37,6 +37,7 @@ function result(triangleIndex = 12): CadSurfaceHitResult {
     geometryType: 'CYLINDER', projectedPointMm: { x: 10, y: 0, z: 5 }, pointDistanceMm: 0.01,
     maximumPointDistanceMm: 0.35, surfaceUv: { u: 0, v: 5 },
     uvBounds: { uMin: 0, uMax: Math.PI * 2, vMin: 0, vMax: 20 }, outwardNormal: { x: 1, y: 0, z: 0 },
+    surfaceTangentU: { x: 0, y: 1, z: 0 },
     normalDot: 0.999, trimmedFaceState: 'inside', units: 'mm', kernel: 'OpenCascade 7.8 / CadQuery 2.6', limitations: []
   };
 }
@@ -57,7 +58,8 @@ describe('曲面点击异步精确解析状态', () => {
     expect(backendMocks.resolveCadSurfaceHit).toHaveBeenCalledWith(expect.objectContaining({ triangleIndex: 12 }));
     expect(useModelStore.getState().cadFaceSelection?.hit).toMatchObject({
       precision: 'opencascade', resolutionStatus: 'resolved', surfaceUv: { u: 0, v: 5 },
-      pointMm: { x: 10, y: 0, z: 5 }, meshPointMm: { x: 10.01, y: 0, z: 5 }
+      pointMm: { x: 10, y: 0, z: 5 }, meshPointMm: { x: 10.01, y: 0, z: 5 },
+      surfaceTangentU: { x: 0, y: 1, z: 0 }
     });
   });
 

@@ -77,6 +77,8 @@ export interface VersionCurvedFeature {
   widthMm: number | null;
   lengthMm: number | null;
   rotationDeg: number;
+  /** 当前修订中用于解释槽孔零度方向的 OpenCascade 真实 U 切向。 */
+  surfaceTangentU: { x: number; y: number; z: number } | null;
   depthMm: number;
   command: string;
   diagnostics: CurvedFeatureDiagnostics;

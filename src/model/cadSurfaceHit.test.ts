@@ -44,7 +44,7 @@ function result(): CadSurfaceHitResult {
     triangleIndex: 12, geometryType: 'CYLINDER', projectedPointMm: { x: 10, y: 0, z: 5 },
     pointDistanceMm: 0.01, maximumPointDistanceMm: 0.35, surfaceUv: { u: 0, v: 5 },
     uvBounds: { uMin: 0, uMax: Math.PI * 2, vMin: 0, vMax: 20 },
-    outwardNormal: { x: 1, y: 0, z: 0 }, normalDot: 0.999,
+    outwardNormal: { x: 1, y: 0, z: 0 }, surfaceTangentU: { x: 0, y: 1, z: 0 }, normalDot: 0.999,
     trimmedFaceState: 'inside', units: 'mm', kernel: 'OpenCascade 7.8 / CadQuery 2.6', limitations: []
   };
 }
@@ -62,7 +62,8 @@ describe('OpenCascade 曲面点击结果绑定', () => {
     expect(updated.hit).toMatchObject({
       pointMm: { x: 10, y: 0, z: 5 }, normal: { x: 1, y: 0, z: 0 },
       meshPointMm: { x: 10.01, y: 0, z: 5 }, meshNormal: { x: 0.999, y: 0.01, z: 0 },
-      surfaceUv: { u: 0, v: 5 }, precision: 'opencascade', resolutionStatus: 'resolved',
+      surfaceUv: { u: 0, v: 5 }, surfaceTangentU: { x: 0, y: 1, z: 0 },
+      precision: 'opencascade', resolutionStatus: 'resolved',
       pointDistanceMm: 0.01, normalDot: 0.999, resolutionError: null
     });
   });

@@ -1264,6 +1264,9 @@ pub async fn run_local_cad_feature(
     surface_geometry_type: String,
     surface_u: f64,
     surface_v: f64,
+    surface_tangent_ux: Option<f64>,
+    surface_tangent_uy: Option<f64>,
+    surface_tangent_uz: Option<f64>,
     radius_mm: Option<f64>,
     width_mm: Option<f64>,
     height_mm: Option<f64>,
@@ -1292,6 +1295,11 @@ pub async fn run_local_cad_feature(
             || [radius_mm, width_mm, height_mm, length_mm].iter().flatten().any(|value| !value.is_finite()) {
             return Err("稳定 CAD 面局部特征坐标、法向和尺寸必须是有限数值".to_string());
         }
+        let surface_tangent_u = match (surface_tangent_ux, surface_tangent_uy, surface_tangent_uz) {
+            (Some(x), Some(y), Some(z)) if [x, y, z].iter().all(|value| value.is_finite()) => Some((x, y, z)),
+            (None, None, None) => None,
+            _ => return Err("曲面 U 切向必须同时提供三个有限分量，或全部留空".to_string()),
+        };
         if !(0.2..=200.0).contains(&depth_mm) || !(-180.0..=180.0).contains(&rotation_deg) {
             return Err("稳定 CAD 面局部特征深度或旋转角超出安全范围".to_string());
         }
@@ -1302,6 +1310,14 @@ pub async fn run_local_cad_feature(
         let curved_face = surface_geometry_type != "PLANE";
         if curved_face && !cylinder && !slot {
             return Err("当前选中的是非平面曲面；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔".into());
+        }
+        if curved_face && slot {
+            let (x, y, z) = surface_tangent_u.ok_or_else(|| {
+                "曲面槽孔缺少有效的 OpenCascade 真实 U 切向，请重新点击目标面".to_string()
+            })?;
+            if (x * x + y * y + z * z).sqrt() < 0.5 {
+                return Err("曲面槽孔的 OpenCascade 真实 U 切向已退化，请重新点击目标面".to_string());
+            }
         }
         if edge_feature {
             if stable_edge_id.as_deref().is_none_or(|value| value.is_empty() || value.chars().count() > 200)
@@ -1357,6 +1373,13 @@ pub async fn run_local_cad_feature(
         ];
         if let Some(stable_edge_id) = stable_edge_id {
             arguments.extend(["--stable-edge-id".into(), stable_edge_id]);
+        }
+        if let Some((x, y, z)) = surface_tangent_u {
+            arguments.extend([
+                "--surface-tangent-u-x".into(), x.to_string(),
+                "--surface-tangent-u-y".into(), y.to_string(),
+                "--surface-tangent-u-z".into(), z.to_string(),
+            ]);
         }
         for (flag, value) in [("--radius", radius_mm), ("--width", width_mm), ("--height", height_mm), ("--length", length_mm)] {
             if let Some(value) = value { arguments.push(flag.into()); arguments.push(value.to_string()); }
@@ -1848,6 +1871,7 @@ fn codex_prompt(command: &str, parameters: &Value, selection_context: Option<&Va
 当 selectionMode=click 且 faces[0].geometryType=PLANE 时，允许生成圆形/矩形凸台、圆孔/矩形孔/槽孔，或执行整面向外拉伸/向内偏移；stableEdgeId 必须为 null。\
 当 selectionMode=click 且 faces[0] 是非 PLANE 曲面时，只允许使用 add-cylinder、cut-cylinder 或 cut-slot；槽孔是在真实 UV 点击位置的切平面安全近似，不是沿任意曲面贴合轮廓；不得生成矩形、整面偏移或曲面边特征。\
 曲面操作必须使用上下文中 resolutionStatus=resolved、precision=opencascade 的真实点击点、外法线和 surfaceUv，不得改写 UV、切换目标或伪造曲面参数。\
+曲面槽孔的 rotationDeg=0 表示沿上下文中的真实 U 切向，正角度围绕真实外法线旋转；真实 U 切向由 OpenCascade 命中结果提供，Codex 不得改写，也不得在 localFeature 中增加切向字段。\
 当 selectionMode=edge 时，只允许对 edge 指定、且所属 faces[0] 为 PLANE 的单条稳定边执行 fillet-edge 或 chamfer-edge；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，\
 四个轮廓尺寸必须全部为 null，rotationDeg 必须为 0，depthMm 表示圆角半径或倒角距离，范围为 0.20 至 50.00 毫米。\
 所有 localFeature 都必须让 changes 为空，不得自行切换到其他零件、面或边。点击平面操作中：圆形凸台/圆孔使用 add-cylinder/cut-cylinder；矩形凸台/孔使用 add-rectangle/cut-rectangle；\

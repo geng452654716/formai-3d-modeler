@@ -461,6 +461,9 @@ function runLocalCadFeatureWorker(body: {
   surfaceGeometryType?: string;
   surfaceU?: number;
   surfaceV?: number;
+  surfaceTangentUx?: number | null;
+  surfaceTangentUy?: number | null;
+  surfaceTangentUz?: number | null;
   radiusMm?: number | null;
   widthMm?: number | null;
   heightMm?: number | null;
@@ -494,8 +497,22 @@ function runLocalCadFeatureWorker(body: {
   const wholeFace = body.operation === 'offset-face-outward' || body.operation === 'offset-face-inward';
   const edgeFeature = body.operation === 'fillet-edge' || body.operation === 'chamfer-edge';
   const curvedFace = body.surfaceGeometryType !== 'PLANE';
-  if (curvedFace && !cylinder) {
-    throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；第一版曲面局部特征只支持圆形凸台或圆孔`);
+  const slot = body.operation === 'cut-slot';
+  if (curvedFace && !cylinder && !slot) {
+    throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔`);
+  }
+  const surfaceTangentValues = [body.surfaceTangentUx, body.surfaceTangentUy, body.surfaceTangentUz];
+  const tangentValueCount = surfaceTangentValues.filter((value) => value !== null && value !== undefined).length;
+  if (tangentValueCount !== 0 && tangentValueCount !== 3) {
+    throw new Error('曲面 U 切向必须同时提供三个有限分量，或全部留空');
+  }
+  if (tangentValueCount === 3 && surfaceTangentValues.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+    throw new Error('曲面 U 切向必须同时提供三个有限分量，或全部留空');
+  }
+  if (curvedFace && slot) {
+    if (tangentValueCount !== 3) throw new Error('曲面槽孔缺少有效的 OpenCascade 真实 U 切向，请重新点击目标面');
+    const tangentLength = Math.hypot(body.surfaceTangentUx!, body.surfaceTangentUy!, body.surfaceTangentUz!);
+    if (tangentLength < 0.5) throw new Error('曲面槽孔的 OpenCascade 真实 U 切向已退化，请重新点击目标面');
   }
   if (edgeFeature) {
     if (typeof body.stableEdgeId !== 'string' || !body.stableEdgeId.trim() || Array.from(body.stableEdgeId).length > 200) {
@@ -536,6 +553,13 @@ function runLocalCadFeatureWorker(body: {
     '--depth', String(body.depthMm), '--rotation', String(body.rotationDeg), '--command', body.command ?? ''
   ];
   if (edgeFeature) arguments_.push('--stable-edge-id', body.stableEdgeId!.trim());
+  if (tangentValueCount === 3) {
+    arguments_.push(
+      '--surface-tangent-u-x', String(body.surfaceTangentUx),
+      '--surface-tangent-u-y', String(body.surfaceTangentUy),
+      '--surface-tangent-u-z', String(body.surfaceTangentUz)
+    );
+  }
   for (const [flag, value] of [['--radius', body.radiusMm], ['--width', body.widthMm], ['--height', body.heightMm], ['--length', body.lengthMm]] as const) {
     if (value !== null && value !== undefined) arguments_.push(flag, String(value));
   }

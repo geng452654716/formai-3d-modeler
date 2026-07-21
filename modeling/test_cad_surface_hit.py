@@ -58,6 +58,11 @@ class CadSurfaceHitCoreTests(unittest.TestCase):
         self.assertAlmostEqual(result["pointDistanceMm"], 0.0, places=7)
         self.assertEqual(result["projectedPointMm"], {"x": 2.0, "y": -3.0, "z": 5.0})
         self.assertEqual(result["outwardNormal"], {"x": 0.0, "y": 0.0, "z": 1.0})
+        tangent = result["surfaceTangentU"]
+        tangent_length = math.sqrt(sum(tangent[axis] ** 2 for axis in ("x", "y", "z")))
+        tangent_normal_dot = sum(tangent[axis] * result["outwardNormal"][axis] for axis in ("x", "y", "z"))
+        self.assertAlmostEqual(tangent_length, 1.0, places=7)
+        self.assertAlmostEqual(tangent_normal_dot, 0.0, places=7)
         self.assertTrue(math.isfinite(result["surfaceUv"]["u"]))
         self.assertTrue(math.isfinite(result["surfaceUv"]["v"]))
         self.assertEqual(result["trimmedFaceState"], "inside")
@@ -86,6 +91,19 @@ class CadSurfaceHitCoreTests(unittest.TestCase):
         self.assertEqual(first["geometryType"], "CYLINDER")
         self.assertGreater(first["outwardNormal"]["x"], 0.99)
         self.assertGreater(second["outwardNormal"]["y"], 0.99)
+        for result in (first, second):
+            tangent = result["surfaceTangentU"]
+            normal = result["outwardNormal"]
+            self.assertAlmostEqual(
+                math.sqrt(sum(tangent[axis] ** 2 for axis in ("x", "y", "z"))),
+                1.0,
+                places=7,
+            )
+            self.assertAlmostEqual(
+                sum(tangent[axis] * normal[axis] for axis in ("x", "y", "z")),
+                0.0,
+                places=7,
+            )
         self.assertNotAlmostEqual(first["surfaceUv"]["u"], second["surfaceUv"]["u"], places=3)
         self.assertGreater(first["normalDot"], 0.99)
         self.assertGreater(second["normalDot"], 0.99)
@@ -175,6 +193,7 @@ class CadSurfaceHitWorkerTests(unittest.TestCase):
             self.assertEqual(result["triangleIndex"], triangle_index)
             self.assertLess(result["pointDistanceMm"], 0.1)
             self.assertGreater(result["normalDot"], 0.99)
+            self.assertIn("surfaceTangentU", result)
             self.assertIn(
                 "曲面点击上下文支持受限圆形凸台、圆孔和切平面槽孔；槽孔不代表支持任意曲面贴合轮廓、曲面边圆角或曲面参数直接编辑",
                 result["limitations"],

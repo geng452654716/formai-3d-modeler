@@ -61,6 +61,7 @@ export type CurvedFeatureField =
   | 'widthMm'
   | 'lengthMm'
   | 'rotationDeg'
+  | 'surfaceTangentU'
   | 'depthMm'
   | 'surfaceGeometryType'
   | 'maximumAbsCurvaturePerMm'
@@ -156,6 +157,7 @@ const CURVED_FEATURE_FIELDS: ReadonlyArray<{
   { key: 'widthMm', label: '槽孔宽度', value: (feature) => feature.widthMm },
   { key: 'lengthMm', label: '槽孔长度', value: (feature) => feature.lengthMm },
   { key: 'rotationDeg', label: '旋转角', value: (feature) => feature.operation === 'cut-slot' ? feature.rotationDeg : null },
+  { key: 'surfaceTangentU', label: '曲面 U 切向', value: (feature) => feature.operation === 'cut-slot' ? feature.surfaceTangentU : null },
   { key: 'depthMm', label: '作用深度', value: (feature) => feature.depthMm },
   { key: 'surfaceGeometryType', label: '曲面类型', value: (feature) => feature.surfaceGeometryType },
   { key: 'maximumAbsCurvaturePerMm', label: '最大绝对曲率', value: (feature) => feature.diagnostics.maximumAbsCurvaturePerMm },
@@ -176,7 +178,7 @@ const CURVED_FEATURE_FIELDS: ReadonlyArray<{
 
 function curvedFeatureSummaryFields(feature: VersionCurvedFeature) {
   const dimensionalKeys: CurvedFeatureField[] = feature.operation === 'cut-slot'
-    ? ['widthMm', 'lengthMm', 'rotationDeg']
+    ? ['widthMm', 'lengthMm', 'rotationDeg', 'surfaceTangentU']
     : ['diameterMm'];
   const summaryKeys = new Set<CurvedFeatureField>([
     ...dimensionalKeys,
@@ -321,6 +323,19 @@ function compareOpenings(
 
 function curvedFeatureValueEqual(left: unknown, right: unknown) {
   if (typeof left === 'number' && typeof right === 'number') return numbersEqual(left, right);
+  if (
+    left && right && typeof left === 'object' && typeof right === 'object'
+    && 'x' in left && 'y' in left && 'z' in left
+    && 'x' in right && 'y' in right && 'z' in right
+  ) {
+    const leftVector = left as { x: unknown; y: unknown; z: unknown };
+    const rightVector = right as { x: unknown; y: unknown; z: unknown };
+    return [leftVector.x, leftVector.y, leftVector.z].every((value, index) => (
+      typeof value === 'number'
+      && typeof [rightVector.x, rightVector.y, rightVector.z][index] === 'number'
+      && numbersEqual(value, [rightVector.x, rightVector.y, rightVector.z][index] as number)
+    ));
+  }
   if (Array.isArray(left) && Array.isArray(right)) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
@@ -339,6 +354,12 @@ function formatCurvedFeatureValue(field: CurvedFeatureField, value: unknown) {
   }
   if (field === 'interferingStableFaceIds') {
     return Array.isArray(value) && value.length > 0 ? value.join('、') : '无';
+  }
+  if (field === 'surfaceTangentU' && value && typeof value === 'object' && 'x' in value && 'y' in value && 'z' in value) {
+    const vector = value as { x: unknown; y: unknown; z: unknown };
+    if ([vector.x, vector.y, vector.z].every((component) => typeof component === 'number')) {
+      return `(${formatNumber(vector.x as number)}，${formatNumber(vector.y as number)}，${formatNumber(vector.z as number)})`;
+    }
   }
   if (typeof value === 'number') {
     if (field === 'curvatureRatio') return formatNumber(value);

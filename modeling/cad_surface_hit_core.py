@@ -15,8 +15,9 @@ from OCP.BRep import BRep_Tool
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepGProp import BRepGProp_Face
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.GeomLProp import GeomLProp_SLProps
 from OCP.TopAbs import TopAbs_IN, TopAbs_ON
-from OCP.gp import gp_Pnt, gp_Pnt2d, gp_Vec
+from OCP.gp import gp_Dir, gp_Pnt, gp_Pnt2d, gp_Vec
 
 from local_cad_feature_core import resolve_stable_face_pair
 
@@ -53,6 +54,24 @@ def _surface_normal(face: cq.Face, u: float, v: float) -> tuple[float, float, fl
         float(normal.X()) / length,
         float(normal.Y()) / length,
         float(normal.Z()) / length,
+    )
+
+
+def _surface_u_tangent(face: cq.Face, u: float, v: float) -> tuple[float, float, float]:
+    """返回真实 UV 点击位置的单位 U 切向，作为曲面轮廓零度方向。"""
+    surface = BRep_Tool.Surface_s(face.wrapped)
+    properties = GeomLProp_SLProps(surface, u, v, 1, 1e-9)
+    if not properties.IsTangentUDefined():
+        raise ValueError("OpenCascade 无法在当前 UV 位置计算 U 切向，请换一个位置重新点击")
+    tangent = gp_Dir()
+    properties.TangentU(tangent)
+    length = math.sqrt(tangent.X() ** 2 + tangent.Y() ** 2 + tangent.Z() ** 2)
+    if not math.isfinite(length) or length <= _EPSILON:
+        raise ValueError("当前 UV 位置的 U 切向退化，无法安全确定曲面轮廓方向")
+    return (
+        float(tangent.X()) / length,
+        float(tangent.Y()) / length,
+        float(tangent.Z()) / length,
     )
 
 
@@ -146,6 +165,7 @@ def resolve_surface_hit(
         )
 
     outward_normal = _surface_normal(target_face, u, v)
+    surface_u_tangent = _surface_u_tangent(target_face, u, v)
     normal_dot = sum(
         exact * mesh
         for exact, mesh in zip(outward_normal, mesh_normal_values, strict=True)
@@ -176,6 +196,11 @@ def resolve_surface_hit(
             "x": _rounded(outward_normal[0], 12),
             "y": _rounded(outward_normal[1], 12),
             "z": _rounded(outward_normal[2], 12),
+        },
+        "surfaceTangentU": {
+            "x": _rounded(surface_u_tangent[0], 12),
+            "y": _rounded(surface_u_tangent[1], 12),
+            "z": _rounded(surface_u_tangent[2], 12),
         },
         "normalDot": _rounded(normal_dot),
         "trimmedFaceState": trimmed_face_state,

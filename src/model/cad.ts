@@ -133,6 +133,8 @@ export interface CadLocalFeatureRecord {
   outwardNormal: { x: number; y: number; z: number };
   surfaceGeometryType?: string;
   surfaceUv?: { u: number; v: number } | null;
+  /** 当前修订中由 OpenCascade 在真实 UV 点击位置计算的单位 U 切向。 */
+  surfaceTangentU?: { x: number; y: number; z: number } | null;
   radiusMm: number | null;
   widthMm?: number | null;
   heightMm?: number | null;
