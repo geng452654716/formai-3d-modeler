@@ -1,3 +1,5 @@
+import type { ObjectPresentationMap } from './objectTransform';
+
 export type SceneObjectId = string;
 
 export type InterfaceOpeningShape = 'circle' | 'rectangle' | 'rounded-rectangle' | 'slot';
@@ -89,8 +91,12 @@ export interface ModelVersion {
   id: string;
   label: string;
   createdAt: string;
+  /** 用于区分几何版本与仅改变视口显示的版本，避免撤销显示变换时错误重建 CAD。 */
+  changeKind?: 'geometry' | 'presentation';
   parameters: EnclosureParameters;
   interfaceOpenings?: InterfaceOpeningSpec[] | null;
+  /** 该版本中所有稳定对象的用户移动、旋转、均匀缩放与颜色快照。 */
+  objectPresentations?: ObjectPresentationMap;
   /** 该版本中非平面受限局部特征的尺寸、曲率、壁厚与干涉诊断快照。 */
   curvedFeatures?: VersionCurvedFeature[];
   /** Desktop snapshot directory containing the exact generated artifacts for this version. */

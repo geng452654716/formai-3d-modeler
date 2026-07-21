@@ -55,6 +55,14 @@ import {
   linkLocalCadFeaturePreflightExecution,
   type LocalCadFeaturePreflightRecord
 } from '../model/localCadFeaturePreflightHistory';
+import {
+  cloneObjectPresentations,
+  normalizeObjectPresentation,
+  sameObjectPresentation,
+  type ObjectPresentation,
+  type ObjectPresentationMap,
+  type ObjectTransformMode
+} from '../model/objectTransform';
 import type { VersionGeometryComparisonMode } from '../model/versionGeometryComparison';
 import type { VersionGeometryDifferenceResult } from '../model/versionGeometryDifference';
 import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
@@ -93,6 +101,8 @@ interface ModelStore {
   versions: ModelVersion[];
   versionIndex: number;
   selectedObject: SceneObjectId;
+  objectTransformMode: ObjectTransformMode;
+  objectPresentations: ObjectPresentationMap;
   exploded: boolean;
   showBoard: boolean;
   messages: ChatMessage[];
@@ -136,11 +146,16 @@ interface ModelStore {
   versionGeometryComparisonStatus: VersionGeometryComparisonStatus;
   versionGeometryComparisonError: string | null;
   setParameter: (key: keyof EnclosureParameters, value: number) => void;
-  commitVersion: (label: string) => void;
+  commitVersion: (label: string, changeKind?: ModelVersion['changeKind']) => void;
   undo: () => void;
   redo: () => void;
   restoreVersion: (versionId: string) => void;
   selectObject: (id: SceneObjectId) => void;
+  setObjectTransformMode: (mode: ObjectTransformMode) => void;
+  beginObjectPresentationEdit: (id: SceneObjectId, fallbackColor?: string) => void;
+  updateObjectPresentation: (id: SceneObjectId, value: Partial<ObjectPresentation>, fallbackColor?: string) => void;
+  finishObjectPresentationEdit: (id: SceneObjectId, label: string, fallbackColor?: string) => void;
+  resetObjectPresentation: (id: SceneObjectId, label: string, fallbackColor?: string) => void;
   setExploded: (value: boolean) => void;
   setShowBoard: (value: boolean) => void;
   setViewportModelSource: (source: ViewportModelSource) => void;
@@ -187,16 +202,29 @@ interface ModelStore {
   executeCommand: (command: string) => Promise<void>;
 }
 
-const initialVersion: ModelVersion = {
-  id: crypto.randomUUID(),
-  label: '初始模型',
-  createdAt: new Date().toISOString(),
-  parameters: { ...DEFAULT_PARAMETERS },
-  interfaceOpenings: null
-};
-
 let generationSerial = 0;
 let versionComparisonSerial = 0;
+let objectPresentationEdit: { id: SceneObjectId; before: ObjectPresentation } | null = null;
+const OBJECT_PRESENTATIONS_STORAGE_KEY = 'formai-object-presentations-v1';
+
+function loadObjectPresentations(): ObjectPresentationMap {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(OBJECT_PRESENTATIONS_STORAGE_KEY) ?? '{}') as ObjectPresentationMap;
+    return Object.fromEntries(Object.entries(parsed).map(([id, value]) => [id, normalizeObjectPresentation(value, value?.color)]));
+  } catch {
+    return {};
+  }
+}
+
+function persistObjectPresentations(value: ObjectPresentationMap) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OBJECT_PRESENTATIONS_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // 本地存储不可用时仍保留当前运行会话中的对象变换与颜色。
+  }
+}
 
 /** 给 React 和 WebGL 至少一个浏览器任务周期来显示自动执行前预览。 */
 function waitForLocalCadFeaturePreviewFrame() {
@@ -277,12 +305,24 @@ function persistReferenceState(state: PersistedReferenceState) {
 }
 
 const persistedReferenceState = loadPersistedReferenceState();
+const persistedObjectPresentations = loadObjectPresentations();
+const initialVersion: ModelVersion = {
+  id: crypto.randomUUID(),
+  label: '初始模型',
+  createdAt: new Date().toISOString(),
+  changeKind: 'geometry',
+  parameters: { ...DEFAULT_PARAMETERS },
+  interfaceOpenings: null,
+  objectPresentations: cloneObjectPresentations(persistedObjectPresentations)
+};
 
 export const useModelStore = create<ModelStore>((set, get) => ({
   parameters: { ...DEFAULT_PARAMETERS },
   versions: [initialVersion],
   versionIndex: 0,
   selectedObject: 'body',
+  objectTransformMode: 'select',
+  objectPresentations: persistedObjectPresentations,
   exploded: false,
   showBoard: true,
   viewportModelSource: 'cad',
@@ -370,14 +410,16 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       };
     });
   },
-  commitVersion: (label) => {
+  commitVersion: (label, changeKind = 'geometry') => {
     const state = get();
     const nextVersion: ModelVersion = {
       id: crypto.randomUUID(),
       label,
       createdAt: new Date().toISOString(),
+      changeKind,
       parameters: { ...state.parameters },
       interfaceOpenings: state.interfaceOpenings?.map((opening) => ({ ...opening })) ?? state.interfaceOpenings,
+      objectPresentations: cloneObjectPresentations(state.objectPresentations),
       curvedFeatures: captureVersionCurvedFeatures(state.cadResult)
     };
     const versions = state.versions.slice(0, state.versionIndex + 1).concat(nextVersion);
@@ -399,14 +441,22 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     const versionIndex = state.versions.findIndex((version) => version.id === versionId);
     if (versionIndex < 0 || versionIndex === state.versionIndex) return;
     const version = state.versions[versionIndex];
+    const nextPresentations = cloneObjectPresentations(version.objectPresentations ?? {});
+    const firstChangedVersion = Math.min(state.versionIndex, versionIndex) + 1;
+    const lastChangedVersion = Math.max(state.versionIndex, versionIndex) + 1;
+    const geometryChanged = state.versions
+      .slice(firstChangedVersion, lastChangedVersion)
+      .some((candidate) => candidate.changeKind !== 'presentation');
+    persistObjectPresentations(nextPresentations);
     set({
       versionIndex,
       parameters: { ...version.parameters },
       interfaceOpenings: version.interfaceOpenings?.map((opening) => ({ ...opening }))
         ?? version.interfaceOpenings
         ?? null,
-      viewportModelSource: 'cad',
-      cadStatus: 'stale',
+      objectPresentations: nextPresentations,
+      viewportModelSource: geometryChanged ? 'cad' : state.viewportModelSource,
+      cadStatus: geometryChanged ? 'stale' : state.cadStatus,
       cadError: null,
       manufacturingStatus: 'idle',
       manufacturingResult: null,
@@ -435,6 +485,39 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       ? state.localCadFeaturePreview
       : null
   })),
+  setObjectTransformMode: (objectTransformMode) => set({ objectTransformMode }),
+  beginObjectPresentationEdit: (id, fallbackColor = '#d9d4c8') => {
+    const before = normalizeObjectPresentation(get().objectPresentations[id], fallbackColor);
+    objectPresentationEdit = { id, before };
+  },
+  updateObjectPresentation: (id, value, fallbackColor = '#d9d4c8') => set((state) => {
+    const current = normalizeObjectPresentation(state.objectPresentations[id], fallbackColor);
+    const next = normalizeObjectPresentation({
+      ...current,
+      ...value,
+      transform: value.transform ? { ...current.transform, ...value.transform } : current.transform
+    }, fallbackColor);
+    const objectPresentations = { ...state.objectPresentations, [id]: next };
+    persistObjectPresentations(objectPresentations);
+    return { objectPresentations };
+  }),
+  finishObjectPresentationEdit: (id, label, fallbackColor = '#d9d4c8') => {
+    const current = normalizeObjectPresentation(get().objectPresentations[id], fallbackColor);
+    const before = objectPresentationEdit?.id === id
+      ? objectPresentationEdit.before
+      : current;
+    objectPresentationEdit = null;
+    if (!sameObjectPresentation(before, current)) get().commitVersion(label, 'presentation');
+  },
+  resetObjectPresentation: (id, label, fallbackColor = '#d9d4c8') => {
+    const current = normalizeObjectPresentation(get().objectPresentations[id], fallbackColor);
+    const next = normalizeObjectPresentation(undefined, fallbackColor);
+    if (sameObjectPresentation(current, next)) return;
+    const objectPresentations = { ...get().objectPresentations, [id]: next };
+    persistObjectPresentations(objectPresentations);
+    set({ objectPresentations });
+    get().commitVersion(label, 'presentation');
+  },
   setExploded: (exploded) => set({ exploded }),
   setShowBoard: (showBoard) => set({ showBoard }),
   setViewportModelSource: (viewportModelSource) => {
@@ -460,18 +543,24 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     generationSerial += 1;
     versionComparisonSerial += 1;
     persistReferenceState({ referenceImages: [], multiViewCalibration: null });
+    persistObjectPresentations({});
+    objectPresentationEdit = null;
     const version: ModelVersion = {
       id: crypto.randomUUID(),
       label: '新模型画布',
       createdAt: new Date().toISOString(),
+      changeKind: 'geometry',
       parameters: { ...DEFAULT_PARAMETERS },
-      interfaceOpenings: null
+      interfaceOpenings: null,
+      objectPresentations: {}
     };
     set({
       parameters: { ...DEFAULT_PARAMETERS },
       versions: [version],
       versionIndex: 0,
       selectedObject: 'body',
+      objectTransformMode: 'select',
+      objectPresentations: {},
       exploded: false,
       showBoard: true,
       viewportModelSource: 'cad',

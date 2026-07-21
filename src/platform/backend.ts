@@ -16,6 +16,7 @@ import {
   screenshotDataUrlToBytes,
   type CadFaceSelectionContext
 } from '../model/cadFaceSelection';
+import type { TransformedExportRequest } from '../model/objectExport';
 import type { EnclosureParameters, InterfaceOpeningSpec } from '../model/types';
 
 export interface BackendStatus {
@@ -146,6 +147,12 @@ export async function createVersionSnapshot(
 export async function exportGeneratedFile(fileName: string) {
   if (!isDesktopRuntime()) return null;
   return invoke<string>('export_generated_file', { fileName });
+}
+
+/** 将视口中的对象变换与颜色烘焙到 STL/3MF，并复制到用户下载目录。 */
+export async function exportTransformedModel(request: TransformedExportRequest) {
+  if (!isDesktopRuntime()) throw new Error('变换后的 STL/3MF 只能在 FormAI 桌面应用中导出');
+  return invoke<string>('export_transformed_model', { request });
 }
 
 /** Loads a generated CAD file from the Rust backend as a temporary object URL. */

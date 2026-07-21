@@ -73,6 +73,7 @@ struct BackendPaths {
     local_stl_edit_worker_path: PathBuf,
     local_cad_feature_worker_path: PathBuf,
     cad_surface_hit_worker_path: PathBuf,
+    transformed_export_worker_path: PathBuf,
     python_path: PathBuf,
     codex_path: Option<PathBuf>,
 }
@@ -95,6 +96,41 @@ pub struct VersionSnapshot {
     label: String,
     directory: String,
     files: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportVector3 {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportObjectTransform {
+    position_mm: ExportVector3,
+    rotation_deg: ExportVector3,
+    scale: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformedExportObject {
+    id: String,
+    name: String,
+    source_file: String,
+    color: String,
+    transform: ExportObjectTransform,
+    base_position_display_mm: Option<ExportVector3>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformedExportRequest {
+    output_file_name: String,
+    format: String,
+    objects: Vec<TransformedExportObject>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -216,6 +252,8 @@ impl BackendPaths {
         let local_stl_edit_worker_path = project_root.join("modeling/local_stl_edit.py");
         let local_cad_feature_worker_path = project_root.join("modeling/local_cad_feature.py");
         let cad_surface_hit_worker_path = project_root.join("modeling/resolve_cad_surface_hit.py");
+        let transformed_export_worker_path =
+            project_root.join("modeling/export_transformed_model.py");
         let local_python = project_root.join("modeling/.venv/bin/python");
         let python_path = env::var("FORM_AI_PYTHON_PATH")
             .map(PathBuf::from)
@@ -234,6 +272,7 @@ impl BackendPaths {
             local_stl_edit_worker_path,
             local_cad_feature_worker_path,
             cad_surface_hit_worker_path,
+            transformed_export_worker_path,
             python_path,
             codex_path: find_executable("FORM_AI_CODEX_PATH", "codex"),
         }
@@ -1807,19 +1846,84 @@ pub fn read_version_snapshot_file(
     Ok(Response::new(bytes))
 }
 
-#[tauri::command]
-pub fn export_generated_file(
-    file_name: String,
-    state: tauri::State<'_, BackendState>,
-) -> Result<String, String> {
-    validate_generated_file(&file_name, &state.paths.artifacts_dir)?;
+fn validate_export_vector(value: &ExportVector3, limit: f64, label: &str) -> Result<(), String> {
+    if [value.x, value.y, value.z]
+        .into_iter()
+        .all(|component| component.is_finite() && component.abs() <= limit)
+    {
+        Ok(())
+    } else {
+        Err(format!("{label}包含无效或超出范围的数值"))
+    }
+}
+
+fn validate_transformed_export_request(
+    request: &TransformedExportRequest,
+    artifacts_dir: &Path,
+) -> Result<(), String> {
+    let output_path = Path::new(&request.output_file_name);
+    let plain_name = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == request.output_file_name);
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !plain_name
+        || request.output_file_name.chars().count() > 120
+        || !request
+            .output_file_name
+            .chars()
+            .all(|value| value.is_alphanumeric() || matches!(value, '-' | '_' | '.'))
+        || !matches!(request.format.as_str(), "stl" | "3mf")
+        || extension != request.format
+    {
+        return Err("变换导出的文件名或格式不合法".into());
+    }
+    if !(1..=64).contains(&request.objects.len()) {
+        return Err("变换导出对象数量必须在 1 到 64 之间".into());
+    }
+    if request.format == "stl" && request.objects.len() != 1 {
+        return Err("STL 一次只能导出一个对象".into());
+    }
+    for object in &request.objects {
+        if object.id.is_empty()
+            || object.id.chars().count() > 160
+            || object.name.is_empty()
+            || object.name.chars().count() > 120
+        {
+            return Err("变换导出对象缺少有效名称或标识".into());
+        }
+        validate_generated_file(&object.source_file, artifacts_dir)?;
+        if !object.source_file.to_ascii_lowercase().ends_with(".stl") {
+            return Err(format!("对象“{}”的源文件不是 STL", object.name));
+        }
+        let color = object.color.as_bytes();
+        if color.len() != 7 || color[0] != b'#' || !color[1..].iter().all(u8::is_ascii_hexdigit) {
+            return Err(format!("对象“{}”的颜色不合法", object.name));
+        }
+        validate_export_vector(&object.transform.position_mm, 1_000.0, "对象位置")?;
+        validate_export_vector(&object.transform.rotation_deg, 36_000.0, "对象旋转")?;
+        if !object.transform.scale.is_finite() || !(0.05..=20.0).contains(&object.transform.scale) {
+            return Err(format!("对象“{}”的缩放不合法", object.name));
+        }
+        if let Some(base) = &object.base_position_display_mm {
+            validate_export_vector(base, 1_000.0, "对象装配基础位置")?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_artifact_to_downloads(file_name: &str, artifacts_dir: &Path) -> Result<String, String> {
     let home = env::var("HOME").map_err(|_| "无法找到用户目录".to_string())?;
     let downloads = PathBuf::from(home).join("Downloads");
     fs::create_dir_all(&downloads).map_err(|error| format!("无法创建下载目录：{error}"))?;
-    let source = state.paths.artifacts_dir.join(&file_name);
-    let mut destination = downloads.join(&file_name);
+    let source = artifacts_dir.join(file_name);
+    let mut destination = downloads.join(file_name);
     if destination.exists() {
-        let path = Path::new(&file_name);
+        let path = Path::new(file_name);
         let stem = path
             .file_stem()
             .and_then(|value| value.to_str())
@@ -1837,6 +1941,76 @@ pub fn export_generated_file(
     }
     fs::copy(&source, &destination).map_err(|error| format!("导出失败：{error}"))?;
     Ok(destination.display().to_string())
+}
+
+#[tauri::command]
+pub async fn export_transformed_model(
+    request: TransformedExportRequest,
+    state: tauri::State<'_, BackendState>,
+) -> Result<String, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = state
+            .generation_lock
+            .lock()
+            .map_err(|_| "变换导出锁不可用".to_string())?;
+        validate_transformed_export_request(&request, &state.paths.artifacts_dir)?;
+        if !state.paths.transformed_export_worker_path.is_file() {
+            return Err(format!(
+                "未找到变换导出 Worker：{}",
+                state.paths.transformed_export_worker_path.display()
+            ));
+        }
+        let arguments = vec![
+            state
+                .paths
+                .transformed_export_worker_path
+                .display()
+                .to_string(),
+            "--output".into(),
+            state.paths.artifacts_dir.display().to_string(),
+        ];
+        let input = serde_json::to_string(&request)
+            .map_err(|error| format!("无法序列化变换导出请求：{error}"))?;
+        let output = run_process_with_input(
+            &state.paths.python_path,
+            &arguments,
+            &state.paths.project_root,
+            Some(&input),
+        )?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if message.is_empty() {
+                format!("变换导出 Worker 退出，状态码：{}", output.status)
+            } else {
+                message
+            });
+        }
+        let result: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("变换导出 Worker 返回格式错误：{error}"))?;
+        if result.get("status").and_then(Value::as_str) != Some("ok")
+            || result.get("fileName").and_then(Value::as_str) != Some(&request.output_file_name)
+        {
+            return Err("变换导出 Worker 未返回有效结果".into());
+        }
+        let output_path = state.paths.artifacts_dir.join(&request.output_file_name);
+        if !output_path.is_file() || output_path.metadata().map(|item| item.len()).unwrap_or(0) == 0
+        {
+            return Err("变换导出文件不存在或为空".into());
+        }
+        copy_artifact_to_downloads(&request.output_file_name, &state.paths.artifacts_dir)
+    })
+    .await
+    .map_err(|error| format!("变换导出任务异常结束：{error}"))?
+}
+
+#[tauri::command]
+pub fn export_generated_file(
+    file_name: String,
+    state: tauri::State<'_, BackendState>,
+) -> Result<String, String> {
+    validate_generated_file(&file_name, &state.paths.artifacts_dir)?;
+    copy_artifact_to_downloads(&file_name, &state.paths.artifacts_dir)
 }
 
 #[tauri::command]
@@ -3865,5 +4039,68 @@ mod tests {
             .expect_err("missing manifest should fail")
             .contains("缺少精确模型清单"));
         fs::remove_dir_all(artifacts_dir).expect("remove empty snapshot fixture");
+    }
+
+    fn transformed_export_fixture(artifacts_dir: &Path) -> TransformedExportRequest {
+        fs::write(
+            artifacts_dir.join("model-body.stl"),
+            b"solid body\nendsolid body\n",
+        )
+        .expect("write source STL");
+        TransformedExportRequest {
+            output_file_name: "测试模型-视口变换.stl".into(),
+            format: "stl".into(),
+            objects: vec![TransformedExportObject {
+                id: "body".into(),
+                name: "模型主体".into(),
+                source_file: "model-body.stl".into(),
+                color: "#d9d4c8".into(),
+                transform: ExportObjectTransform {
+                    position_mm: ExportVector3 {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    },
+                    rotation_deg: ExportVector3 {
+                        x: 0.0,
+                        y: 90.0,
+                        z: 0.0,
+                    },
+                    scale: 1.25,
+                },
+                base_position_display_mm: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn validates_safe_transformed_export_request() {
+        let artifacts_dir = temporary_test_directory("transformed-export");
+        fs::create_dir_all(&artifacts_dir).expect("create artifacts");
+        let request = transformed_export_fixture(&artifacts_dir);
+        validate_transformed_export_request(&request, &artifacts_dir)
+            .expect("valid request should pass");
+        fs::remove_dir_all(artifacts_dir).expect("remove export fixture");
+    }
+
+    #[test]
+    fn rejects_transformed_export_traversal_and_invalid_scale() {
+        let artifacts_dir = temporary_test_directory("invalid-transformed-export");
+        fs::create_dir_all(&artifacts_dir).expect("create artifacts");
+        let mut request = transformed_export_fixture(&artifacts_dir);
+        request.output_file_name = "../escape.stl".into();
+        assert!(
+            validate_transformed_export_request(&request, &artifacts_dir)
+                .expect_err("traversal should fail")
+                .contains("文件名或格式不合法")
+        );
+        request.output_file_name = "安全输出.stl".into();
+        request.objects[0].transform.scale = 100.0;
+        assert!(
+            validate_transformed_export_request(&request, &artifacts_dir)
+                .expect_err("invalid scale should fail")
+                .contains("缩放不合法")
+        );
+        fs::remove_dir_all(artifacts_dir).expect("remove export fixture");
     }
 }

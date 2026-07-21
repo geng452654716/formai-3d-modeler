@@ -7,6 +7,7 @@ import {
 } from '../model/interfaceOpenings';
 import type { EnclosureParameters } from '../model/types';
 import { useModelStore } from '../store/useModelStore';
+import { ObjectTransformSection } from './ObjectTransformSection';
 
 interface ParameterControlProps {
   parameterKey: keyof EnclosureParameters;
@@ -90,6 +91,8 @@ function UploadedModelPanel() {
           {boundsMm.x.toFixed(1)} × {boundsMm.y.toFixed(1)} × {boundsMm.z.toFixed(1)}
         </div>
       </div>
+
+      <ObjectTransformSection />
 
       <section className="parameter-section">
         <h3>
@@ -212,6 +215,8 @@ export function ParameterPanel() {
           {dimensions.height.toFixed(1)}
         </div>
       </div>
+
+      <ObjectTransformSection />
 
       <section className="parameter-section">
         <h3>

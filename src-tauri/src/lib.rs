@@ -2,10 +2,10 @@ mod backend;
 
 use backend::{
     analyze_reference_image, analyze_wall_thickness, backend_status, create_version_snapshot,
-    export_generated_file, generate_cad, import_stl_model, load_version_snapshot,
-    read_generated_file, read_version_snapshot_file, resolve_cad_surface_hit,
-    run_codex_model_command, run_local_cad_feature, run_local_stl_edit, run_manufacturing_split,
-    run_version_geometry_difference, BackendState,
+    export_generated_file, export_transformed_model, generate_cad, import_stl_model,
+    load_version_snapshot, read_generated_file, read_version_snapshot_file,
+    resolve_cad_surface_hit, run_codex_model_command, run_local_cad_feature, run_local_stl_edit,
+    run_manufacturing_split, run_version_geometry_difference, BackendState,
 };
 #[cfg(target_os = "macos")]
 use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
@@ -118,6 +118,7 @@ pub fn run() {
             load_version_snapshot,
             read_version_snapshot_file,
             export_generated_file,
+            export_transformed_model,
             create_version_snapshot,
             run_codex_model_command
         ])

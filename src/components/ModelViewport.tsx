@@ -1,14 +1,15 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Canvas, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
   ContactShadows,
   Grid,
   Html,
   OrbitControls,
-  PerspectiveCamera
+  PerspectiveCamera,
+  TransformControls
 } from '@react-three/drei';
 import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
-import type { Camera } from 'three';
+import type { Camera, Group } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
   compareCadStableFaceIds,
@@ -30,6 +31,7 @@ import {
 } from '../model/cadFaceSelection';
 import { createLidGeometry, createTrayGeometry } from '../model/createEnclosureGeometry';
 import { getOuterDimensions } from '../model/defaults';
+import { degreesToRadians, describeObjectTransformChange, normalizeObjectPresentation } from '../model/objectTransform';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
 import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
@@ -257,6 +259,93 @@ function applyWallThicknessColors(
   return true;
 }
 
+interface TransformableObjectProps {
+  id: SceneObjectId;
+  label: string;
+  fallbackColor: string;
+  basePosition?: [number, number, number];
+  children: ReactNode;
+}
+
+/** 把临时拆分位移放在用户变换外层，确保装配/拆分视图不会覆盖真实对象变换。 */
+function TransformableObject({
+  id,
+  label,
+  fallbackColor,
+  basePosition = [0, 0, 0],
+  children
+}: TransformableObjectProps) {
+  const objectRef = useRef<Group>(null);
+  const selectedObject = useModelStore((state) => state.selectedObject);
+  const mode = useModelStore((state) => state.objectTransformMode);
+  const storedPresentation = useModelStore((state) => state.objectPresentations[id]);
+  const beginEdit = useModelStore((state) => state.beginObjectPresentationEdit);
+  const updatePresentation = useModelStore((state) => state.updateObjectPresentation);
+  const finishEdit = useModelStore((state) => state.finishObjectPresentationEdit);
+  const presentation = normalizeObjectPresentation(storedPresentation, fallbackColor);
+  const rotation = degreesToRadians(presentation.transform.rotationDeg);
+  const controlsVisible = selectedObject === id && mode !== 'select';
+
+  const syncFromObject = () => {
+    const object = objectRef.current;
+    if (!object) return;
+    const current = normalizeObjectPresentation(
+      useModelStore.getState().objectPresentations[id],
+      fallbackColor
+    );
+    const changedScale = [object.scale.x, object.scale.y, object.scale.z]
+      .reduce((chosen, candidate) => (
+        Math.abs(candidate - current.transform.scale) > Math.abs(chosen - current.transform.scale)
+          ? candidate
+          : chosen
+      ), current.transform.scale);
+    const uniformScale = mode === 'scale' ? changedScale : current.transform.scale;
+    if (mode === 'scale') object.scale.setScalar(uniformScale);
+    updatePresentation(id, {
+      transform: {
+        positionMm: { x: object.position.x, y: object.position.y, z: object.position.z },
+        rotationDeg: {
+          x: object.rotation.x * 180 / Math.PI,
+          y: object.rotation.y * 180 / Math.PI,
+          z: object.rotation.z * 180 / Math.PI
+        },
+        scale: uniformScale
+      }
+    }, fallbackColor);
+  };
+
+  return (
+    <group position={basePosition}>
+      <group
+        ref={objectRef}
+        position={[
+          presentation.transform.positionMm.x,
+          presentation.transform.positionMm.y,
+          presentation.transform.positionMm.z
+        ]}
+        rotation={rotation}
+        scale={presentation.transform.scale}
+      >
+        {children}
+      </group>
+      {controlsVisible && objectRef.current && (
+        <TransformControls
+          object={objectRef.current}
+          mode={mode === 'translate' ? 'translate' : mode}
+          space="local"
+          translationSnap={0.1}
+          rotationSnap={Math.PI / 180}
+          scaleSnap={0.01}
+          size={0.72}
+          onMouseDown={() => beginEdit(id, fallbackColor)}
+          onObjectChange={syncFromObject}
+          onMouseUp={() => finishEdit(id, describeObjectTransformChange(mode, label), fallbackColor)}
+        />
+      )}
+    </group>
+  );
+}
+
 interface SelectableMeshProps {
   id: SceneObjectId;
   geometry: BufferGeometry;
@@ -287,6 +376,8 @@ function SelectableMesh({
   const selectedObject = useModelStore((state) => state.selectedObject);
   const selectObject = useModelStore((state) => state.selectObject);
   const selected = interactive && selectedObject === id;
+  const objectPresentation = useModelStore((state) => state.objectPresentations[id]);
+  const displayColor = normalizeObjectPresentation(objectPresentation, color).color;
 
   return (
     <mesh
@@ -308,7 +399,7 @@ function SelectableMesh({
     >
       <meshStandardMaterial
         key={heatmap ? '壁厚热力图材质' : '普通模型材质'}
-        color={heatmap ? new Color('#ffffff') : selected ? new Color('#f59e0b') : new Color(color)}
+        color={heatmap ? new Color('#ffffff') : selected ? new Color('#f59e0b') : new Color(displayColor)}
         emissive={selected && heatmap ? new Color('#6b3f00') : new Color('#000000')}
         emissiveIntensity={selected && heatmap ? 0.45 : 0}
         vertexColors={heatmap}
@@ -892,6 +983,8 @@ function CadMesh({
 function ReferenceComponent({ parameters }: { parameters: EnclosureParameters }) {
   const selectedObject = useModelStore((state) => state.selectedObject);
   const selectObject = useModelStore((state) => state.selectObject);
+  const referencePresentation = useModelStore((state) => state.objectPresentations.reference);
+  const referenceColor = normalizeObjectPresentation(referencePresentation, '#147d64').color;
   const pinRows = Array.from({ length: 21 }, (_, index) => index);
   const boardY = parameters.baseThickness + parameters.boardThickness / 2;
 
@@ -907,7 +1000,7 @@ function ReferenceComponent({ parameters }: { parameters: EnclosureParameters })
         <boxGeometry
           args={[parameters.boardLength, parameters.boardThickness, parameters.boardWidth]}
         />
-        <meshStandardMaterial color={selectedObject === 'reference' ? '#f59e0b' : '#147d64'} />
+        <meshStandardMaterial color={selectedObject === 'reference' ? '#f59e0b' : referenceColor} />
       </mesh>
       <mesh position={[-parameters.boardLength / 2 - 1.6, 2.2, 0]} castShadow>
         <boxGeometry args={[5.2, 4.4, 9]} />
@@ -1302,36 +1395,50 @@ function ModelScene() {
             <group position={uploadedGroupPosition}>
               {manufacturingResult?.sourceKind === 'uploaded-stl' ? (
                 <>
-                  <CadMesh
+                  <TransformableObject
                     id="uploaded-model-negative"
-                    fileName="manufacturing-negative.stl"
-                    revision={manufacturingResult.revision}
-                    color="#c9d9e8"
-                    position={splitPartPosition(manufacturingResult.validation.axis, -1, exploded, [0, 0, 0])}
-                    preserveCoordinates
-                  />
-                  <CadMesh
+                    label="负方向拆件"
+                    fallbackColor="#c9d9e8"
+                    basePosition={splitPartPosition(manufacturingResult.validation.axis, -1, exploded, [0, 0, 0])}
+                  >
+                    <CadMesh
+                      id="uploaded-model-negative"
+                      fileName="manufacturing-negative.stl"
+                      revision={manufacturingResult.revision}
+                      color="#c9d9e8"
+                      preserveCoordinates
+                    />
+                  </TransformableObject>
+                  <TransformableObject
                     id="uploaded-model-positive"
-                    fileName="manufacturing-positive.stl"
-                    revision={manufacturingResult.revision}
-                    color="#e7d4b6"
-                    position={splitPartPosition(manufacturingResult.validation.axis, 1, exploded, [0, 0, 0])}
-                    preserveCoordinates
-                  />
+                    label="正方向拆件"
+                    fallbackColor="#e7d4b6"
+                    basePosition={splitPartPosition(manufacturingResult.validation.axis, 1, exploded, [0, 0, 0])}
+                  >
+                    <CadMesh
+                      id="uploaded-model-positive"
+                      fileName="manufacturing-positive.stl"
+                      revision={manufacturingResult.revision}
+                      color="#e7d4b6"
+                      preserveCoordinates
+                    />
+                  </TransformableObject>
                 </>
               ) : (
-                <CadMesh
-                  id="uploaded-model"
-                  fileName={importedStlModel.sourceFile}
-                  revision={importedStlModel.revision}
-                  color="#d7dde4"
-                  preserveCoordinates
-                  wallThicknessAnalysis={
-                    wallThicknessVisible && wallThicknessResult?.sourceKind === 'uploaded-stl'
-                      ? wallThicknessResult
-                      : null
-                  }
-                />
+                <TransformableObject id="uploaded-model" label={importedStlModel.name} fallbackColor="#d7dde4">
+                  <CadMesh
+                    id="uploaded-model"
+                    fileName={importedStlModel.sourceFile}
+                    revision={importedStlModel.revision}
+                    color="#d7dde4"
+                    preserveCoordinates
+                    wallThicknessAnalysis={
+                      wallThicknessVisible && wallThicknessResult?.sourceKind === 'uploaded-stl'
+                        ? wallThicknessResult
+                        : null
+                    }
+                  />
+                </TransformableObject>
               )}
             </group>
           </Suspense>
@@ -1341,13 +1448,19 @@ function ModelScene() {
               const basePosition = partPosition(part.role);
               if (manufacturingResult?.sourcePartId === part.id) {
                 return (
-                  <group key={`${part.id}-${manufacturingResult.revision}`}>
+                  <TransformableObject
+                    key={`${part.id}-${manufacturingResult.revision}`}
+                    id={part.id}
+                    label={part.label}
+                    fallbackColor="#d9d4c8"
+                    basePosition={basePosition}
+                  >
                     <CadMesh
                       id={part.id}
                       fileName="manufacturing-negative.stl"
                       revision={manufacturingResult.revision}
                       color="#c9d9e8"
-                      position={splitPartPosition(manufacturingResult.validation.axis, -1, exploded, basePosition)}
+                      position={splitPartPosition(manufacturingResult.validation.axis, -1, exploded, [0, 0, 0])}
                       preserveCoordinates
                     />
                     <CadMesh
@@ -1355,39 +1468,45 @@ function ModelScene() {
                       fileName="manufacturing-positive.stl"
                       revision={manufacturingResult.revision}
                       color="#e7d4b6"
-                      position={splitPartPosition(manufacturingResult.validation.axis, 1, exploded, basePosition)}
+                      position={splitPartPosition(manufacturingResult.validation.axis, 1, exploded, [0, 0, 0])}
                       preserveCoordinates
                     />
-                  </group>
+                  </TransformableObject>
                 );
               }
+              const partColor = part.role === 'cover' ? '#eeeae1' : '#d9d4c8';
               return (
-                <CadMesh
+                <TransformableObject
                   key={part.id}
                   id={part.id}
-                  fileName={part.faceTessellation?.selectionMeshFile ?? part.stlFile}
-                  revision={cadResult.revision}
-                  cadPart={part}
-                  color={part.role === 'cover' ? '#eeeae1' : '#d9d4c8'}
-                  position={basePosition}
-                  wallThicknessAnalysis={
-                    wallThicknessVisible && wallThicknessResult?.sourcePartId === part.id
-                      ? wallThicknessResult
-                      : null
-                  }
-                />
+                  label={part.label}
+                  fallbackColor={partColor}
+                  basePosition={basePosition}
+                >
+                  <CadMesh
+                    id={part.id}
+                    fileName={part.faceTessellation?.selectionMeshFile ?? part.stlFile}
+                    revision={cadResult.revision}
+                    cadPart={part}
+                    color={partColor}
+                    wallThicknessAnalysis={
+                      wallThicknessVisible && wallThicknessResult?.sourcePartId === part.id
+                        ? wallThicknessResult
+                        : null
+                    }
+                  />
+                </TransformableObject>
               );
             })}
           </Suspense>
         ) : (
           <>
-            <SelectableMesh id="body" geometry={bodyGeometry} color="#d9d4c8" />
-            <SelectableMesh
-              id="cover"
-              geometry={coverGeometry}
-              color="#eeeae1"
-              position={[0, coverCenterY, 0]}
-            />
+            <TransformableObject id="body" label="模型主体" fallbackColor="#d9d4c8">
+              <SelectableMesh id="body" geometry={bodyGeometry} color="#d9d4c8" />
+            </TransformableObject>
+            <TransformableObject id="cover" label="模型上盖" fallbackColor="#eeeae1" basePosition={[0, coverCenterY, 0]}>
+              <SelectableMesh id="cover" geometry={coverGeometry} color="#eeeae1" />
+            </TransformableObject>
           </>
         )}
         {exactFeaturePreview && !(visualComparisonActive || differenceActive) && showCad && (
@@ -1405,7 +1524,11 @@ function ModelScene() {
             />
           </Suspense>
         )}
-        {!(visualComparisonActive || differenceActive) && !showUploadedStl && showBoard && <ReferenceComponent parameters={parameters} />}
+        {!(visualComparisonActive || differenceActive) && !showUploadedStl && showBoard && (
+          <TransformableObject id="reference" label="参考元件" fallbackColor="#147d64">
+            <ReferenceComponent parameters={parameters} />
+          </TransformableObject>
+        )}
         {!(visualComparisonActive || differenceActive) && !showUploadedStl && <DimensionLabel parameters={parameters} />}
       </group>
       <Grid

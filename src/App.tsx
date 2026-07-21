@@ -28,7 +28,13 @@ import { ParameterPanel } from './components/ParameterPanel';
 import { SceneTree } from './components/SceneTree';
 import { VersionHistoryDialog } from './components/VersionHistoryDialog';
 import { generatedDownloadUrl } from './model/cad';
-import { exportGeneratedFile, isDesktopRuntime } from './platform/backend';
+import { getOuterDimensions } from './model/defaults';
+import {
+  createTransformedExportObject,
+  manufacturingSplitPresentationId,
+  type TransformedExportRequest
+} from './model/objectExport';
+import { exportGeneratedFile, exportTransformedModel, isDesktopRuntime } from './platform/backend';
 import { useModelStore } from './store/useModelStore';
 
 const splitExportFiles = [
@@ -65,6 +71,9 @@ function App() {
   const importedStlModel = useModelStore((state) => state.importedStlModel);
   const cadResult = useModelStore((state) => state.cadResult);
   const selectedObject = useModelStore((state) => state.selectedObject);
+  const objectTransformMode = useModelStore((state) => state.objectTransformMode);
+  const objectPresentations = useModelStore((state) => state.objectPresentations);
+  const setObjectTransformMode = useModelStore((state) => state.setObjectTransformMode);
   const analyzeWallThickness = useModelStore((state) => state.analyzeWallThickness);
   const wallThicknessStatus = useModelStore((state) => state.wallThicknessStatus);
   const wallThicknessResult = useModelStore((state) => state.wallThicknessResult);
@@ -133,19 +142,95 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [cadStatus, generateCad, parameters]);
 
+  const transformedExportRequest = (fileName: string): TransformedExportRequest | null => {
+    const lowerName = fileName.toLowerCase();
+    if (!lowerName.endsWith('.stl') && !lowerName.endsWith('.3mf')) return null;
+    const outputFileName = `${fileName.replace(/\.(stl|3mf)$/i, '')}-视口变换.${lowerName.endsWith('.3mf') ? '3mf' : 'stl'}`;
+    if (lowerName.endsWith('.3mf') && cadResult?.assemblyFile === fileName) {
+      const coverY = getOuterDimensions(parameters).height - 0.2;
+      return {
+        outputFileName,
+        format: '3mf',
+        objects: cadResult.parts.map((part) => createTransformedExportObject(
+          part.id,
+          part.label,
+          part.stlFile,
+          objectPresentations[part.id],
+          part.role === 'cover' ? '#eeeae1' : '#d9d4c8',
+          part.role === 'cover' ? { x: 0, y: coverY, z: 0 } : undefined
+        ))
+      };
+    }
+    if (fileName === 'manufacturing-negative.stl' || fileName === 'manufacturing-positive.stl') {
+      const positive = fileName.includes('positive');
+      const direction = positive ? 'positive' : 'negative';
+      const id = manufacturingSplitPresentationId(
+        manufacturingResult?.sourceKind ?? 'uploaded-stl',
+        manufacturingResult?.sourcePartId ?? 'uploaded-model',
+        direction
+      );
+      return {
+        outputFileName,
+        format: 'stl',
+        objects: [createTransformedExportObject(
+          id,
+          positive ? '正方向拆件' : '负方向拆件',
+          fileName,
+          objectPresentations[id],
+          positive ? '#e7d4b6' : '#c9d9e8'
+        )]
+      };
+    }
+    const cadPart = cadResult?.parts.find((part) => part.stlFile === fileName);
+    if (cadPart) {
+      return {
+        outputFileName,
+        format: 'stl',
+        objects: [createTransformedExportObject(
+          cadPart.id,
+          cadPart.label,
+          fileName,
+          objectPresentations[cadPart.id],
+          cadPart.role === 'cover' ? '#eeeae1' : '#d9d4c8'
+        )]
+      };
+    }
+    if (importedStlModel && [importedStlModel.sourceFile, importedStlModel.originalSourceFile].includes(fileName)) {
+      return {
+        outputFileName,
+        format: 'stl',
+        objects: [createTransformedExportObject(
+          importedStlModel.id,
+          importedStlModel.name,
+          fileName,
+          objectPresentations[importedStlModel.id],
+          '#d7dde4'
+        )]
+      };
+    }
+    return null;
+  };
+
   const handleExport = async (fileName: string) => {
     if (!isDesktopRuntime()) {
       const anchor = document.createElement('a');
       anchor.href = generatedDownloadUrl(fileName);
       anchor.download = fileName;
       anchor.click();
+      setExportNotice(fileName.endsWith('.step') ? 'STEP 已按参数化原始坐标导出' : 'Web 预览仅导出原始生成文件');
       setExportOpen(false);
       return;
     }
     try {
-      const destination = await exportGeneratedFile(fileName);
-      setExportNotice(destination ? `已导出到 ${destination}` : '导出完成');
-      window.setTimeout(() => setExportNotice(null), 4500);
+      const transformedRequest = transformedExportRequest(fileName);
+      const destination = transformedRequest
+        ? await exportTransformedModel(transformedRequest)
+        : await exportGeneratedFile(fileName);
+      const note = fileName.toLowerCase().endsWith('.step')
+        ? `STEP 保留参数化原始坐标，已导出到 ${destination}`
+        : `已应用视口变换并导出到 ${destination}`;
+      setExportNotice(note);
+      window.setTimeout(() => setExportNotice(null), 6000);
     } catch (error) {
       setExportNotice(error instanceof Error ? error.message : '导出失败');
     } finally {
@@ -263,7 +348,7 @@ function App() {
                 {availableExportFiles.map(([label, fileName]) => (
                   <button key={fileName} onClick={() => void handleExport(fileName)}>
                     <span>{label}</span>
-                    <small>{fileName.endsWith('.3mf') ? 'Bambu Studio 可打开' : fileName.split('.').at(-1)?.toUpperCase()}</small>
+                    <small>{fileName.endsWith('.step') ? '参数化原始坐标' : fileName.endsWith('.3mf') ? '含对象颜色与视口变换' : '应用视口变换'}</small>
                   </button>
                 ))}
               </div>
@@ -277,19 +362,46 @@ function App() {
         <section className="viewport-area">
           <div className="viewport-toolbar">
             <button
-              className={cadFaceSelectionMode === 'off' ? 'active' : ''}
+              className={cadFaceSelectionMode === 'off' && objectTransformMode === 'select' ? 'active' : ''}
               title="普通对象选择"
-              onClick={() => setCadFaceSelectionMode('off')}
+              onClick={() => {
+                setCadFaceSelectionMode('off');
+                setObjectTransformMode('select');
+              }}
             ><MousePointer2 size={16} /></button>
-            <button title="移动"><Move3D size={16} /></button>
-            <button title="旋转"><Rotate3D size={16} /></button>
-            <button title="缩放"><Scale3D size={16} /></button>
+            <button
+              className={objectTransformMode === 'translate' ? 'active' : ''}
+              title="使用三维操控器移动当前对象，单位为毫米"
+              onClick={() => {
+                setCadFaceSelectionMode('off');
+                setObjectTransformMode(objectTransformMode === 'translate' ? 'select' : 'translate');
+              }}
+            ><Move3D size={16} /></button>
+            <button
+              className={objectTransformMode === 'rotate' ? 'active' : ''}
+              title="使用三维操控器旋转当前对象，步进为 1 度"
+              onClick={() => {
+                setCadFaceSelectionMode('off');
+                setObjectTransformMode(objectTransformMode === 'rotate' ? 'select' : 'rotate');
+              }}
+            ><Rotate3D size={16} /></button>
+            <button
+              className={objectTransformMode === 'scale' ? 'active' : ''}
+              title="使用三维操控器均匀缩放当前对象"
+              onClick={() => {
+                setCadFaceSelectionMode('off');
+                setObjectTransformMode(objectTransformMode === 'scale' ? 'select' : 'scale');
+              }}
+            ><Scale3D size={16} /></button>
             <span />
             <button
               className={`cad-face-tool-button ${cadFaceSelectionMode === 'click' ? 'active' : ''}`}
               title="点击选择一个稳定 CAD 面，并附带局部截图交给 Codex"
               disabled={!canSelectCadFaces}
-              onClick={() => setCadFaceSelectionMode(cadFaceSelectionMode === 'click' ? 'off' : 'click')}
+              onClick={() => {
+                setObjectTransformMode('select');
+                setCadFaceSelectionMode(cadFaceSelectionMode === 'click' ? 'off' : 'click');
+              }}
             >
               <MousePointer2 size={15} /> 点击选面
             </button>
@@ -297,7 +409,10 @@ function App() {
               className={`cad-face-tool-button ${cadFaceSelectionMode === 'edge' ? 'active' : ''}`}
               title="点击选择一条种子稳定 CAD 边，用于单边、切线连续边链或平面边界整圈圆角与倒角"
               disabled={!canSelectCadFaces}
-              onClick={() => setCadFaceSelectionMode(cadFaceSelectionMode === 'edge' ? 'off' : 'edge')}
+              onClick={() => {
+                setObjectTransformMode('select');
+                setCadFaceSelectionMode(cadFaceSelectionMode === 'edge' ? 'off' : 'edge');
+              }}
             >
               <Wrench size={15} /> 点击选边
             </button>
@@ -305,7 +420,10 @@ function App() {
               className={`cad-face-tool-button ${cadFaceSelectionMode === 'edge-chain' ? 'active' : ''}`}
               title="逐条点击加入或移除稳定 CAD 边，形成一条开放或闭合的手工边链"
               disabled={!canSelectCadFaces}
-              onClick={() => setCadFaceSelectionMode(cadFaceSelectionMode === 'edge-chain' ? 'off' : 'edge-chain')}
+              onClick={() => {
+                setObjectTransformMode('select');
+                setCadFaceSelectionMode(cadFaceSelectionMode === 'edge-chain' ? 'off' : 'edge-chain');
+              }}
             >
               <Wrench size={15} /> 多选边链
             </button>
@@ -313,7 +431,10 @@ function App() {
               className={`cad-face-tool-button ${cadFaceSelectionMode === 'box' ? 'active' : ''}`}
               title="拖动框选多个稳定 CAD 面，并附带框选截图交给 Codex"
               disabled={!canSelectCadFaces}
-              onClick={() => setCadFaceSelectionMode(cadFaceSelectionMode === 'box' ? 'off' : 'box')}
+              onClick={() => {
+                setObjectTransformMode('select');
+                setCadFaceSelectionMode(cadFaceSelectionMode === 'box' ? 'off' : 'box');
+              }}
             >
               <BoxSelect size={15} /> 框选区域
             </button>

@@ -1136,3 +1136,21 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 
 .preflight-record-comparison small { color: #70757d; font-size: 7px; }
 .preflight-record-comparison b { overflow-wrap: anywhere; color: #b9bcc1; font-size: 7px; font-weight: 600; }
+
+.object-transform-section { border-top: 1px solid #303238; border-bottom: 1px solid #303238; background: rgba(225, 151, 24, .035); }
+.object-transform-note { margin: 0 0 8px; color: #7f848b; font-size: 8px; line-height: 1.5; }
+.object-transform-mode-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-bottom: 9px; }
+.object-transform-mode-row button, .object-transform-reset { min-height: 28px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #3a3d42; border-radius: 5px; color: #92969c; background: #202226; font-size: 8px; cursor: pointer; }
+.object-transform-mode-row button:hover, .object-transform-mode-row button.is-active { color: #f3bc56; border-color: rgba(229, 157, 30, .65); background: rgba(132, 83, 14, .22); }
+.object-vector-grid { display: grid; grid-template-columns: 36px repeat(3, minmax(0, 1fr)); gap: 5px; align-items: center; }
+.object-vector-grid > span { color: #8b9096; font-size: 8px; }
+.object-vector-grid label { min-width: 0; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 3px; align-items: center; }
+.object-vector-grid label b { color: #666b72; font-size: 7px; }
+.object-vector-grid input, .object-transform-bottom-row input[type="number"] { width: 100%; min-width: 0; height: 25px; box-sizing: border-box; border: 1px solid #373a40; border-radius: 4px; color: #cfd1cf; background: #191b1e; padding: 0 5px; font-size: 8px; }
+.object-vector-grid label small { grid-column: 2; color: #62676e; font-size: 6px; }
+.object-transform-bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }
+.object-transform-bottom-row label { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 50px auto; align-items: center; gap: 5px; color: #8c9197; font-size: 8px; }
+.object-transform-bottom-row small { color: #656a71; font-size: 7px; }
+.object-color-field input { width: 30px; height: 25px; padding: 2px; border: 1px solid #3a3d42; border-radius: 4px; background: #191b1e; }
+.object-color-field code { color: #777c83; font-size: 7px; }
+.object-transform-reset { width: 100%; margin-top: 9px; }

@@ -63,7 +63,7 @@ Desktop UI
 ├── Scene Tree
 ├── 3D Viewport
 ├── Object / Face Selection
-├── Transform Gizmo
+├── 三维变换操控器
 ├── Feature & Dimension Panel
 ├── Version Timeline
 └── Export / Print Validation
@@ -226,7 +226,7 @@ Codex 优先输出结构化操作，而不是直接重写整个模型文件：
 ## 8. 版本与撤销
 
 - 手工操作与 AI 操作都形成统一命令记录；
-- 高频 Gizmo 拖拽合并为一次历史操作；
+- 高频三维操控器拖拽合并为一次历史操作；
 - 每次 AI 回合创建版本节点；
 - 版本保存参数、特征图、脚本哈希、精确实体和预览；
 - 支持撤销/重做、恢复、分支、并排对比和半透明重叠对比。
@@ -360,3 +360,19 @@ LocalCadFeatureRequest
 - `edgeScope=manual-chain` 只表示用户显式选定的单条无分叉边链，不代表支持可变半径、G1/G2 连续性设置、分叉边网或永久拓扑命名。
 
 2026-07-21 第 37 阶段完整回归通过：前端 18 个测试文件 141/141，Rust 33/33，稳定 CAD 边特征 22/22，参数化局部特征安全重放 17/17，曲面命中 7/7；TypeScript/Vite 生产构建、Cargo 检查与测试、Python 语法、Rust 格式和差异格式检查均通过。
+
+## 对象显示变换与制造导出
+
+对象状态由 `src/model/objectTransform.ts` 定义，并以稳定场景对象 ID 保存在 Zustand 的 `objectPresentations` 中。每个对象包含毫米位置、XYZ 欧拉角、均匀缩放和基础颜色。高频三维操控器更新与版本提交分离：`beginObjectPresentationEdit` 捕获修改前状态，拖动或输入期间只更新预览，`finishObjectPresentationEdit` 在真实变化时提交一个版本。历史版本使用 `geometry / presentation` 分类：纯显示版本恢复对象状态但不触发 OpenCascade 重建；跨过任何几何版本时仍将 CAD 标记为需要重建，避免局部 CAD 特征在参数未变化时被误判为纯显示修改。
+
+视口采用两层变换：外层承载装配基础位置或拆分视图临时偏移，内层承载用户可持久化变换。CAD 点击使用对象的 `worldToLocal`，框选使用 `localToWorld`，确保显示变换不会破坏稳定面原始毫米坐标协议。第一版缩放严格为均匀缩放。
+
+制造导出链路为：
+
+1. 前端 `src/model/objectExport.ts` 规范化对象状态并构造只含 artifacts 普通文件名的请求；
+2. Rust `export_transformed_model` 校验对象数、文件清单、扩展名、数值范围和颜色，并在后台线程调用 Worker；
+3. `modeling/export_transformed_model.py` 解析 ASCII/二进制 STL，把源坐标 `(x, y, z)` 转换为显示坐标 `(x, z, -y)`，按 Three.js Euler XYZ 应用缩放、旋转、装配基础位置和用户位移，再转换回源坐标；
+4. STL 输出二进制三角网格；3MF 输出标准 OPC 包、毫米单位、多对象、中文名称和 `basematerials` 颜色；
+5. Worker 通过临时文件、重读和原子替换完成 artifacts 输出，Rust 再处理下载目录重名并复制文件。
+
+CAD 制造拆件复用源 CAD 零件的稳定对象 ID，上传 STL 拆件使用独立的正负侧对象 ID；导出请求按来源选择同一套视口标识，避免 CAD 拆件已经移动、旋转或缩放后仍错误导出原始姿态。STEP 是参数化源数据交换格式，当前继续导出 OpenCascade 原始坐标，不烘焙仅用于场景布置的对象变换。标准几何 3MF 当前不包含 Bambu Studio 专有打印机、耗材、支撑和切片工程元数据。
