@@ -179,9 +179,11 @@ class SplitAndCapTests(unittest.TestCase):
             self.assertEqual(repair["boundaryEdgeCountAfter"], 0)
             self.assertEqual(repair["repairedHoleCount"], 1)
             self.assertEqual(repair["addedTriangleCount"], 2)
-            self.assertEqual(summary["sourceFile"], "imported-model-repaired.stl")
+            self.assertEqual(summary["sourceFile"], "imported-model-working.stl")
             self.assertEqual(summary["originalSourceFile"], "imported-model.stl")
-            self.assertTrue((directory / "imported-model-repaired.stl").is_file())
+            self.assertTrue((directory / "imported-model-working.stl").is_file())
+            self.assertTrue((directory / "imported-model-working.step").is_file())
+            self.assertFalse((directory / "imported-model-repaired.stl").exists())
             self.assertAlmostEqual(summary["metrics"]["volumeMm3"], 1000.0, places=3)
 
     def test_repaired_open_mesh_can_continue_through_split_and_cap(self) -> None:

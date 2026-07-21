@@ -99,7 +99,11 @@ export interface ModelVersion {
   objectPresentations?: ObjectPresentationMap;
   /** 该版本中非平面受限局部特征的尺寸、曲率、壁厚与干涉诊断快照。 */
   curvedFeatures?: VersionCurvedFeature[];
-  /** Desktop snapshot directory containing the exact generated artifacts for this version. */
+  /** 版本对应的几何来源；旧项目缺省按参数化 CAD 处理。 */
+  modelSource?: 'cad' | 'uploaded-stl';
+  /** 上传模型版本绑定的不可变修订号。 */
+  importedModelRevision?: string;
+  /** 桌面端受管目录中保存的精确 CAD 或上传模型工作文件快照。 */
   snapshotDirectory?: string;
 }
 

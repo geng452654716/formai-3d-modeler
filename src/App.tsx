@@ -57,6 +57,7 @@ function App() {
   const redo = useModelStore((state) => state.redo);
   const versionIndex = useModelStore((state) => state.versionIndex);
   const versions = useModelStore((state) => state.versions);
+  const versionRestoreStatus = useModelStore((state) => state.versionRestoreStatus);
   const exploded = useModelStore((state) => state.exploded);
   const setExploded = useModelStore((state) => state.setExploded);
   const parameters = useModelStore((state) => state.parameters);
@@ -321,13 +322,13 @@ function App() {
           >
             <Save size={16} />
           </button>
-          <button className="toolbar-button" onClick={undo} disabled={versionIndex === 0} title="撤销">
+          <button className="toolbar-button" onClick={() => void undo()} disabled={versionIndex === 0 || versionRestoreStatus === 'restoring'} title="撤销">
             <Undo2 size={16} />
           </button>
           <button
             className="toolbar-button"
-            onClick={redo}
-            disabled={versionIndex >= versions.length - 1}
+            onClick={() => void redo()}
+            disabled={versionIndex >= versions.length - 1 || versionRestoreStatus === 'restoring'}
             title="重做"
           >
             <Redo2 size={16} />

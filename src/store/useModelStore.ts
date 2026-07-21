@@ -20,6 +20,7 @@ import {
   runLocalStlEdit,
   runMeshElementEdit,
   runManufacturingSplit,
+  restoreUploadedModelSnapshot,
   resolveCadSurfaceHit,
   runVersionGeometryDifference,
   type BackendStatus
@@ -104,6 +105,7 @@ export type ImportedStlStatus = 'idle' | 'importing' | 'ready' | 'error';
 export type WallThicknessStatus = 'idle' | 'analyzing' | 'ready' | 'error';
 export type VersionGeometryComparisonStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type MeshElementEditStatus = 'idle' | 'editing' | 'error';
+export type VersionRestoreStatus = 'idle' | 'restoring' | 'error';
 
 interface ModelStore {
   parameters: EnclosureParameters;
@@ -159,11 +161,13 @@ interface ModelStore {
   versionGeometryDifferenceResult: VersionGeometryDifferenceResult | null;
   versionGeometryComparisonStatus: VersionGeometryComparisonStatus;
   versionGeometryComparisonError: string | null;
+  versionRestoreStatus: VersionRestoreStatus;
+  versionRestoreError: string | null;
   setParameter: (key: keyof EnclosureParameters, value: number) => void;
   commitVersion: (label: string, changeKind?: ModelVersion['changeKind']) => void;
-  undo: () => void;
-  redo: () => void;
-  restoreVersion: (versionId: string) => void;
+  undo: () => Promise<boolean>;
+  redo: () => Promise<boolean>;
+  restoreVersion: (versionId: string) => Promise<boolean>;
   selectObject: (id: SceneObjectId) => void;
   setObjectTransformMode: (mode: ObjectTransformMode) => void;
   beginObjectPresentationEdit: (id: SceneObjectId, fallbackColor?: string) => void;
@@ -222,6 +226,7 @@ interface ModelStore {
 
 let generationSerial = 0;
 let versionComparisonSerial = 0;
+let versionRestoreSerial = 0;
 let objectPresentationEdit: { id: SceneObjectId; before: ObjectPresentation } | null = null;
 const OBJECT_PRESENTATIONS_STORAGE_KEY = 'formai-object-presentations-v1';
 
@@ -329,6 +334,7 @@ const initialVersion: ModelVersion = {
   label: '初始模型',
   createdAt: new Date().toISOString(),
   changeKind: 'geometry',
+  modelSource: 'cad',
   parameters: { ...DEFAULT_PARAMETERS },
   interfaceOpenings: null,
   objectPresentations: cloneObjectPresentations(persistedObjectPresentations)
@@ -392,6 +398,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   versionGeometryDifferenceResult: null,
   versionGeometryComparisonStatus: 'idle',
   versionGeometryComparisonError: null,
+  versionRestoreStatus: 'idle',
+  versionRestoreError: null,
   messages: [
     {
       id: crypto.randomUUID(),
@@ -427,7 +435,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         versionGeometryComparisonMode: 'off',
         versionGeometryComparisonBaseId: null,
         versionGeometryComparisonSnapshot: null,
-      versionGeometryDifferenceResult: null,
+        versionGeometryDifferenceResult: null,
         versionGeometryComparisonStatus: 'idle',
         versionGeometryComparisonError: null
       };
@@ -435,11 +443,18 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
   commitVersion: (label, changeKind = 'geometry') => {
     const state = get();
+    const modelSource = state.viewportModelSource === 'uploaded-stl' && state.importedStlModel
+      ? 'uploaded-stl'
+      : 'cad';
     const nextVersion: ModelVersion = {
       id: crypto.randomUUID(),
       label,
       createdAt: new Date().toISOString(),
       changeKind,
+      modelSource,
+      importedModelRevision: modelSource === 'uploaded-stl'
+        ? state.importedStlModel?.revision
+        : undefined,
       parameters: { ...state.parameters },
       interfaceOpenings: state.interfaceOpenings?.map((opening) => ({ ...opening })) ?? state.interfaceOpenings,
       objectPresentations: cloneObjectPresentations(state.objectPresentations),
@@ -448,38 +463,139 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     const versions = state.versions.slice(0, state.versionIndex + 1).concat(nextVersion);
     set({ versions, versionIndex: versions.length - 1 });
   },
-  undo: () => {
+  undo: async () => {
     const state = get();
-    if (state.versionIndex === 0) return;
-    get().restoreVersion(state.versions[state.versionIndex - 1].id);
+    if (state.versionIndex === 0 || state.versionRestoreStatus === 'restoring') return false;
+    return get().restoreVersion(state.versions[state.versionIndex - 1].id);
   },
-  redo: () => {
+  redo: async () => {
     const state = get();
-    if (state.versionIndex >= state.versions.length - 1) return;
-    get().restoreVersion(state.versions[state.versionIndex + 1].id);
+    if (state.versionIndex >= state.versions.length - 1 || state.versionRestoreStatus === 'restoring') return false;
+    return get().restoreVersion(state.versions[state.versionIndex + 1].id);
   },
-  restoreVersion: (versionId) => {
+  restoreVersion: async (versionId) => {
+    const state = get();
+    const targetIndex = state.versions.findIndex((version) => version.id === versionId);
+    if (targetIndex < 0 || targetIndex === state.versionIndex || state.versionRestoreStatus === 'restoring') {
+      return false;
+    }
     versionComparisonSerial += 1;
-    const state = get();
-    const versionIndex = state.versions.findIndex((version) => version.id === versionId);
-    if (versionIndex < 0 || versionIndex === state.versionIndex) return;
-    const version = state.versions[versionIndex];
+    const serial = ++versionRestoreSerial;
+    const version = state.versions[targetIndex];
+    const modelSource = version.modelSource ?? 'cad';
     const nextPresentations = cloneObjectPresentations(version.objectPresentations ?? {});
-    const firstChangedVersion = Math.min(state.versionIndex, versionIndex) + 1;
-    const lastChangedVersion = Math.max(state.versionIndex, versionIndex) + 1;
+    const firstChangedVersion = Math.min(state.versionIndex, targetIndex) + 1;
+    const lastChangedVersion = Math.max(state.versionIndex, targetIndex) + 1;
     const geometryChanged = state.versions
       .slice(firstChangedVersion, lastChangedVersion)
       .some((candidate) => candidate.changeKind !== 'presentation');
+
+    if (modelSource === 'uploaded-stl') {
+      const revision = version.importedModelRevision;
+      if (!revision) {
+        const message = '该上传模型版本缺少修订号，无法安全恢复';
+        set({ versionRestoreStatus: 'error', versionRestoreError: message, aiError: message });
+        return false;
+      }
+      let restoredModel = state.importedStlModel?.revision === revision
+        ? state.importedStlModel
+        : null;
+      if (!restoredModel) {
+        if (!version.snapshotDirectory) {
+          const message = '该上传模型版本没有本机精确快照，无法恢复真实工作网格';
+          set({ versionRestoreStatus: 'error', versionRestoreError: message, aiError: message });
+          return false;
+        }
+        set({
+          versionRestoreStatus: 'restoring',
+          versionRestoreError: null,
+          aiActivity: '正在复核并恢复上传模型精确快照',
+          aiError: null
+        });
+        try {
+          const result = await restoreUploadedModelSnapshot(version.snapshotDirectory, revision);
+          if (serial !== versionRestoreSerial) return false;
+          restoredModel = result.updatedModel;
+        } catch (error) {
+          if (serial !== versionRestoreSerial) return false;
+          const message = error instanceof Error ? error.message : '上传模型版本恢复失败';
+          set((current) => ({
+            versionRestoreStatus: 'error',
+            versionRestoreError: message,
+            aiActivity: null,
+            aiError: message,
+            messages: current.messages.concat({
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: `上传模型版本恢复失败，当前工作模型和版本位置均未改变：${message}`
+            })
+          }));
+          return false;
+        }
+      }
+      if (!restoredModel || serial !== versionRestoreSerial) return false;
+      persistObjectPresentations(nextPresentations);
+      set((current) => ({
+        versionIndex: targetIndex,
+        parameters: { ...version.parameters },
+        interfaceOpenings: version.interfaceOpenings?.map((opening) => ({ ...opening }))
+          ?? version.interfaceOpenings
+          ?? null,
+        objectPresentations: nextPresentations,
+        importedStlModel: restoredModel,
+        importedStlStatus: 'ready',
+        importedStlError: null,
+        viewportModelSource: 'uploaded-stl',
+        selectedObject: 'uploaded-model',
+        exploded: false,
+        localStlEditResult: null,
+        meshElementEditMode: 'off',
+        meshElementSelection: null,
+        meshElementEditStatus: 'idle',
+        meshElementEditError: null,
+        meshElementEditResult: null,
+        manufacturingStatus: 'idle',
+        manufacturingResult: null,
+        manufacturingError: null,
+        wallThicknessStatus: 'idle',
+        wallThicknessResult: null,
+        wallThicknessError: null,
+        wallThicknessVisible: false,
+        wallThicknessPicking: false,
+        wallThicknessSelection: null,
+        cadFaceSelectionMode: 'off',
+        cadFaceSelection: null,
+        localCadFeaturePreview: null,
+        cadFaceBoxRequest: null,
+        versionGeometryComparisonMode: 'off',
+        versionGeometryComparisonBaseId: null,
+        versionGeometryComparisonSnapshot: null,
+        versionGeometryDifferenceResult: null,
+        versionGeometryComparisonStatus: 'idle',
+        versionGeometryComparisonError: null,
+        versionRestoreStatus: 'idle',
+        versionRestoreError: null,
+        aiActivity: null,
+        aiError: null,
+        messages: current.messages.concat({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `已恢复上传模型版本“${version.label}”，旧拆件、壁厚、网格选择和局部修改分析已清除。`
+        })
+      }));
+      return true;
+    }
+
     persistObjectPresentations(nextPresentations);
     set({
-      versionIndex,
+      versionIndex: targetIndex,
       parameters: { ...version.parameters },
       interfaceOpenings: version.interfaceOpenings?.map((opening) => ({ ...opening }))
         ?? version.interfaceOpenings
         ?? null,
       objectPresentations: nextPresentations,
-      viewportModelSource: geometryChanged ? 'cad' : state.viewportModelSource,
-      cadStatus: geometryChanged ? 'stale' : state.cadStatus,
+      viewportModelSource: geometryChanged || state.viewportModelSource !== 'cad' ? 'cad' : state.viewportModelSource,
+      cadStatus: geometryChanged || state.viewportModelSource !== 'cad' ? 'stale' : state.cadStatus,
       cadError: null,
       manufacturingStatus: 'idle',
       manufacturingResult: null,
@@ -499,8 +615,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       versionGeometryComparisonSnapshot: null,
       versionGeometryDifferenceResult: null,
       versionGeometryComparisonStatus: 'idle',
-      versionGeometryComparisonError: null
+      versionGeometryComparisonError: null,
+      versionRestoreStatus: 'idle',
+      versionRestoreError: null
     });
+    return true;
   },
   selectObject: (selectedObject) => set((state) => ({
     selectedObject,
@@ -565,6 +684,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   resetProject: () => {
     generationSerial += 1;
     versionComparisonSerial += 1;
+    versionRestoreSerial += 1;
     persistReferenceState({ referenceImages: [], multiViewCalibration: null });
     persistObjectPresentations({});
     objectPresentationEdit = null;
@@ -573,6 +693,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       label: '新模型画布',
       createdAt: new Date().toISOString(),
       changeKind: 'geometry',
+      modelSource: 'cad',
       parameters: { ...DEFAULT_PARAMETERS },
       interfaceOpenings: null,
       objectPresentations: {}
@@ -625,6 +746,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       versionGeometryDifferenceResult: null,
       versionGeometryComparisonStatus: 'idle',
       versionGeometryComparisonError: null,
+      versionRestoreStatus: 'idle',
+      versionRestoreError: null,
       messages: [{
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -725,6 +848,34 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           content: `已导入 STL“${importedStlModel.originalFileName}”，识别到 ${importedStlModel.metrics.triangleCount.toLocaleString()} 个三角面、${importedStlModel.metrics.solidCount} 个封闭实体；尺寸 ${bounds.x.toFixed(2)} × ${bounds.y.toFixed(2)} × ${bounds.z.toFixed(2)} 毫米，体积 ${importedStlModel.metrics.volumeMm3.toFixed(2)} 立方毫米。${describeMeshRepair(importedStlModel.metrics.repair)}。现在可以选择任意轴和平面执行拆件与切割面自动补面。`
         })
       }));
+      get().commitVersion('导入上传模型');
+      try {
+        const snapshot = await createVersionSnapshot(
+          '导入上传模型',
+          { ...get().parameters, interfaceOpenings: get().interfaceOpenings },
+          { modelSource: 'uploaded-stl', modelRevision: importedStlModel.revision }
+        );
+        if (snapshot) {
+          set((current) => ({
+            versions: current.versions.map((version, index) => index === current.versionIndex
+              ? {
+                  ...version,
+                  modelSource: 'uploaded-stl',
+                  importedModelRevision: importedStlModel.revision,
+                  snapshotDirectory: snapshot.directory
+                }
+              : version)
+          }));
+        }
+      } catch (snapshotError) {
+        set((current) => ({
+          messages: current.messages.concat({
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `上传模型已导入，但初始精确快照保存失败：${snapshotError instanceof Error ? snapshotError.message : '未知错误'}`
+          })
+        }));
+      }
       return importedStlModel;
     } catch (error) {
       set({
@@ -796,10 +947,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     });
     try {
       try {
-        const beforeSnapshot = await createVersionSnapshot(`网格元素位移前-${MESH_ELEMENT_LABELS[selection.kind]}`, {
-          ...state.parameters,
-          interfaceOpenings: state.interfaceOpenings
-        });
+        const beforeSnapshot = await createVersionSnapshot(
+          `网格元素位移前-${MESH_ELEMENT_LABELS[selection.kind]}`,
+          { ...state.parameters, interfaceOpenings: state.interfaceOpenings },
+          { modelSource: 'uploaded-stl', modelRevision: importedModel.revision }
+        );
         if (beforeSnapshot) {
           set((current) => ({ versions: current.versions.map((version, index) => (
             index === current.versionIndex ? { ...version, snapshotDirectory: beforeSnapshot.directory } : version
@@ -835,10 +987,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       });
       get().commitVersion(`移动上传模型${MESH_ELEMENT_LABELS[selection.kind]}`);
       try {
-        const afterSnapshot = await createVersionSnapshot(`网格元素位移后-${MESH_ELEMENT_LABELS[selection.kind]}`, {
-          ...state.parameters,
-          interfaceOpenings: state.interfaceOpenings
-        });
+        const afterSnapshot = await createVersionSnapshot(
+          `网格元素位移后-${MESH_ELEMENT_LABELS[selection.kind]}`,
+          { ...state.parameters, interfaceOpenings: state.interfaceOpenings },
+          { modelSource: 'uploaded-stl', modelRevision: result.updatedModel.revision }
+        );
         if (afterSnapshot) {
           set((current) => ({ versions: current.versions.map((version, index) => (
             index === current.versionIndex ? { ...version, snapshotDirectory: afterSnapshot.directory } : version
@@ -1103,7 +1256,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         versionGeometryComparisonMode: 'off',
         versionGeometryComparisonBaseId: versionId,
         versionGeometryComparisonSnapshot: null,
-      versionGeometryDifferenceResult: null,
+        versionGeometryDifferenceResult: null,
         versionGeometryComparisonStatus: 'error',
         versionGeometryComparisonError: message
       });
@@ -1111,6 +1264,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     };
     if (!baseVersion) return fail('没有找到所选历史版本');
     if (baseVersion.id === currentVersion?.id) return fail('请选择当前版本之前的版本作为基准');
+    if ((baseVersion.modelSource ?? 'cad') !== 'cad') {
+      return fail('上传 STL 精确快照只用于恢复工作网格，不能作为参数化 CAD 几何对比基准');
+    }
     if (!baseVersion.snapshotDirectory) {
       return fail('该版本没有本机精确快照，无法加载旧实体');
     }
@@ -1201,15 +1357,27 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   saveCurrentVersion: async (label = '手动保存') => {
     const state = get();
     try {
-      const snapshot = await createVersionSnapshot(label, {
-        ...state.parameters,
-        interfaceOpenings: state.interfaceOpenings
-      });
+      const uploadedRevision = state.viewportModelSource === 'uploaded-stl'
+        ? state.importedStlModel?.revision ?? null
+        : null;
+      const snapshot = await createVersionSnapshot(
+        label,
+        { ...state.parameters, interfaceOpenings: state.interfaceOpenings },
+        {
+          modelSource: uploadedRevision ? 'uploaded-stl' : 'cad',
+          modelRevision: uploadedRevision
+        }
+      );
       if (!snapshot) return;
       set((current) => ({
         versions: current.versions.map((version, index) =>
           index === current.versionIndex
-            ? { ...version, snapshotDirectory: snapshot.directory }
+            ? {
+                ...version,
+                modelSource: snapshot.modelSource,
+                importedModelRevision: snapshot.modelRevision ?? undefined,
+                snapshotDirectory: snapshot.directory
+              }
             : version
         ),
         messages: current.messages.concat({
@@ -1625,7 +1793,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         messages: state.messages.concat({ id: crypto.randomUUID(), role: 'user', content: trimmed })
       }));
       try {
-        const snapshot = await createVersionSnapshot(`上传-STL-修改前-${trimmed}`, get().parameters);
+        const snapshot = await createVersionSnapshot(
+          `上传-STL-修改前-${trimmed}`,
+          { ...get().parameters, interfaceOpenings: get().interfaceOpenings },
+          { modelSource: 'uploaded-stl', modelRevision: importedModel.revision }
+        );
         if (snapshot) {
           set((state) => ({
             versions: state.versions.map((version, index) =>
@@ -1671,6 +1843,23 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           exploded: false,
           aiActivity: '正在对修改后的上传 STL 自动复查壁厚'
         });
+        get().commitVersion(plan.summary);
+        try {
+          const resultSnapshot = await createVersionSnapshot(
+            `上传-STL-修改后-${trimmed}`,
+            { ...get().parameters, interfaceOpenings: get().interfaceOpenings },
+            { modelSource: 'uploaded-stl', modelRevision: editResult.updatedModel.revision }
+          );
+          if (resultSnapshot) {
+            set((current) => ({
+              versions: current.versions.map((version, index) => index === current.versionIndex
+                ? { ...version, snapshotDirectory: resultSnapshot.directory }
+                : version)
+            }));
+          }
+        } catch {
+          // 修改结果已通过 OpenCascade 校验；后置快照失败只影响版本留档。
+        }
 
         let localReviewText = '';
         if (previousWallThickness?.sourceKind === 'uploaded-stl') {

@@ -398,4 +398,26 @@ Three.js 命中当前三角面
 - Worker `modeling/edit_mesh_element.py` 使用六位小数坐标键收集选中元素涉及的源坐标，并同步更新所有 STL 顶点副本。这样可维持分面 STL 的共享几何顶点一致性，但不等同于通用拓扑编辑器。
 - 修改结果不得包含 NaN、Infinity 或退化三角面。重新导入后的 Shape 必须有效、封闭，修改前后 Solid 数量一致；如果导入流程报告进行了自动修洞或网格清理，Worker 拒绝提交，避免自动修复掩盖编辑产生的破坏。
 - `imported-model-working.stl`、`imported-model-working.step`、`imported-model-result.json` 和 `mesh-element-edit-result.json` 使用既有受管 artifacts 目录、临时输出、批量原子替换和回滚机制。Web 开发路由与 Tauri 命令调用同一 Python Worker。
-- 成功后 Zustand 更新上传模型修订，清除制造拆件、壁厚热力图和过期选择，并创建中文版本与前后快照。当前 `restoreVersion` 尚未恢复上传工作 STL 文件，所以下一阶段需要增加受管快照恢复命令，不能把现状描述为完整网格撤销/重做。
+- 成功后 Zustand 更新上传模型修订，清除制造拆件、壁厚热力图和过期选择，并创建绑定对应修订号的中文版本与前后上传模型快照。`restoreVersion`、撤销和重做通过受管恢复命令恢复真实工作 STL、STEP 与清单，只有 Worker 成功后才移动历史索引。
+
+## 上传模型精确快照恢复协议
+
+```text
+创建上传模型版本
+  → 固定复制原始 STL、工作 STL、工作 STEP、模型清单
+  → version.json 写入 uploaded-stl 来源与不可变修订号
+  → 撤销、重做或历史恢复请求
+  → Rust 校验受管版本直接子目录、来源、修订号和固定文件完整性
+  → Python/OpenCascade 双重检查 STL 与 STEP
+  → 有效性、封闭性、Solid 数量、体积和清单声明一致
+  → 临时文件 + 批量原子替换 + 失败回滚
+  → Zustand 成功后移动历史索引并清除过期分析
+```
+
+- `VersionSnapshot` 使用 `modelSource` 区分 `cad` 与 `uploaded-stl`，上传来源必须同时保存 `modelRevision`。参数化 CAD 快照默认行为保持不变。
+- 首次 STL 导入由 `modeling/split_and_cap.py` 固定创建 `imported-model.stl`、`imported-model-working.stl`、`imported-model-working.step` 和 `imported-model-result.json`，使后续网格编辑与历史恢复使用统一工作集。
+- Rust 只接受 `artifacts/versions` 的直接子目录，验证 `version.json`、上传模型清单和调用方预期修订号完全一致，并拒绝 CAD 来源、缺失工作文件、任意外部路径、路径穿越及符号链接逃逸。
+- `modeling/restore_uploaded_model_snapshot.py` 使用 OpenCascade 重新载入工作 STL 和 STEP，分别检查 Shape 有效性、封闭性和 Solid 数量，再比较 STL/STEP 体积及清单声明。所有校验都在工作文件替换前完成。
+- 文件提交使用同目录临时文件、批量原子替换和失败回滚；任一步失败都保留最后有效模型。桌面恢复命令持有模型生成锁，避免与导入、编辑或重建并发覆盖。
+- Store 的上传模型恢复是异步事务：Worker 成功后才修改 `versionIndex`，并重载上传模型清单、切回上传 STL 视图，清除拆件、壁厚、网格选择、局部修改和版本几何对比。异步序号阻止旧恢复响应覆盖较新的恢复。
+- Web 模式明确拒绝本机精确恢复。上传 STL 快照不参与参数化 CAD STEP 精确布尔差异；跨项目快照导入、任意外部快照目录和云端同步不在当前协议范围内。

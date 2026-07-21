@@ -52,6 +52,8 @@
       "../modeling/stl_mesh_repair.py",
       "../modeling/wall_thickness_analysis.py",
       "../modeling/local_stl_edit.py",
+      "../modeling/edit_mesh_element.py",
+      "../modeling/restore_uploaded_model_snapshot.py",
       "../modeling/local_cad_feature.py",
       "../modeling/face_geometry_signatures.py",
       "../modeling/face_tessellation_mapping.py",

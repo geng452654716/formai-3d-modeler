@@ -23,6 +23,7 @@ const GENERATED_FILES: &[&str] = &[
     "imported-model-working.step",
     "local-stl-edit-result.json",
     "mesh-element-edit-result.json",
+    "uploaded-model-restore-result.json",
     "local-cad-feature-result.json",
     "local-cad-feature-preflight-result.json",
     "manufacturing-negative.stl",
@@ -73,6 +74,7 @@ struct BackendPaths {
     version_difference_worker_path: PathBuf,
     local_stl_edit_worker_path: PathBuf,
     mesh_element_edit_worker_path: PathBuf,
+    uploaded_model_restore_worker_path: PathBuf,
     local_cad_feature_worker_path: PathBuf,
     cad_surface_hit_worker_path: PathBuf,
     transformed_export_worker_path: PathBuf,
@@ -98,6 +100,8 @@ pub struct VersionSnapshot {
     label: String,
     directory: String,
     files: Vec<String>,
+    model_source: String,
+    model_revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -253,6 +257,8 @@ impl BackendPaths {
             project_root.join("modeling/version_geometry_difference.py");
         let local_stl_edit_worker_path = project_root.join("modeling/local_stl_edit.py");
         let mesh_element_edit_worker_path = project_root.join("modeling/edit_mesh_element.py");
+        let uploaded_model_restore_worker_path =
+            project_root.join("modeling/restore_uploaded_model_snapshot.py");
         let local_cad_feature_worker_path = project_root.join("modeling/local_cad_feature.py");
         let cad_surface_hit_worker_path = project_root.join("modeling/resolve_cad_surface_hit.py");
         let transformed_export_worker_path =
@@ -274,6 +280,7 @@ impl BackendPaths {
             version_difference_worker_path,
             local_stl_edit_worker_path,
             mesh_element_edit_worker_path,
+            uploaded_model_restore_worker_path,
             local_cad_feature_worker_path,
             cad_surface_hit_worker_path,
             transformed_export_worker_path,
@@ -513,6 +520,7 @@ fn generated_file_names(artifacts_dir: &Path) -> Vec<String> {
         "wall-thickness-result.json",
         "local-stl-edit-result.json",
         "mesh-element-edit-result.json",
+        "uploaded-model-restore-result.json",
         "local-cad-feature-result.json",
         "local-cad-feature-preflight-result.json",
         "version-difference-result.json",
@@ -612,6 +620,126 @@ fn version_snapshot_generated_file_names(artifacts_dir: &Path) -> Result<Vec<Str
         }
     }
     Ok(files)
+}
+
+const UPLOADED_MODEL_SNAPSHOT_FILES: &[&str] = &[
+    "imported-model.stl",
+    "imported-model-working.stl",
+    "imported-model-working.step",
+];
+
+fn read_uploaded_model_manifest_at(directory: &Path) -> Result<Value, String> {
+    let manifest_path = fs::canonicalize(directory.join("imported-model-result.json"))
+        .map_err(|error| format!("上传模型快照缺少模型清单：{error}"))?;
+    if manifest_path.parent() != Some(directory) {
+        return Err("上传模型快照清单不允许指向快照目录之外".into());
+    }
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .map_err(|error| format!("上传模型快照清单无法读取：{error}"))?,
+    )
+    .map_err(|error| format!("上传模型快照清单格式错误：{error}"))?;
+    if manifest.get("status").and_then(Value::as_str) != Some("ok")
+        || manifest.get("sourceKind").and_then(Value::as_str) != Some("uploaded-stl")
+        || manifest.get("id").and_then(Value::as_str) != Some("uploaded-model")
+    {
+        return Err("上传模型快照清单不是有效的上传 STL 结果".into());
+    }
+    Ok(manifest)
+}
+
+fn uploaded_model_snapshot_file_names(
+    artifacts_dir: &Path,
+    expected_revision: &str,
+) -> Result<Vec<String>, String> {
+    let manifest = read_uploaded_model_manifest_at(artifacts_dir)?;
+    let revision = manifest
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "当前上传模型清单缺少修订号".to_string())?;
+    if revision != expected_revision {
+        return Err("当前上传模型修订号与待保存版本不一致，请重试".into());
+    }
+    if manifest.get("sourceFile").and_then(Value::as_str) != Some("imported-model-working.stl")
+        || manifest.get("originalSourceFile").and_then(Value::as_str) != Some("imported-model.stl")
+    {
+        return Err("当前上传模型尚未形成标准工作 STL，请重新导入后再保存版本".into());
+    }
+    let outputs = manifest
+        .get("outputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "当前上传模型清单缺少输出文件列表".to_string())?;
+    let output_names = outputs
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| "当前上传模型输出列表包含无效文件名".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if output_names.len() != UPLOADED_MODEL_SNAPSHOT_FILES.len()
+        || UPLOADED_MODEL_SNAPSHOT_FILES
+            .iter()
+            .any(|required| !output_names.contains(required))
+    {
+        return Err("当前上传模型快照必须完整包含原始 STL、工作 STL 和工作 STEP".into());
+    }
+    let mut files = vec!["imported-model-result.json".to_string()];
+    for file_name in UPLOADED_MODEL_SNAPSHOT_FILES {
+        let source = artifacts_dir.join(file_name);
+        if !source.is_file() {
+            return Err(format!("当前上传模型缺少快照文件：{file_name}"));
+        }
+        files.push((*file_name).to_string());
+    }
+    Ok(files)
+}
+
+fn read_version_snapshot_metadata_at(directory: &Path) -> Result<Value, String> {
+    let metadata_path = fs::canonicalize(directory.join("version.json"))
+        .map_err(|error| format!("版本快照缺少版本元数据：{error}"))?;
+    if metadata_path.parent() != Some(directory) {
+        return Err("版本快照元数据不允许指向快照目录之外".into());
+    }
+    serde_json::from_str(
+        &fs::read_to_string(metadata_path)
+            .map_err(|error| format!("版本快照元数据无法读取：{error}"))?,
+    )
+    .map_err(|error| format!("版本快照元数据格式错误：{error}"))
+}
+
+fn validate_uploaded_model_snapshot(
+    directory: &Path,
+    expected_revision: &str,
+) -> Result<Value, String> {
+    let metadata = read_version_snapshot_metadata_at(directory)?;
+    if metadata.get("modelSource").and_then(Value::as_str) != Some("uploaded-stl") {
+        return Err("所选版本不是上传 STL 精确快照".into());
+    }
+    if metadata.get("modelRevision").and_then(Value::as_str) != Some(expected_revision) {
+        return Err("版本元数据与待恢复上传模型修订号不一致".into());
+    }
+    let manifest = read_uploaded_model_manifest_at(directory)?;
+    if manifest.get("revision").and_then(Value::as_str) != Some(expected_revision) {
+        return Err("版本记录与上传模型快照修订号不一致".into());
+    }
+    let outputs = manifest
+        .get("outputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "上传模型快照清单缺少输出文件列表".to_string())?;
+    for required in UPLOADED_MODEL_SNAPSHOT_FILES {
+        if !outputs.iter().any(|value| value.as_str() == Some(required)) {
+            return Err(format!("上传模型快照清单缺少文件声明：{required}"));
+        }
+        let path = fs::canonicalize(directory.join(required))
+            .map_err(|_| format!("上传模型快照缺少文件：{required}"))?;
+        if path.parent() != Some(directory) || !path.is_file() {
+            return Err(format!(
+                "上传模型快照文件不允许指向快照目录之外：{required}"
+            ));
+        }
+    }
+    Ok(manifest)
 }
 
 fn validate_generated_file(file_name: &str, artifacts_dir: &Path) -> Result<(), String> {
@@ -1421,6 +1549,85 @@ pub async fn run_mesh_element_edit(
 }
 
 #[tauri::command]
+pub async fn restore_uploaded_model_snapshot(
+    snapshot_directory: String,
+    expected_revision: String,
+    state: tauri::State<'_, BackendState>,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = state
+            .generation_lock
+            .lock()
+            .map_err(|_| "上传模型恢复锁已损坏".to_string())?;
+        let expected_revision = expected_revision.trim();
+        if expected_revision.is_empty() || expected_revision.chars().count() > 200 {
+            return Err("待恢复上传模型修订号无效".to_string());
+        }
+        let directory = version_snapshot_directory(
+            &snapshot_directory,
+            &state.paths.artifacts_dir,
+        )?;
+        validate_uploaded_model_snapshot(&directory, expected_revision)?;
+        if !state.paths.uploaded_model_restore_worker_path.is_file() {
+            return Err(format!(
+                "未找到上传模型快照恢复 Worker：{}",
+                state.paths.uploaded_model_restore_worker_path.display()
+            ));
+        }
+        if !cad_runtime_available(&state.paths) {
+            return Err(format!(
+                "CAD Python 环境不可用：{}。请设置 FORM_AI_PYTHON_PATH 指向已安装 CadQuery 的 Python。",
+                state.paths.python_path.display()
+            ));
+        }
+        fs::create_dir_all(&state.paths.artifacts_dir)
+            .map_err(|error| format!("无法创建模型输出目录：{error}"))?;
+        let arguments = vec![
+            state
+                .paths
+                .uploaded_model_restore_worker_path
+                .display()
+                .to_string(),
+            "--snapshot".into(),
+            directory.display().to_string(),
+            "--output".into(),
+            state.paths.artifacts_dir.display().to_string(),
+            "--expected-revision".into(),
+            expected_revision.to_string(),
+        ];
+        let output = run_process_with_input(
+            &state.paths.python_path,
+            &arguments,
+            &state.paths.project_root,
+            None,
+        )?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if message.is_empty() {
+                format!("上传模型快照恢复 Worker 退出，状态码：{}", output.status)
+            } else {
+                message
+            });
+        }
+        let result_path = state
+            .paths
+            .artifacts_dir
+            .join("uploaded-model-restore-result.json");
+        let contents = fs::read_to_string(&result_path)
+            .map_err(|error| format!("无法读取上传模型恢复结果：{error}"))?;
+        let result: Value = serde_json::from_str(&contents)
+            .map_err(|error| format!("上传模型恢复结果格式错误：{error}"))?;
+        if result.get("status").and_then(Value::as_str) != Some("ok") {
+            return Err("上传模型恢复结果未通过校验".to_string());
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|error| format!("上传模型快照恢复后台任务失败：{error}"))?
+}
+
+#[tauri::command]
 pub async fn run_local_cad_feature(
     selection_revision: String,
     part_id: String,
@@ -2124,13 +2331,25 @@ pub fn export_generated_file(
 pub fn create_version_snapshot(
     label: String,
     parameters: Value,
+    model_source: String,
+    model_revision: Option<String>,
     state: tauri::State<'_, BackendState>,
 ) -> Result<VersionSnapshot, String> {
     let _guard = state
         .generation_lock
         .lock()
         .map_err(|_| "版本快照锁不可用".to_string())?;
-    let generated_files = version_snapshot_generated_file_names(&state.paths.artifacts_dir)?;
+    let generated_files = match model_source.as_str() {
+        "cad" => version_snapshot_generated_file_names(&state.paths.artifacts_dir)?,
+        "uploaded-stl" => {
+            let revision = model_revision
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "上传模型版本快照缺少修订号".to_string())?;
+            uploaded_model_snapshot_file_names(&state.paths.artifacts_dir, revision)?
+        }
+        _ => return Err("版本快照模型来源只能是精确 CAD 或上传 STL".into()),
+    };
     let id = now_id();
     let directory = state.paths.artifacts_dir.join("versions").join(format!(
         "{}-{}",
@@ -2147,6 +2366,8 @@ pub fn create_version_snapshot(
               "label": label,
               "createdAtUnixMs": now_id(),
               "parameters": parameters,
+              "modelSource": model_source,
+              "modelRevision": model_revision,
             }))
             .map_err(|error| format!("无法序列化版本快照：{error}"))?,
         )
@@ -2174,6 +2395,8 @@ pub fn create_version_snapshot(
         label,
         directory: directory.display().to_string(),
         files,
+        model_source,
+        model_revision,
     })
 }
 
@@ -3756,6 +3979,87 @@ mod tests {
         )
         .expect("write undeclared STL");
         (artifacts_dir, snapshot_dir)
+    }
+
+    fn create_uploaded_snapshot_fixture() -> (PathBuf, PathBuf) {
+        let artifacts_dir = temporary_test_directory("uploaded-version-snapshot");
+        let snapshot_dir = artifacts_dir.join("versions").join("200-上传模型");
+        fs::create_dir_all(&snapshot_dir).expect("create uploaded snapshot directory");
+        fs::write(
+            snapshot_dir.join("version.json"),
+            serde_json::to_vec_pretty(&json!({
+              "id": "200",
+              "label": "上传模型",
+              "modelSource": "uploaded-stl",
+              "modelRevision": "revision-200"
+            }))
+            .expect("serialize uploaded version metadata"),
+        )
+        .expect("write uploaded version metadata");
+        fs::write(
+            snapshot_dir.join("imported-model-result.json"),
+            serde_json::to_vec_pretty(&json!({
+              "status": "ok",
+              "revision": "revision-200",
+              "id": "uploaded-model",
+              "sourceKind": "uploaded-stl",
+              "sourceFile": "imported-model-working.stl",
+              "originalSourceFile": "imported-model.stl",
+              "outputs": UPLOADED_MODEL_SNAPSHOT_FILES
+            }))
+            .expect("serialize uploaded model manifest"),
+        )
+        .expect("write uploaded model manifest");
+        for file_name in UPLOADED_MODEL_SNAPSHOT_FILES {
+            fs::write(snapshot_dir.join(file_name), b"snapshot model")
+                .expect("write uploaded snapshot file");
+        }
+        (artifacts_dir, snapshot_dir)
+    }
+
+    #[test]
+    fn validates_uploaded_snapshot_revision_source_and_fixed_files() {
+        let (artifacts_dir, snapshot_dir) = create_uploaded_snapshot_fixture();
+        let resolved = version_snapshot_directory(
+            snapshot_dir.to_str().expect("snapshot path"),
+            &artifacts_dir,
+        )
+        .expect("resolve uploaded snapshot");
+        validate_uploaded_model_snapshot(&resolved, "revision-200")
+            .expect("valid uploaded snapshot");
+        assert!(
+            validate_uploaded_model_snapshot(&resolved, "revision-other")
+                .expect_err("revision mismatch should fail")
+                .contains("修订号不一致")
+        );
+
+        let mut metadata = read_version_snapshot_metadata_at(&resolved).expect("read metadata");
+        metadata["modelSource"] = json!("cad");
+        fs::write(
+            resolved.join("version.json"),
+            serde_json::to_vec_pretty(&metadata).expect("serialize modified metadata"),
+        )
+        .expect("write modified metadata");
+        assert!(validate_uploaded_model_snapshot(&resolved, "revision-200")
+            .expect_err("CAD source should fail")
+            .contains("不是上传 STL"));
+        fs::remove_dir_all(artifacts_dir).expect("remove uploaded snapshot fixture");
+    }
+
+    #[test]
+    fn rejects_uploaded_snapshot_missing_working_step() {
+        let (artifacts_dir, snapshot_dir) = create_uploaded_snapshot_fixture();
+        fs::remove_file(snapshot_dir.join("imported-model-working.step"))
+            .expect("remove working STEP");
+        let resolved = version_snapshot_directory(
+            snapshot_dir.to_str().expect("snapshot path"),
+            &artifacts_dir,
+        )
+        .expect("resolve uploaded snapshot");
+        assert!(validate_uploaded_model_snapshot(&resolved, "revision-200")
+            .expect_err("missing STEP should fail")
+            .contains("缺少文件"));
+        fs::remove_dir_all(artifacts_dir).expect("remove uploaded snapshot fixture");
     }
 
     #[test]

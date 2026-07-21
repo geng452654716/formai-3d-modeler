@@ -89,6 +89,8 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
   const parameters = useModelStore((state) => state.parameters);
   const interfaceOpenings = useModelStore((state) => state.interfaceOpenings);
   const restoreVersion = useModelStore((state) => state.restoreVersion);
+  const versionRestoreStatus = useModelStore((state) => state.versionRestoreStatus);
+  const versionRestoreError = useModelStore((state) => state.versionRestoreError);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
@@ -122,17 +124,21 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
     [baseVersion, liveCurrentVersion]
   );
 
-  const handleRestore = () => {
-    if (baseVersion.id === currentVersion.id) return;
+  const handleRestore = async () => {
+    if (baseVersion.id === currentVersion.id || versionRestoreStatus === 'restoring') return;
+    const sourceLabel = (baseVersion.modelSource ?? 'cad') === 'uploaded-stl'
+      ? '恢复已保存的上传模型工作 STL 与 STEP'
+      : '恢复参数并重新生成精确 CAD';
     const confirmed = window.confirm(
-      `恢复到“${baseVersion.label}”吗？恢复后会自动重建 CAD；如果继续修改，将从该版本创建新的历史分支。`
+      `恢复到“${baseVersion.label}”吗？将${sourceLabel}；如果继续修改，将从该版本创建新的历史分支。`
     );
     if (!confirmed) return;
-    restoreVersion(baseVersion.id);
-    onClose();
+    const restored = await restoreVersion(baseVersion.id);
+    if (restored) onClose();
   };
 
   const canCompareGeometry = baseVersion.id !== currentVersion.id
+    && (baseVersion.modelSource ?? 'cad') === 'cad'
     && Boolean(baseVersion.snapshotDirectory)
     && viewportModelSource === 'cad'
     && cadStatus === 'ready'
@@ -165,7 +171,7 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
             <History size={18} />
             <div>
               <strong id="version-history-title">版本历史与对比</strong>
-              <span>恢复参数化版本，查看参数与通用开孔元数据变化</span>
+              <span>恢复参数化 CAD 或上传模型精确快照，并查看版本差异</span>
             </div>
           </div>
           <button onClick={onClose} title="关闭"><X size={17} /></button>
@@ -199,8 +205,12 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
                       <small>{formatDate(version.createdAt)}</small>
                       <small className={version.snapshotDirectory ? 'has-snapshot' : ''}>
                         {version.snapshotDirectory
-                          ? <><HardDrive size={11} /> 已保存本机精确快照</>
-                          : '仅保存参数与开孔记录'}
+                          ? <><HardDrive size={11} /> {(version.modelSource ?? 'cad') === 'uploaded-stl'
+                              ? '已保存上传模型精确快照'
+                              : '已保存精确 CAD 快照'}</>
+                          : (version.modelSource ?? 'cad') === 'uploaded-stl'
+                            ? '上传模型版本缺少精确快照'
+                            : '仅保存参数与开孔记录'}
                       </small>
                     </span>
                     {isCurrent && <b><CheckCircle2 size={12} /> 当前</b>}
@@ -224,17 +234,18 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
               <button
                 type="button"
                 className="secondary-modal-button compact"
-                disabled={baseVersion.id === currentVersion.id}
-                onClick={handleRestore}
+                disabled={baseVersion.id === currentVersion.id || versionRestoreStatus === 'restoring'}
+                onClick={() => void handleRestore()}
               >
-                <RotateCcw size={14} /> 恢复此版本
+                <RotateCcw size={14} /> {versionRestoreStatus === 'restoring' ? '正在恢复' : '恢复此版本'}
               </button>
             </div>
 
             <p className="version-comparison-note">
-              当前参数和通用开孔元数据对比用于解释设计意图；标有“本机精确快照”的版本还可加载已保存 STL，
-              或使用 OpenCascade 对历史与当前 STEP 实体执行精确布尔差集。
+              上传模型版本会恢复受管工作 STL、STEP 和模型清单；参数化 CAD 版本会恢复参数并重新生成实体。
+              只有精确 CAD 快照参与 OpenCascade 历史实体布尔差集。
             </p>
+            {versionRestoreError && <p className="version-comparison-note is-error">恢复失败：{versionRestoreError}</p>}
 
             <details className="preflight-history-section">
               <summary>

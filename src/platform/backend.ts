@@ -29,11 +29,23 @@ export interface BackendStatus {
   codexVersion: string | null;
 }
 
+export type VersionSnapshotModelSource = 'cad' | 'uploaded-stl';
+
 export interface VersionSnapshot {
   id: string;
   label: string;
   directory: string;
   files: string[];
+  modelSource: VersionSnapshotModelSource;
+  modelRevision: string | null;
+}
+
+export interface UploadedModelSnapshotRestoreResult {
+  status: 'ok';
+  operation: 'restore-uploaded-model-snapshot';
+  restoredRevision: string;
+  sourceKind: 'uploaded-stl';
+  updatedModel: ImportedStlModel;
 }
 
 function createBinaryObjectUrl(
@@ -138,10 +150,33 @@ export async function analyzeReferenceImage(
 /** Persists parameters and current CAD outputs before an AI mutation. */
 export async function createVersionSnapshot(
   label: string,
-  parameters: EnclosureParameters & { interfaceOpenings?: InterfaceOpeningSpec[] | null }
+  parameters: EnclosureParameters & { interfaceOpenings?: InterfaceOpeningSpec[] | null },
+  options: {
+    modelSource?: VersionSnapshotModelSource;
+    modelRevision?: string | null;
+  } = {}
 ) {
   if (!isDesktopRuntime()) return null;
-  return invoke<VersionSnapshot>('create_version_snapshot', { label, parameters });
+  return invoke<VersionSnapshot>('create_version_snapshot', {
+    label,
+    parameters,
+    modelSource: options.modelSource ?? 'cad',
+    modelRevision: options.modelRevision ?? null
+  });
+}
+
+/** 从受管版本目录原子恢复上传 STL 的完整工作 STL、STEP 和清单。 */
+export async function restoreUploadedModelSnapshot(
+  snapshotDirectory: string,
+  expectedRevision: string
+) {
+  if (!isDesktopRuntime()) {
+    throw new Error('上传模型精确版本恢复只能在 FormAI 桌面应用中执行');
+  }
+  return invoke<UploadedModelSnapshotRestoreResult>('restore_uploaded_model_snapshot', {
+    snapshotDirectory,
+    expectedRevision
+  });
 }
 
 /** Copies one generated model into the user's Downloads directory in desktop mode. */

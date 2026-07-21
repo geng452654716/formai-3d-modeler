@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -301,14 +302,15 @@ def inspect_stl_file(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     repaired_path = output_dir / f"{stem}-repaired.stl"
-    _, validation = import_stl_as_solid(input_path, repaired_output_path=repaired_path)
-    if not validation.repair.repaired and repaired_path.exists():
-        repaired_path.unlink()
+    model, validation = import_stl_as_solid(input_path, repaired_output_path=repaired_path)
+    working_stl = output_dir / f"{stem}-working.stl"
+    working_step = output_dir / f"{stem}-working.step"
+    shutil.copy2(repaired_path if validation.repair.repaired else input_path, working_stl)
+    exporters.export(model, str(working_step))
+    repaired_path.unlink(missing_ok=True)
 
-    working_path = repaired_path if validation.repair.repaired else input_path
-    output_paths = [input_path]
-    if validation.repair.repaired:
-        output_paths.append(repaired_path)
+    working_path = working_stl
+    output_paths = [input_path, working_stl, working_step]
     summary: dict[str, object] = {
         "status": "ok",
         "revision": str(time_ns()),
