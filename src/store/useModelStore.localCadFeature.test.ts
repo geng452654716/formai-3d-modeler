@@ -806,6 +806,29 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(backendMocks.runLocalCadFeature).not.toHaveBeenCalled();
     expect(state.localCadFeaturePreview?.preflight?.validation.interferingStableFaceIds).toEqual(['face-blocking']);
     expect(state.localCadFeaturePreview?.preflight?.validation.minimumInterferenceDistanceMm).toBe(2);
+    expect(state.localCadFeaturePreview?.focusedInterferenceFaceId).toBe('face-blocking');
+    const originalCadResult = state.cadResult;
+    const originalSelection = state.cadFaceSelection;
+    useModelStore.setState((current) => ({
+      localCadFeaturePreview: current.localCadFeaturePreview
+        ? { ...current.localCadFeaturePreview, focusedInterferenceFaceId: null }
+        : null
+    }));
+    useModelStore.getState().focusLocalCadFeatureInterferenceFace('face-blocking');
+    expect(useModelStore.getState().localCadFeaturePreview?.focusedInterferenceFaceId).toBe('face-blocking');
+    useModelStore.getState().focusLocalCadFeatureInterferenceFace('face-not-in-preflight');
+    expect(useModelStore.getState().localCadFeaturePreview?.focusedInterferenceFaceId).toBe('face-blocking');
+    expect(useModelStore.getState().cadResult).toBe(originalCadResult);
+    expect(useModelStore.getState().cadFaceSelection).toBe(originalSelection);
+
+    await useModelStore.getState().executeCommand('在这里开一个直径 3 毫米、深 3 毫米的圆孔');
+    expect(backendMocks.preflightLocalCadFeature).toHaveBeenCalledTimes(2);
+    expect(backendMocks.createVersionSnapshot).not.toHaveBeenCalled();
+    expect(backendMocks.runLocalCadFeature).not.toHaveBeenCalled();
+    expect(useModelStore.getState().localCadFeaturePreview).toMatchObject({
+      status: 'blocked',
+      request: { radiusMm: 1.5, depthMm: 3 }
+    });
     expect(state.messages.at(-1)?.content).toContain('精确工具体预演已阻止自动执行');
     expect(state.messages.at(-1)?.content).toContain('当前模型未写入任何修改');
   });

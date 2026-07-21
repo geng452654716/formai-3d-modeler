@@ -30,6 +30,7 @@ import {
 import { createLidGeometry, createTrayGeometry } from '../model/createEnclosureGeometry';
 import { getOuterDimensions } from '../model/defaults';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
+import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
 import { calculateVersionComparisonOffsets } from '../model/versionGeometryComparison';
 import {
@@ -426,6 +427,40 @@ function LoadedCadMesh({
     () => createFaceHighlightGeometry(geometry, selectedRanges),
     [geometry, selectedRanges]
   );
+  const interferenceRanges = useMemo(() => {
+    const preview = localCadFeaturePreview;
+    const preflight = preview?.preflight;
+    if (
+      preview?.status !== 'blocked'
+      || !preflight
+      || !cadPart?.faceTessellation
+      || preview.request.selectionRevision !== cadResult?.revision
+      || preflight.revision !== cadResult.revision
+      || preview.request.partId !== cadPart.id
+      || preflight.partId !== cadPart.id
+      || cadPart.faceTessellation.partId !== cadPart.id
+    ) return [];
+    const interferingIds = new Set(preflight.validation.interferingStableFaceIds);
+    return cadPart.faceTessellation.faces.filter((face) => interferingIds.has(face.stableId));
+  }, [cadPart, cadResult?.revision, localCadFeaturePreview]);
+  const interferenceGeometry = useMemo(
+    () => createFaceHighlightGeometry(geometry, interferenceRanges),
+    [geometry, interferenceRanges]
+  );
+  const focusedInterferenceRange = useMemo(() => {
+    const focusedId = localCadFeaturePreview?.focusedInterferenceFaceId;
+    return focusedId ? interferenceRanges.find((face) => face.stableId === focusedId) ?? null : null;
+  }, [interferenceRanges, localCadFeaturePreview?.focusedInterferenceFaceId]);
+  const focusedInterferenceGeometry = useMemo(
+    () => createFaceHighlightGeometry(geometry, focusedInterferenceRange ? [focusedInterferenceRange] : []),
+    [geometry, focusedInterferenceRange]
+  );
+  const focusedInterferencePoint = useMemo(
+    () => focusedInterferenceRange
+      ? new Vector3(...focusedInterferenceRange.centerMm).applyMatrix4(coordinateTransform)
+      : null,
+    [coordinateTransform, focusedInterferenceRange]
+  );
   const selectedEdgeGeometry = useMemo(() => {
     const edge = cadFaceSelection?.selectionMode === 'edge'
       && cadFaceSelection.edge?.partId === cadPart?.id
@@ -510,6 +545,8 @@ function LoadedCadMesh({
 
   useEffect(() => () => geometry.dispose(), [geometry]);
   useEffect(() => () => highlightGeometry?.dispose(), [highlightGeometry]);
+  useEffect(() => () => interferenceGeometry?.dispose(), [interferenceGeometry]);
+  useEffect(() => () => focusedInterferenceGeometry?.dispose(), [focusedInterferenceGeometry]);
   useEffect(() => () => selectedEdgeGeometry?.dispose(), [selectedEdgeGeometry]);
 
   return (
@@ -626,6 +663,44 @@ function LoadedCadMesh({
             depthTest={false}
           />
         </mesh>
+      )}
+      {interferenceGeometry && (
+        <mesh geometry={interferenceGeometry} renderOrder={6}>
+          <meshStandardMaterial
+            color="#ef4444"
+            emissive="#7f1d1d"
+            emissiveIntensity={1.1}
+            transparent
+            opacity={0.58}
+            depthTest={false}
+          />
+        </mesh>
+      )}
+      {focusedInterferenceGeometry && (
+        <mesh geometry={focusedInterferenceGeometry} renderOrder={7}>
+          <meshStandardMaterial
+            color="#fff1f2"
+            emissive="#fb2c36"
+            emissiveIntensity={1.8}
+            transparent
+            opacity={0.82}
+            depthTest={false}
+          />
+        </mesh>
+      )}
+      {focusedInterferencePoint && focusedInterferenceRange && (
+        <group position={focusedInterferencePoint}>
+          <mesh renderOrder={8}>
+            <sphereGeometry args={[0.8, 18, 12]} />
+            <meshStandardMaterial color="#ffffff" emissive="#ef4444" emissiveIntensity={2} depthTest={false} />
+          </mesh>
+          <Html position={[0, 2.2, 0]} center distanceFactor={9}>
+            <div className="cad-interference-marker-label">
+              <strong>当前干涉面</strong>
+              <span>{focusedInterferenceRange.stableId}</span>
+            </div>
+          </Html>
+        </group>
       )}
       {selectedEdgeGeometry && (
         <lineSegments geometry={selectedEdgeGeometry} renderOrder={7}>
@@ -1440,7 +1515,10 @@ export function ModelViewport() {
               <span>{describeLocalCadFeaturePreview(localCadFeaturePreview)}</span>
               <small>精确预演绑定当前 CAD 修订、零件、稳定面、曲面 UV 和真实 U 切向；模型重建或重新选择后自动失效。</small>
               {localCadFeaturePreview.errorMessage && <small>{localCadFeaturePreview.errorMessage}</small>}
-              {(localCadFeaturePreview.status === 'blocked' || localCadFeaturePreview.status === 'failed') && (
+              {localCadFeaturePreview.status === 'blocked' && (
+                <LocalCadFeatureRiskPanel preview={localCadFeaturePreview} />
+              )}
+              {localCadFeaturePreview.status === 'failed' && (
                 <button type="button" onClick={clearLocalCadFeaturePreview}>清除预览</button>
               )}
             </div>

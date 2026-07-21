@@ -16,6 +16,8 @@ const cadFaceSuggestions = [
 const cadCurvedFaceSuggestions = [
   '在这里增加直径 4 毫米、高 2 毫米的圆形凸台',
   '在这里开一个直径 3 毫米、深 4 毫米的圆孔',
+  '在这里增加宽 5 毫米、高 3 毫米、凸出 2 毫米的矩形凸台，旋转 10 度',
+  '在这里开一个宽 4 毫米、高 3 毫米、深 4 毫米的矩形孔，旋转 15 度',
   '在这里开一个宽 3 毫米、长 6 毫米、深 4 毫米、旋转 20 度的槽孔'
 ];
 const cadEdgeSuggestions = ['将这条边做 2 毫米圆角', '将这条边做 1 毫米倒角'];
@@ -105,7 +107,7 @@ export function CommandPanel() {
                 : cadFaceSelection.selectionMode === 'click' && cadFaceSelection.faces.length === 1 && cadFaceSelection.faces[0]?.geometryType === 'PLANE'
                 ? ' 精确解析完成后可在此平面执行圆形或矩形凸台、圆孔、矩形孔、槽孔，以及整面向外拉伸或向内偏移；修改后需要重新选择，因为原三角面索引会失效。'
                 : cadFaceSelection.selectionMode === 'click'
-                  ? ' 精确解析完成后可沿真实法线生成受限圆形凸台、圆孔或槽孔；槽孔是点击位置切平面安全近似，不是任意曲面贴合轮廓。曲面矩形、整面偏移和曲面边特征仍未实现，修改后需要重新选择。'
+                  ? ' 精确解析完成后可沿真实法线生成受限圆形、矩形或槽孔特征；矩形和槽孔是在真实 UV 点击位置建立的切平面安全近似，不是任意曲面贴合或测地线轮廓。整面偏移和曲面边特征仍未实现，修改后需要重新选择。'
                   : ' 框选多面作为 AI 局部范围上下文，不执行局部布尔；下一条指令仍会附带局部截图、零件尺寸与摄像机上下文。'}
             </span>
           </div>

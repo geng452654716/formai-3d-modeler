@@ -99,6 +99,18 @@ export interface LocalCadFeaturePreview {
   errorMessage: string | null;
   /** OpenCascade 在写入模型前导出的真实布尔工具体和结构化安全诊断。 */
   preflight: LocalCadFeaturePreflightResult | null;
+  /** 风险面定位只影响视口高亮，不改变原始目标面、曲面 UV 或当前修订。 */
+  focusedInterferenceFaceId: string | null;
+}
+
+/** 曲面风险参数编辑使用的毫米制数据；不包含零件、面 ID 或执行权限。 */
+export interface LocalCadFeatureAdjustment {
+  diameterMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
+  lengthMm: number | null;
+  depthMm: number;
+  rotationDeg: number;
 }
 
 export interface LocalCadFeatureResult {
@@ -168,8 +180,83 @@ export function createLocalCadFeaturePreview(
       ? 'additive' : 'subtractive',
     status: 'checking',
     errorMessage: null,
-    preflight: null
+    preflight: null,
+    focusedInterferenceFaceId: null
   };
+}
+
+/** 从受限曲面请求生成可编辑参数，供风险面板恢复原值。 */
+export function createLocalCadFeatureAdjustment(request: LocalCadFeatureRequest): LocalCadFeatureAdjustment {
+  return {
+    diameterMm: request.radiusMm === null ? null : request.radiusMm * 2,
+    widthMm: request.widthMm,
+    heightMm: request.heightMm,
+    lengthMm: request.lengthMm,
+    depthMm: request.depthMm,
+    rotationDeg: request.rotationDeg
+  };
+}
+
+/** 校验用户调整后的风险参数，仍使用与受限 JSON 计划一致的安全范围。 */
+export function validateLocalCadFeatureAdjustment(
+  request: LocalCadFeatureRequest,
+  adjustment: LocalCadFeatureAdjustment
+) {
+  const circular = request.operation === 'add-cylinder' || request.operation === 'cut-cylinder';
+  const rectangular = request.operation === 'add-rectangle' || request.operation === 'cut-rectangle';
+  const slot = request.operation === 'cut-slot';
+  if (!circular && !rectangular && !slot) throw new Error('当前局部特征不支持风险参数调整');
+  const values = [adjustment.depthMm, adjustment.rotationDeg];
+  if (circular) values.push(adjustment.diameterMm ?? Number.NaN);
+  if (rectangular) values.push(adjustment.widthMm ?? Number.NaN, adjustment.heightMm ?? Number.NaN);
+  if (slot) values.push(adjustment.widthMm ?? Number.NaN, adjustment.lengthMm ?? Number.NaN);
+  if (!values.every(Number.isFinite)) throw new Error('参数必须是有效数字，不能留空');
+  const plan: CodexLocalCadFeaturePlan = {
+    operation: request.operation,
+    partId: request.partId,
+    stableFaceId: request.stableFaceId,
+    stableEdgeId: request.stableEdgeId,
+    radiusMm: circular ? adjustment.diameterMm! / 2 : null,
+    widthMm: rectangular || slot ? adjustment.widthMm : null,
+    heightMm: rectangular ? adjustment.heightMm : null,
+    lengthMm: slot ? adjustment.lengthMm : null,
+    depthMm: adjustment.depthMm,
+    rotationDeg: circular ? 0 : adjustment.rotationDeg,
+    reason: '用户调整曲面风险参数'
+  };
+  try {
+    validatePlanDimensions(plan);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '调整后的参数不符合安全范围';
+    throw new Error(message.replace(/^Codex 返回的/, '调整后的').replace(/^Codex /, '调整后的'));
+  }
+}
+
+function formatAdjustmentNumber(value: number) {
+  return Number(value.toFixed(3)).toString();
+}
+
+/** 生成可被现有中文解析器重新验证的指令，复用完整精确预检和自动执行安全门。 */
+export function buildAdjustedLocalCadFeatureCommand(
+  request: LocalCadFeatureRequest,
+  adjustment: LocalCadFeatureAdjustment
+) {
+  validateLocalCadFeatureAdjustment(request, adjustment);
+  const depth = formatAdjustmentNumber(adjustment.depthMm);
+  const rotation = formatAdjustmentNumber(adjustment.rotationDeg);
+  if (request.operation === 'add-cylinder') {
+    return `在这里增加直径 ${formatAdjustmentNumber(adjustment.diameterMm!)} 毫米、高 ${depth} 毫米的圆形凸台`;
+  }
+  if (request.operation === 'cut-cylinder') {
+    return `在这里开一个直径 ${formatAdjustmentNumber(adjustment.diameterMm!)} 毫米、深 ${depth} 毫米的圆孔`;
+  }
+  if (request.operation === 'add-rectangle') {
+    return `在这里增加宽 ${formatAdjustmentNumber(adjustment.widthMm!)} 毫米、高 ${formatAdjustmentNumber(adjustment.heightMm!)} 毫米、凸出 ${depth} 毫米的矩形凸台，旋转 ${rotation} 度`;
+  }
+  if (request.operation === 'cut-rectangle') {
+    return `在这里开一个宽 ${formatAdjustmentNumber(adjustment.widthMm!)} 毫米、高 ${formatAdjustmentNumber(adjustment.heightMm!)} 毫米、深 ${depth} 毫米的矩形孔，旋转 ${rotation} 度`;
+  }
+  return `在这里开一个宽 ${formatAdjustmentNumber(adjustment.widthMm!)} 毫米、长 ${formatAdjustmentNumber(adjustment.lengthMm!)} 毫米、深 ${depth} 毫米、旋转 ${rotation} 度的槽孔`;
 }
 
 export function describeLocalCadFeaturePreview(preview: LocalCadFeaturePreview) {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CadFaceSelectionContext } from './cadFaceSelection';
 import {
+  buildAdjustedLocalCadFeatureCommand,
   buildLocalCadFeatureRequest,
   buildLocalCadFeatureRequestFromPlan,
+  createLocalCadFeatureAdjustment,
   createLocalCadFeaturePreview,
   describeCadEdgeGeometryType,
   describeCadSurfaceGeometryType,
@@ -403,4 +405,62 @@ describe('稳定 CAD 面局部特征请求', () => {
     }, '错误计划')).toThrow('0.20 至 50.00 毫米');
   });
 
+});
+
+describe('曲面风险参数调整', () => {
+  const curvedSelection: CadFaceSelectionContext = {
+    ...selection,
+    faces: [{ ...selection.faces[0], geometryType: 'CYLINDER', stableId: 'face-cylinder' }],
+    hit: {
+      ...selection.hit!,
+      stableId: 'face-cylinder',
+      normal: { x: 1, y: 0, z: 0 },
+      surfaceTangentU: { x: 0, y: 1, z: 0 }
+    }
+  };
+
+  it.each([
+    '在这里开一个直径 4 毫米、深 6 毫米的圆孔',
+    '在这里增加宽 5 毫米、高 3 毫米、凸出 2 毫米的矩形凸台，旋转 10 度',
+    '在这里开一个宽 4 毫米、高 3 毫米、深 5 毫米的矩形孔，旋转 -15 度',
+    '在这里开一个宽 3 毫米、长 8 毫米、深 4 毫米、旋转 20 度的槽孔'
+  ])('把调整后的中文命令重新解析为相同尺寸：%s', (command) => {
+    const request = buildLocalCadFeatureRequest(curvedSelection, command);
+    const adjustment = createLocalCadFeatureAdjustment(request);
+    const adjustedCommand = buildAdjustedLocalCadFeatureCommand(request, adjustment);
+    const reparsed = buildLocalCadFeatureRequest(curvedSelection, adjustedCommand);
+
+    expect(reparsed).toMatchObject({
+      operation: request.operation,
+      radiusMm: request.radiusMm,
+      widthMm: request.widthMm,
+      heightMm: request.heightMm,
+      lengthMm: request.lengthMm,
+      depthMm: request.depthMm,
+      rotationDeg: request.rotationDeg
+    });
+  });
+
+  it('拒绝非有限值、越界尺寸、槽长小于宽度和越界旋转角', () => {
+    const circle = buildLocalCadFeatureRequest(curvedSelection, '在这里开一个直径 4 毫米、深 6 毫米的圆孔');
+    expect(() => buildAdjustedLocalCadFeatureCommand(circle, {
+      ...createLocalCadFeatureAdjustment(circle),
+      diameterMm: Number.NaN
+    })).toThrow('参数必须是有效数字');
+    expect(() => buildAdjustedLocalCadFeatureCommand(circle, {
+      ...createLocalCadFeatureAdjustment(circle),
+      diameterMm: -1
+    })).toThrow('半径必须在 0.50 至 100.00 毫米之间');
+
+    const slot = buildLocalCadFeatureRequest(curvedSelection, '在这里开一个宽 3 毫米、长 8 毫米、深 4 毫米的槽孔');
+    expect(() => buildAdjustedLocalCadFeatureCommand(slot, {
+      ...createLocalCadFeatureAdjustment(slot),
+      widthMm: 9,
+      lengthMm: 8
+    })).toThrow('不能小于槽孔宽度');
+    expect(() => buildAdjustedLocalCadFeatureCommand(slot, {
+      ...createLocalCadFeatureAdjustment(slot),
+      rotationDeg: 181
+    })).toThrow('-180.00 至 180.00 度');
+  });
 });

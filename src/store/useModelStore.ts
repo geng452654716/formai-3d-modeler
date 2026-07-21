@@ -158,6 +158,7 @@ interface ModelStore {
   requestCadFaceBoxSelection: (request: CadFaceBoxSelectionRequest) => void;
   clearCadFaceSelection: () => void;
   clearLocalCadFeaturePreview: () => void;
+  focusLocalCadFeatureInterferenceFace: (stableFaceId: string) => void;
   openVersionGeometryComparison: (
     versionId: string,
     mode: Exclude<VersionGeometryComparisonMode, 'off'>
@@ -797,6 +798,16 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     cadFaceBoxRequest: null
   }),
   clearLocalCadFeaturePreview: () => set({ localCadFeaturePreview: null }),
+  focusLocalCadFeatureInterferenceFace: (stableFaceId) => set((state) => {
+    const preview = state.localCadFeaturePreview;
+    if (
+      preview?.status !== 'blocked'
+      || !preview.preflight?.validation.interferingStableFaceIds.includes(stableFaceId)
+    ) return state;
+    return {
+      localCadFeaturePreview: { ...preview, focusedInterferenceFaceId: stableFaceId }
+    };
+  }),
   openVersionGeometryComparison: async (versionId, mode) => {
     const state = get();
     const baseVersion = state.versions.find((version) => version.id === versionId);
@@ -1076,7 +1087,13 @@ export const useModelStore = create<ModelStore>((set, get) => ({
               aiActivity: null,
               aiError: preflight.message,
               localCadFeaturePreview: state.localCadFeaturePreview?.request === request
-                ? { ...state.localCadFeaturePreview, status: 'blocked', errorMessage: preflight.message, preflight }
+                ? {
+                    ...state.localCadFeaturePreview,
+                    status: 'blocked',
+                    errorMessage: preflight.message,
+                    preflight,
+                    focusedInterferenceFaceId: preflight.validation.interferingStableFaceIds[0] ?? null
+                  }
                 : state.localCadFeaturePreview,
               messages: state.messages.concat({
                 id: crypto.randomUUID(),
