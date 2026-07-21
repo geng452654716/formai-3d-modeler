@@ -45,6 +45,7 @@ import {
 } from '../model/localCadFeature';
 import type { VersionGeometryComparisonMode } from '../model/versionGeometryComparison';
 import type { VersionGeometryDifferenceResult } from '../model/versionGeometryDifference';
+import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
 import type {
   ManufacturingSplitRequest,
   ManufacturingSplitResult
@@ -359,7 +360,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       label,
       createdAt: new Date().toISOString(),
       parameters: { ...state.parameters },
-      interfaceOpenings: state.interfaceOpenings?.map((opening) => ({ ...opening })) ?? state.interfaceOpenings
+      interfaceOpenings: state.interfaceOpenings?.map((opening) => ({ ...opening })) ?? state.interfaceOpenings,
+      curvedFeatures: captureVersionCurvedFeatures(state.cadResult)
     };
     const versions = state.versions.slice(0, state.versionIndex + 1).concat(nextVersion);
     set({ versions, versionIndex: versions.length - 1 });

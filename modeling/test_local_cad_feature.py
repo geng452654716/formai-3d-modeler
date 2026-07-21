@@ -201,9 +201,21 @@ class LocalCadFeatureTests(unittest.TestCase):
             feature = result["updatedCadResult"]["localFeatures"][0]
             self.assertEqual(feature["surfaceGeometryType"], "CYLINDER")
             self.assertEqual(feature["surfaceUv"], surface_uv)
+            diagnostics = feature["curvedDiagnostics"]
+            self.assertAlmostEqual(diagnostics["curvatureRatio"], 0.2, places=6)
+            self.assertAlmostEqual(diagnostics["localWallThicknessMm"], 20.0, places=4)
+            self.assertAlmostEqual(diagnostics["remainingWallMm"], 16.0, places=4)
+            self.assertFalse(diagnostics["throughCut"])
+            self.assertTrue(diagnostics["interferenceCheckPassed"])
+            self.assertEqual(diagnostics["interferingStableFaceIds"], [])
             persisted = json.loads((root / "local-cad-feature-result.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["revision"], result["revision"])
             self.assertEqual(persisted["validation"]["surfaceUv"], surface_uv)
+            generation_result = json.loads((root / "generation-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                generation_result["localFeatures"][0]["curvedDiagnostics"],
+                diagnostics,
+            )
             for name in (
                 "curved-part.stl",
                 "curved-part.step",

@@ -840,3 +840,23 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 @media (max-width: 1180px) {
   .viewport-toolbar .cad-face-tool-button { min-width: 30px; width: 30px; padding: 0; font-size: 0; }
 }
+
+.curved-feature-difference-list { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.curved-feature-difference-card { padding: 9px 10px; border: 1px solid #35383e; border-left-width: 2px; border-radius: 6px; background: #1d1f23; }
+.curved-feature-difference-card.is-added { border-left-color: #55aa7c; }
+.curved-feature-difference-card.is-removed { border-left-color: #c66b6b; }
+.curved-feature-difference-card.is-modified { border-left-color: #d5962c; }
+.curved-feature-difference-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.curved-feature-difference-title > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.curved-feature-difference-title strong { color: #d1d3d0; font-size: 9px; }
+.curved-feature-difference-title span { overflow-wrap: anywhere; color: #6e737b; font-size: 7px; }
+.curved-feature-difference-title > b { padding: 3px 6px; border-radius: 999px; background: #292c31; color: #9ea3aa; font-size: 7px; white-space: nowrap; }
+.curved-feature-difference-card.is-added .curved-feature-difference-title > b { color: #76c899; background: rgba(49, 139, 91, .15); }
+.curved-feature-difference-card.is-removed .curved-feature-difference-title > b { color: #dd8b8b; background: rgba(143, 56, 56, .16); }
+.curved-feature-difference-card.is-modified .curved-feature-difference-title > b { color: #e4ad53; background: rgba(149, 95, 15, .18); }
+.curved-feature-difference-card > p { margin: 8px 0 0; color: #8b9097; font-size: 8px; }
+.curved-feature-difference-card dl { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; padding-top: 8px; border-top: 1px solid #303238; }
+.curved-feature-difference-card dl div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; }
+.curved-feature-difference-card dt { color: #747981; font-size: 8px; }
+.curved-feature-difference-card dd { margin: 0; display: flex; align-items: center; gap: 5px; color: #aeb2b8; font-size: 8px; }
+.curved-feature-difference-card dd svg { flex: none; color: #956a22; }

@@ -266,6 +266,22 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
             "rotationDeg": 0.0,
             "targetFace": self.descriptor,
             "command": "增加圆形凸台",
+            "curvedDiagnostics": {
+                "maximumAbsCurvaturePerMm": 999.0,
+                "minimumCurvatureRadiusMm": 0.001,
+                "curvatureRatio": 999.0,
+                "localWallThicknessMm": 0.001,
+                "remainingWallMm": 999.0,
+                "throughCut": True,
+                "interferenceCheckPassed": False,
+                "selfIntersectionDetected": True,
+                "adjacentFaceInterferenceDetected": True,
+                "interferingFaceCount": 1,
+                "interferingStableFaceIds": ["旧错误面"],
+                "minimumInterferenceDistanceMm": 0.001,
+                "contactFaceCount": 999,
+                "contactSampleCount": 999,
+            },
         }
 
         models, replayed = _replay_local_features(
@@ -280,6 +296,55 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
         self.assertEqual(replayed[0]["replayedRevision"], "curved-replay-revision")
         self.assertEqual(replayed[0]["surfaceGeometryType"], "CYLINDER")
         self.assertEqual(replayed[0]["surfaceUv"], feature["surfaceUv"])
+        diagnostics = replayed[0]["curvedDiagnostics"]
+        self.assertAlmostEqual(diagnostics["maximumAbsCurvaturePerMm"], 0.1, places=6)
+        self.assertAlmostEqual(diagnostics["minimumCurvatureRadiusMm"], 10.0, places=6)
+        self.assertAlmostEqual(diagnostics["curvatureRatio"], 0.2, places=6)
+        self.assertAlmostEqual(diagnostics["localWallThicknessMm"], 20.0, places=4)
+        self.assertIsNone(diagnostics["remainingWallMm"])
+        self.assertFalse(diagnostics["throughCut"])
+        self.assertTrue(diagnostics["interferenceCheckPassed"])
+        self.assertFalse(diagnostics["selfIntersectionDetected"])
+        self.assertFalse(diagnostics["adjacentFaceInterferenceDetected"])
+        self.assertEqual(diagnostics["interferingStableFaceIds"], [])
+        self.assertGreaterEqual(diagnostics["contactFaceCount"], 1)
+        self.assertGreater(diagnostics["contactSampleCount"], 0)
+
+    def test_legacy_curved_feature_without_diagnostics_is_backfilled_on_replay(self) -> None:
+        point = self.hit["projectedPointMm"]
+        normal = self.hit["outwardNormal"]
+        surface_uv = self.hit["surfaceUv"]
+        feature = {
+            "operation": "cut-cylinder",
+            "partId": "generic-part",
+            "stableFaceId": self.descriptor["stableId"],
+            "centerMm": {"x": point["x"], "y": point["y"], "z": point["z"]},
+            "outwardNormal": {"x": normal["x"], "y": normal["y"], "z": normal["z"]},
+            "surfaceGeometryType": "CYLINDER",
+            "surfaceUv": {"u": surface_uv["u"], "v": surface_uv["v"]},
+            "radiusMm": 2.0,
+            "widthMm": None,
+            "heightMm": None,
+            "lengthMm": None,
+            "depthMm": 4.0,
+            "rotationDeg": 0.0,
+            "targetFace": self.descriptor,
+            "command": "旧版本曲面圆孔",
+        }
+
+        _, replayed = _replay_local_features(
+            {"generic-part": self.model},
+            {"generic-part": self.faces},
+            [feature],
+            "legacy-curved-replay-revision",
+        )
+
+        diagnostics = replayed[0]["curvedDiagnostics"]
+        self.assertAlmostEqual(diagnostics["curvatureRatio"], 0.2, places=6)
+        self.assertAlmostEqual(diagnostics["localWallThicknessMm"], 20.0, places=4)
+        self.assertAlmostEqual(diagnostics["remainingWallMm"], 16.0, places=4)
+        self.assertFalse(diagnostics["throughCut"])
+        self.assertTrue(diagnostics["interferenceCheckPassed"])
 
     def test_curved_feature_replay_without_uv_is_rejected_before_model_change(self) -> None:
         point = self.hit["projectedPointMm"]

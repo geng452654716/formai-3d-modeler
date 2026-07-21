@@ -297,6 +297,7 @@ const updatedCurvedCadResult = {
   revision: 'curved-feature-after',
   localFeatures: [{
     revision: 'curved-feature-after',
+    createdRevision: 'curved-feature-created',
     operation: 'cut-cylinder',
     partId: 'custom-part',
     stableFaceId: 'face-curved',
@@ -307,7 +308,23 @@ const updatedCurvedCadResult = {
     radiusMm: 2,
     depthMm: 4,
     command: '在这里开一个直径 4 毫米、深 4 毫米的圆孔',
-    stableFaceStatus: 'inherited'
+    stableFaceStatus: 'inherited',
+    curvedDiagnostics: {
+      maximumAbsCurvaturePerMm: 0.1,
+      minimumCurvatureRadiusMm: 10,
+      curvatureRatio: 0.2,
+      localWallThicknessMm: 20,
+      remainingWallMm: 16,
+      throughCut: false,
+      interferenceCheckPassed: true,
+      selfIntersectionDetected: false,
+      adjacentFaceInterferenceDetected: false,
+      interferingFaceCount: 0,
+      interferingStableFaceIds: [] as string[],
+      minimumInterferenceDistanceMm: null,
+      contactFaceCount: 1,
+      contactSampleCount: 7
+    }
   }]
 } satisfies CadGenerationResult;
 
@@ -493,6 +510,30 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.messages.at(-1)?.content).toContain('曲面干涉检查通过');
     expect(state.messages.at(-1)?.content).toContain('检查 1 个接触面和 7 个接触采样');
     expect(state.messages.at(-1)?.content).toContain('未发现目标曲面自交或非目标面干涉');
+    const savedFeature = state.versions.at(-1)?.curvedFeatures?.[0];
+    expect(savedFeature).toMatchObject({
+      id: 'curved-feature-created:custom-part:cut-cylinder',
+      operation: 'cut-cylinder',
+      partId: 'custom-part',
+      stableFaceId: 'face-curved',
+      radiusMm: 2,
+      depthMm: 4,
+      diagnostics: {
+        curvatureRatio: 0.2,
+        localWallThicknessMm: 20,
+        remainingWallMm: 16,
+        interferenceCheckPassed: true,
+        interferingStableFaceIds: []
+      }
+    });
+
+    const fixtureIds = updatedCurvedCadResult.localFeatures[0].curvedDiagnostics.interferingStableFaceIds;
+    fixtureIds.push('后续修改');
+    try {
+      expect(savedFeature?.diagnostics.interferingStableFaceIds).toEqual([]);
+    } finally {
+      fixtureIds.pop();
+    }
   });
 
   it('曲面 Worker 失败时保留原模型、真实 UV 选择和中文错误', async () => {

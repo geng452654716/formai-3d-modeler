@@ -49,12 +49,44 @@ export interface EnclosureParameters {
   boardOffsetZ: number;
 }
 
+export interface CurvedFeatureDiagnostics {
+  maximumAbsCurvaturePerMm: number | null;
+  minimumCurvatureRadiusMm: number | null;
+  curvatureRatio: number | null;
+  localWallThicknessMm: number | null;
+  remainingWallMm: number | null;
+  throughCut: boolean;
+  interferenceCheckPassed: boolean | null;
+  selfIntersectionDetected: boolean | null;
+  adjacentFaceInterferenceDetected: boolean | null;
+  interferingFaceCount: number;
+  interferingStableFaceIds: string[];
+  minimumInterferenceDistanceMm: number | null;
+  contactFaceCount: number;
+  contactSampleCount: number;
+}
+
+export interface VersionCurvedFeature {
+  /** 创建修订与零件、操作共同组成的跨参数化重放稳定标识。 */
+  id: string;
+  operation: 'add-cylinder' | 'cut-cylinder';
+  partId: string;
+  stableFaceId: string;
+  surfaceGeometryType: string;
+  radiusMm: number;
+  depthMm: number;
+  command: string;
+  diagnostics: CurvedFeatureDiagnostics;
+}
+
 export interface ModelVersion {
   id: string;
   label: string;
   createdAt: string;
   parameters: EnclosureParameters;
   interfaceOpenings?: InterfaceOpeningSpec[] | null;
+  /** 该版本中非平面圆形局部特征的曲率、壁厚与干涉诊断快照。 */
+  curvedFeatures?: VersionCurvedFeature[];
   /** Desktop snapshot directory containing the exact generated artifacts for this version. */
   snapshotDirectory?: string;
 }

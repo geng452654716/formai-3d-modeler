@@ -1,6 +1,7 @@
 import { ArrowRight, CheckCircle2, HardDrive, History, RotateCcw, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { compareModelVersions } from '../model/versionComparison';
+import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
 import type { ModelVersion } from '../model/types';
 import { useModelStore } from '../store/useModelStore';
 
@@ -12,6 +13,12 @@ const changeTypeLabels = {
   added: '新增开孔',
   removed: '删除开孔',
   modified: '修改开孔'
+} as const;
+
+const curvedFeatureChangeTypeLabels = {
+  added: '新增特征',
+  removed: '删除特征',
+  modified: '诊断已变化'
 } as const;
 
 function formatDate(value: string) {
@@ -67,8 +74,9 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
   const liveCurrentVersion = useMemo<ModelVersion>(() => ({
     ...currentVersion,
     parameters: { ...parameters },
-    interfaceOpenings: interfaceOpenings?.map((opening) => ({ ...opening })) ?? interfaceOpenings
-  }), [currentVersion, interfaceOpenings, parameters]);
+    interfaceOpenings: interfaceOpenings?.map((opening) => ({ ...opening })) ?? interfaceOpenings,
+    curvedFeatures: captureVersionCurvedFeatures(cadResult)
+  }), [cadResult, currentVersion, interfaceOpenings, parameters]);
   const comparison = useMemo(
     () => compareModelVersions(baseVersion, liveCurrentVersion),
     [baseVersion, liveCurrentVersion]
@@ -236,7 +244,7 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
                 <CheckCircle2 size={18} />
                 <div>
                   <strong>没有检测到差异</strong>
-                  <span>所选基准与当前模型的参数和通用开孔记录一致。</span>
+                  <span>所选基准与当前模型的参数、通用开孔和曲面局部特征记录一致。</span>
                 </div>
               </div>
             ) : (
@@ -319,6 +327,46 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
                   ) : !comparison.openingModeDifference ? (
                     <p className="version-section-empty">通用开孔记录没有变化。</p>
                   ) : null}
+                </section>
+
+                <section className="version-difference-section">
+                  <div className="version-section-heading">
+                    <div>
+                      <strong>曲面局部特征变化</strong>
+                      <span>{comparison.curvedFeatureDifferences.length} 个特征记录</span>
+                    </div>
+                  </div>
+                  {comparison.curvedFeatureDifferences.length > 0 ? (
+                    <div className="curved-feature-difference-list">
+                      {comparison.curvedFeatureDifferences.map((difference) => (
+                        <article
+                          className={`curved-feature-difference-card is-${difference.changeType}`}
+                          key={`${difference.changeType}-${difference.id}`}
+                        >
+                          <div className="curved-feature-difference-title">
+                            <div>
+                              <strong>{difference.label}</strong>
+                              <span>零件：{difference.partId} · 稳定面：{difference.stableFaceId}</span>
+                            </div>
+                            <b>{curvedFeatureChangeTypeLabels[difference.changeType]}</b>
+                          </div>
+                          {difference.changeType === 'modified' && (
+                            <p>变化字段：{difference.changedFields.join('、')}</p>
+                          )}
+                          <dl>
+                            {difference.fields.map((field) => (
+                              <div key={field.field}>
+                                <dt>{field.label}</dt>
+                                <dd>{field.before} <ArrowRight size={11} /> {field.after}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="version-section-empty">曲面局部特征记录没有变化。</p>
+                  )}
                 </section>
               </div>
             )}

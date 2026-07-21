@@ -19,6 +19,7 @@ from xml.etree import ElementTree as ET
 import cadquery as cq
 from cadquery import exporters, importers
 
+from curved_feature_diagnostics import build_curved_feature_diagnostics
 from face_geometry_signatures import MATCH_METHOD, MATCH_WARNING, match_shape_faces_with_sources
 from face_tessellation_mapping import build_face_tessellation
 from local_cad_feature_core import (
@@ -419,6 +420,13 @@ def edit_cad_feature(
             "stableFaceStatus": target_face_status,
             "stableEdgeStatus": target_edge_status,
         }
+        curved_diagnostics = build_curved_feature_diagnostics(
+            operation,
+            requested_geometry_type,
+            validation,
+        )
+        if curved_diagnostics is not None:
+            feature_record["curvedDiagnostics"] = curved_diagnostics
         previous_features = manifest.get("localFeatures")
         manifest["localFeatures"] = [
             *(previous_features if isinstance(previous_features, list) else []),

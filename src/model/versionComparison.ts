@@ -5,10 +5,26 @@ import {
 import type {
   EnclosureParameters,
   InterfaceOpeningSpec,
-  ModelVersion
+  ModelVersion,
+  VersionCurvedFeature
 } from './types';
 
 const NUMBER_TOLERANCE = 1e-6;
+
+const SURFACE_GEOMETRY_TYPE_LABELS: Record<string, string> = {
+  PLANE: '平面',
+  CYLINDER: '圆柱面',
+  CONE: '圆锥面',
+  SPHERE: '球面',
+  TORUS: '环形面',
+  BSPLINE: 'B 样条曲面',
+  BEZIER: '贝塞尔曲面',
+  REVOLUTION: '旋转曲面',
+  EXTRUSION: '拉伸曲面',
+  OFFSET: '偏移曲面',
+  OTHER: '其他曲面',
+  UNKNOWN: '未知曲面'
+};
 
 export interface ParameterDifference {
   key: keyof EnclosureParameters;
@@ -39,10 +55,48 @@ export interface OpeningModeDifference {
   after: string;
 }
 
+export type CurvedFeatureField =
+  | 'radiusMm'
+  | 'diameterMm'
+  | 'depthMm'
+  | 'surfaceGeometryType'
+  | 'maximumAbsCurvaturePerMm'
+  | 'minimumCurvatureRadiusMm'
+  | 'curvatureRatio'
+  | 'localWallThicknessMm'
+  | 'remainingWallMm'
+  | 'throughCut'
+  | 'interferenceCheckPassed'
+  | 'selfIntersectionDetected'
+  | 'adjacentFaceInterferenceDetected'
+  | 'interferingFaceCount'
+  | 'interferingStableFaceIds'
+  | 'minimumInterferenceDistanceMm'
+  | 'contactFaceCount'
+  | 'contactSampleCount';
+
+export interface CurvedFeatureFieldDifference {
+  field: CurvedFeatureField;
+  label: string;
+  before: string;
+  after: string;
+}
+
+export interface CurvedFeatureDifference {
+  id: string;
+  label: string;
+  partId: string;
+  stableFaceId: string;
+  changeType: 'added' | 'removed' | 'modified';
+  changedFields: string[];
+  fields: CurvedFeatureFieldDifference[];
+}
+
 export interface ModelVersionComparison {
   parameterDifferences: ParameterDifference[];
   openingModeDifference: OpeningModeDifference | null;
   openingDifferences: OpeningDifference[];
+  curvedFeatureDifferences: CurvedFeatureDifference[];
   hasDifferences: boolean;
 }
 
@@ -86,6 +140,43 @@ const OPENING_FIELDS: ReadonlyArray<{
   { key: 'horizontalOffsetMm', label: '水平锚点偏移' },
   { key: 'bottomOffsetMm', label: '底边锚点偏移' }
 ];
+
+
+
+const CURVED_FEATURE_FIELDS: ReadonlyArray<{
+  key: CurvedFeatureField;
+  label: string;
+  value: (feature: VersionCurvedFeature) => unknown;
+}> = [
+  { key: 'radiusMm', label: '工具半径', value: (feature) => feature.radiusMm },
+  { key: 'diameterMm', label: '工具直径', value: (feature) => feature.radiusMm * 2 },
+  { key: 'depthMm', label: '作用深度', value: (feature) => feature.depthMm },
+  { key: 'surfaceGeometryType', label: '曲面类型', value: (feature) => feature.surfaceGeometryType },
+  { key: 'maximumAbsCurvaturePerMm', label: '最大绝对曲率', value: (feature) => feature.diagnostics.maximumAbsCurvaturePerMm },
+  { key: 'minimumCurvatureRadiusMm', label: '最小曲率半径', value: (feature) => feature.diagnostics.minimumCurvatureRadiusMm },
+  { key: 'curvatureRatio', label: '曲率比', value: (feature) => feature.diagnostics.curvatureRatio },
+  { key: 'localWallThicknessMm', label: '局部壁厚', value: (feature) => feature.diagnostics.localWallThicknessMm },
+  { key: 'remainingWallMm', label: '剩余壁厚', value: (feature) => feature.diagnostics.remainingWallMm },
+  { key: 'throughCut', label: '通孔状态', value: (feature) => feature.diagnostics.throughCut },
+  { key: 'interferenceCheckPassed', label: '干涉检查', value: (feature) => feature.diagnostics.interferenceCheckPassed },
+  { key: 'selfIntersectionDetected', label: '目标曲面自交', value: (feature) => feature.diagnostics.selfIntersectionDetected },
+  { key: 'adjacentFaceInterferenceDetected', label: '相邻面干涉', value: (feature) => feature.diagnostics.adjacentFaceInterferenceDetected },
+  { key: 'interferingFaceCount', label: '干涉稳定面数量', value: (feature) => feature.diagnostics.interferingFaceCount },
+  { key: 'interferingStableFaceIds', label: '干涉稳定面编号', value: (feature) => feature.diagnostics.interferingStableFaceIds },
+  { key: 'minimumInterferenceDistanceMm', label: '最近干涉距离', value: (feature) => feature.diagnostics.minimumInterferenceDistanceMm },
+  { key: 'contactFaceCount', label: '接触面数量', value: (feature) => feature.diagnostics.contactFaceCount },
+  { key: 'contactSampleCount', label: '接触采样数量', value: (feature) => feature.diagnostics.contactSampleCount }
+];
+
+const CURVED_FEATURE_SUMMARY_FIELDS = CURVED_FEATURE_FIELDS.filter(({ key }) => (
+  key === 'diameterMm'
+  || key === 'depthMm'
+  || key === 'curvatureRatio'
+  || key === 'localWallThicknessMm'
+  || key === 'remainingWallMm'
+  || key === 'throughCut'
+  || key === 'interferenceCheckPassed'
+));
 
 const OPENING_SUMMARY_FIELDS = OPENING_FIELDS.filter(({ key }) => (
   key === 'face'
@@ -215,6 +306,123 @@ function compareOpenings(
   return differences;
 }
 
+
+function curvedFeatureValueEqual(left: unknown, right: unknown) {
+  if (typeof left === 'number' && typeof right === 'number') return numbersEqual(left, right);
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+  return left === right;
+}
+
+function formatCurvedFeatureValue(field: CurvedFeatureField, value: unknown) {
+  if (value === null || value === undefined) return '未记录';
+  if (field === 'throughCut') return value ? '通孔' : '盲孔';
+  if (field === 'interferenceCheckPassed') return value ? '通过' : '未通过';
+  if (field === 'selfIntersectionDetected' || field === 'adjacentFaceInterferenceDetected') {
+    return value ? '已检测到' : '未检测到';
+  }
+  if (field === 'surfaceGeometryType' && typeof value === 'string') {
+    return SURFACE_GEOMETRY_TYPE_LABELS[value] ?? '未知曲面';
+  }
+  if (field === 'interferingStableFaceIds') {
+    return Array.isArray(value) && value.length > 0 ? value.join('、') : '无';
+  }
+  if (typeof value === 'number') {
+    if (field === 'curvatureRatio') return formatNumber(value);
+    if (field === 'maximumAbsCurvaturePerMm') return `${formatNumber(value)} /毫米`;
+    if (field === 'interferingFaceCount' || field === 'contactFaceCount' || field === 'contactSampleCount') {
+      return `${formatNumber(value)} 个`;
+    }
+    return `${formatNumber(value)} 毫米`;
+  }
+  return String(value);
+}
+
+function curvedFeatureLabel(feature: VersionCurvedFeature) {
+  return feature.operation === 'add-cylinder' ? '曲面圆形凸台' : '曲面圆孔';
+}
+
+function compareCurvedFeatureFields(
+  before: VersionCurvedFeature,
+  after: VersionCurvedFeature
+): CurvedFeatureFieldDifference[] {
+  return CURVED_FEATURE_FIELDS.flatMap(({ key, label, value }) => {
+    const beforeValue = value(before);
+    const afterValue = value(after);
+    if (curvedFeatureValueEqual(beforeValue, afterValue)) return [];
+    return [{
+      field: key,
+      label,
+      before: formatCurvedFeatureValue(key, beforeValue),
+      after: formatCurvedFeatureValue(key, afterValue)
+    }];
+  });
+}
+
+function describeAddedOrRemovedCurvedFeature(
+  feature: VersionCurvedFeature,
+  changeType: 'added' | 'removed'
+): CurvedFeatureFieldDifference[] {
+  return CURVED_FEATURE_SUMMARY_FIELDS.map(({ key, label, value }) => ({
+    field: key,
+    label,
+    before: changeType === 'added' ? '不存在' : formatCurvedFeatureValue(key, value(feature)),
+    after: changeType === 'added' ? formatCurvedFeatureValue(key, value(feature)) : '不存在'
+  }));
+}
+
+function compareCurvedFeatures(
+  beforeFeatures: VersionCurvedFeature[] = [],
+  afterFeatures: VersionCurvedFeature[] = []
+) {
+  const beforeById = new Map(beforeFeatures.map((feature) => [feature.id, feature]));
+  const afterById = new Map(afterFeatures.map((feature) => [feature.id, feature]));
+  const differences: CurvedFeatureDifference[] = [];
+
+  for (const feature of beforeFeatures) {
+    if (afterById.has(feature.id)) continue;
+    differences.push({
+      id: feature.id,
+      label: curvedFeatureLabel(feature),
+      partId: feature.partId,
+      stableFaceId: feature.stableFaceId,
+      changeType: 'removed',
+      changedFields: [],
+      fields: describeAddedOrRemovedCurvedFeature(feature, 'removed')
+    });
+  }
+
+  for (const feature of afterFeatures) {
+    const previous = beforeById.get(feature.id);
+    if (!previous) {
+      differences.push({
+        id: feature.id,
+        label: curvedFeatureLabel(feature),
+        partId: feature.partId,
+        stableFaceId: feature.stableFaceId,
+        changeType: 'added',
+        changedFields: [],
+        fields: describeAddedOrRemovedCurvedFeature(feature, 'added')
+      });
+      continue;
+    }
+    const fields = compareCurvedFeatureFields(previous, feature);
+    if (fields.length === 0) continue;
+    differences.push({
+      id: feature.id,
+      label: curvedFeatureLabel(feature),
+      partId: feature.partId,
+      stableFaceId: feature.stableFaceId,
+      changeType: 'modified',
+      changedFields: fields.map((field) => field.label),
+      fields
+    });
+  }
+
+  return differences;
+}
+
 export function compareModelVersions(
   baseVersion: ModelVersion,
   targetVersion: ModelVersion
@@ -240,14 +448,20 @@ export function compareModelVersions(
     ? null
     : { before: beforeMode, after: afterMode };
   const openingDifferences = compareOpenings(beforeOpenings, afterOpenings);
+  const curvedFeatureDifferences = compareCurvedFeatures(
+    baseVersion.curvedFeatures,
+    targetVersion.curvedFeatures
+  );
 
   return {
     parameterDifferences,
     openingModeDifference,
     openingDifferences,
+    curvedFeatureDifferences,
     hasDifferences:
       parameterDifferences.length > 0
       || openingModeDifference !== null
       || openingDifferences.length > 0
+      || curvedFeatureDifferences.length > 0
   };
 }

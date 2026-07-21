@@ -5,7 +5,11 @@ import {
   readGeneratedFileUrl,
   readVersionSnapshotFileUrl
 } from '../platform/backend';
-import type { EnclosureParameters, InterfaceOpeningSpec } from './types';
+import type {
+  CurvedFeatureDiagnostics,
+  EnclosureParameters,
+  InterfaceOpeningSpec
+} from './types';
 
 export interface CadBounds {
   x: number;
@@ -145,6 +149,7 @@ export interface CadLocalFeatureRecord {
   replayStatus?: 'recorded' | 'replayed';
   replayedRevision?: string | null;
   failureReason?: string | null;
+  curvedDiagnostics?: CurvedFeatureDiagnostics;
 }
 
 export interface CadGenerationResult {

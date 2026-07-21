@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMETERS } from './defaults';
 import { compareModelVersions } from './versionComparison';
-import type { InterfaceOpeningSpec, ModelVersion } from './types';
+import type { InterfaceOpeningSpec, ModelVersion, VersionCurvedFeature } from './types';
 
 function opening(overrides: Partial<InterfaceOpeningSpec> = {}): InterfaceOpeningSpec {
   return {
@@ -39,6 +39,38 @@ function version(
   };
 }
 
+function curvedFeature(
+  overrides: Partial<VersionCurvedFeature> = {}
+): VersionCurvedFeature {
+  return {
+    id: '创建修订-1:主体:add-cylinder',
+    operation: 'add-cylinder',
+    partId: '主体',
+    stableFaceId: '稳定面-1',
+    surfaceGeometryType: 'CYLINDER',
+    radiusMm: 2,
+    depthMm: 3,
+    command: '增加曲面圆形凸台',
+    diagnostics: {
+      maximumAbsCurvaturePerMm: 0.1,
+      minimumCurvatureRadiusMm: 10,
+      curvatureRatio: 0.2,
+      localWallThicknessMm: 20,
+      remainingWallMm: 17,
+      throughCut: false,
+      interferenceCheckPassed: true,
+      selfIntersectionDetected: false,
+      adjacentFaceInterferenceDetected: false,
+      interferingFaceCount: 0,
+      interferingStableFaceIds: [],
+      minimumInterferenceDistanceMm: null,
+      contactFaceCount: 1,
+      contactSampleCount: 7
+    },
+    ...overrides
+  };
+}
+
 describe('模型版本参数与开孔差异对比', () => {
   it('相同版本不产生差异', () => {
     const base = version('基础', { interfaceOpenings: [opening()] });
@@ -48,8 +80,109 @@ describe('模型版本参数与开孔差异对比', () => {
       parameterDifferences: [],
       openingModeDifference: null,
       openingDifferences: [],
+      curvedFeatureDifferences: [],
       hasDifferences: false
     });
+  });
+
+  it('相同曲面局部特征诊断不产生差异', () => {
+    const feature = curvedFeature();
+    const result = compareModelVersions(
+      version('基础', { curvedFeatures: [feature] }),
+      version('当前', { curvedFeatures: [structuredClone(feature)] })
+    );
+
+    expect(result.curvedFeatureDifferences).toEqual([]);
+    expect(result.hasDifferences).toBe(false);
+  });
+
+  it('识别曲面局部特征新增和删除', () => {
+    const removed = curvedFeature({ id: '删除特征', operation: 'cut-cylinder' });
+    const added = curvedFeature({ id: '新增特征', stableFaceId: '稳定面-2' });
+    const result = compareModelVersions(
+      version('基础', { curvedFeatures: [removed] }),
+      version('当前', { curvedFeatures: [added] })
+    );
+
+    expect(result.curvedFeatureDifferences).toMatchObject([
+      { id: '删除特征', label: '曲面圆孔', changeType: 'removed' },
+      { id: '新增特征', label: '曲面圆形凸台', changeType: 'added' }
+    ]);
+    expect(result.hasDifferences).toBe(true);
+  });
+
+  it('比较工具尺寸、曲率、壁厚、通孔与干涉诊断', () => {
+    const before = curvedFeature();
+    const after = curvedFeature({
+      radiusMm: 2.5,
+      depthMm: 20,
+      surfaceGeometryType: 'SPHERE',
+      diagnostics: {
+        ...before.diagnostics,
+        curvatureRatio: 0.25,
+        localWallThicknessMm: 18,
+        remainingWallMm: null,
+        throughCut: true,
+        interferenceCheckPassed: false,
+        adjacentFaceInterferenceDetected: true,
+        interferingFaceCount: 1,
+        interferingStableFaceIds: ['稳定面-阻挡'],
+        minimumInterferenceDistanceMm: 1.25,
+        contactFaceCount: 2,
+        contactSampleCount: 10
+      }
+    });
+    const [difference] = compareModelVersions(
+      version('基础', { curvedFeatures: [before] }),
+      version('当前', { curvedFeatures: [after] })
+    ).curvedFeatureDifferences;
+
+    expect(difference.changeType).toBe('modified');
+    expect(difference.changedFields).toEqual(expect.arrayContaining([
+      '工具半径',
+      '工具直径',
+      '作用深度',
+      '曲面类型',
+      '曲率比',
+      '局部壁厚',
+      '剩余壁厚',
+      '通孔状态',
+      '干涉检查',
+      '相邻面干涉',
+      '干涉稳定面编号',
+      '最近干涉距离',
+      '接触面数量',
+      '接触采样数量'
+    ]));
+    expect(difference.fields).toContainEqual({
+      field: 'surfaceGeometryType',
+      label: '曲面类型',
+      before: '圆柱面',
+      after: '球面'
+    });
+    expect(difference.fields).toContainEqual({
+      field: 'throughCut',
+      label: '通孔状态',
+      before: '盲孔',
+      after: '通孔'
+    });
+    expect(difference.fields).toContainEqual({
+      field: 'interferingStableFaceIds',
+      label: '干涉稳定面编号',
+      before: '无',
+      after: '稳定面-阻挡'
+    });
+  });
+
+  it('兼容旧版本缺少曲面局部特征快照', () => {
+    const result = compareModelVersions(
+      version('旧版本'),
+      version('当前', { curvedFeatures: [curvedFeature()] })
+    );
+
+    expect(result.curvedFeatureDifferences).toHaveLength(1);
+    expect(result.curvedFeatureDifferences[0].changeType).toBe('added');
+    expect(result.hasDifferences).toBe(true);
   });
 
   it('输出参数增加和减少量及中文参数名', () => {

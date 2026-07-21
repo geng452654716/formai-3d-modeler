@@ -15,6 +15,7 @@ from xml.etree import ElementTree as ET
 import cadquery as cq
 from cadquery import exporters
 
+from curved_feature_diagnostics import build_curved_feature_diagnostics
 from face_geometry_signatures import (
     MATCH_METHOD,
     MATCH_WARNING,
@@ -668,7 +669,7 @@ def _replay_local_features(
                 )
             models[part_id] = application["model"]
             current_faces[part_id] = application["faces"]
-            replayed.append({
+            replayed_record = {
                 **record,
                 "stableFaceStatus": application["stableFaceStatus"],
                 "stableEdgeStatus": application.get("stableEdgeStatus"),
@@ -677,7 +678,17 @@ def _replay_local_features(
                 "replayStatus": "replayed",
                 "replayedRevision": replay_revision,
                 "failureReason": None,
-            })
+            }
+            curved_diagnostics = build_curved_feature_diagnostics(
+                operation,
+                surface_geometry_type,
+                application["validation"],
+            )
+            if curved_diagnostics is not None:
+                replayed_record["curvedDiagnostics"] = curved_diagnostics
+            else:
+                replayed_record.pop("curvedDiagnostics", None)
+            replayed.append(replayed_record)
         except (TypeError, ValueError) as error:
             command = str(record.get("command") or "").strip()
             command_text = f"（{command[:80]}）" if command else ""
