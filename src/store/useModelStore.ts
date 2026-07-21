@@ -30,11 +30,15 @@ import {
   buildCadFaceSelectionCommandContext,
   type CadFaceBoxSelectionRequest,
   type CadFaceSelectionContext,
-  type CadFaceSelectionMode
+  type CadFaceSelectionMode,
+  type CadSelectedEdgeTarget
 } from '../model/cadFaceSelection';
 import {
   applyCadSurfaceHitResult,
+  applyCadSurfaceHitResultToEdgeTarget,
   buildCadSurfaceHitRequest,
+  buildCadSurfaceHitRequestForEdgeTarget,
+  failCadSurfaceHitEdgeTarget,
   failCadSurfaceHitSelection
 } from '../model/cadSurfaceHit';
 import { parseLocalStlEditCommand, type LocalStlEditResult } from '../model/localStlEdit';
@@ -162,7 +166,7 @@ interface ModelStore {
   clearWallThicknessAnalysis: () => void;
   setCadFaceSelectionMode: (mode: CadFaceSelectionMode) => void;
   selectCadFaces: (selection: CadFaceSelectionContext) => void;
-  resolveCadSurfaceHitSelection: (selection: CadFaceSelectionContext) => Promise<void>;
+  resolveCadSurfaceHitSelection: (selection: CadFaceSelectionContext, edgeTarget?: CadSelectedEdgeTarget) => Promise<void>;
   requestCadFaceBoxSelection: (request: CadFaceBoxSelectionRequest) => void;
   clearCadFaceSelection: () => void;
   clearLocalCadFeaturePreview: () => void;
@@ -774,7 +778,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     if (cadFaceSelectionMode !== 'off' && !available) return;
     set({
       cadFaceSelectionMode,
-      cadFaceSelection: cadFaceSelectionMode === 'off' ? null : state.cadFaceSelection,
+      cadFaceSelection: cadFaceSelectionMode === 'off' || cadFaceSelectionMode !== state.cadFaceSelectionMode
+        ? null
+        : state.cadFaceSelection,
       localCadFeaturePreview: null,
       cadFaceBoxRequest: null,
       wallThicknessPicking: cadFaceSelectionMode === 'off' ? state.wallThicknessPicking : false,
@@ -788,18 +794,41 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     wallThicknessPicking: false,
     wallThicknessSelection: null
   }),
-  resolveCadSurfaceHitSelection: async (selection) => {
-    if (!selection.hit || !['click', 'edge'].includes(selection.selectionMode)) return;
+  resolveCadSurfaceHitSelection: async (selection, edgeTarget) => {
+    if (edgeTarget && selection.selectionMode !== 'edge-chain') return;
+    if (!edgeTarget && (!selection.hit || !['click', 'edge'].includes(selection.selectionMode))) return;
     try {
-      const result = await resolveCadSurfaceHit(buildCadSurfaceHitRequest(selection));
-      set((state) => state.cadFaceSelection === selection
-        ? { cadFaceSelection: applyCadSurfaceHitResult(selection, result) }
-        : {});
+      const request = edgeTarget
+        ? buildCadSurfaceHitRequestForEdgeTarget(selection, edgeTarget)
+        : buildCadSurfaceHitRequest(selection);
+      const result = await resolveCadSurfaceHit(request);
+      set((state) => {
+        const current = state.cadFaceSelection;
+        if (edgeTarget) {
+          if (!current || current.selectionMode !== 'edge-chain' || current.revision !== selection.revision) return {};
+          try {
+            return { cadFaceSelection: applyCadSurfaceHitResultToEdgeTarget(current, edgeTarget, result) };
+          } catch {
+            return {};
+          }
+        }
+        return current === selection
+          ? { cadFaceSelection: applyCadSurfaceHitResult(selection, result) }
+          : {};
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'OpenCascade 曲面点击精确解析失败';
-      set((state) => state.cadFaceSelection === selection
-        ? { cadFaceSelection: failCadSurfaceHitSelection(selection, message) }
-        : {});
+      set((state) => {
+        const current = state.cadFaceSelection;
+        if (edgeTarget) {
+          return current?.selectionMode === 'edge-chain' && current.revision === selection.revision
+            ? { cadFaceSelection: failCadSurfaceHitEdgeTarget(current, edgeTarget, message) }
+            : {};
+        }
+        return current === selection
+          ? { cadFaceSelection: failCadSurfaceHitSelection(selection, message) }
+          : {};
+      });
     }
   },
   requestCadFaceBoxSelection: (cadFaceBoxRequest) => set({ cadFaceBoxRequest }),
@@ -1183,18 +1212,24 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           'fillet-edge-loop': '生成平面边界整圈圆角',
           'chamfer-edge-loop': '生成平面边界整圈倒角',
           'fillet-edge-chain': '生成切线连续边链圆角',
-          'chamfer-edge-chain': '生成切线连续边链倒角'
+          'chamfer-edge-chain': '生成切线连续边链倒角',
+          'fillet-edge-manual-chain': '生成手工多选边链圆角',
+          'chamfer-edge-manual-chain': '生成手工多选边链倒角'
         } as const)[request.operation];
         const edgeOperation = request.operation === 'fillet-edge'
           || request.operation === 'chamfer-edge'
           || request.operation === 'fillet-edge-loop'
           || request.operation === 'chamfer-edge-loop'
           || request.operation === 'fillet-edge-chain'
-          || request.operation === 'chamfer-edge-chain';
+          || request.operation === 'chamfer-edge-chain'
+          || request.operation === 'fillet-edge-manual-chain'
+          || request.operation === 'chamfer-edge-manual-chain';
         const edgeLoopOperation = request.operation === 'fillet-edge-loop'
           || request.operation === 'chamfer-edge-loop';
         const edgeChainOperation = request.operation === 'fillet-edge-chain'
           || request.operation === 'chamfer-edge-chain';
+        const manualEdgeChainOperation = request.operation === 'fillet-edge-manual-chain'
+          || request.operation === 'chamfer-edge-manual-chain';
         const targetSurfaceLabel = edgeOperation
           ? '边'
           : describeCadSurfaceGeometryType(request.surfaceGeometryType);
@@ -1265,7 +1300,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         const curvedEdgeUv = featureResult.validation.surfaceUv;
         const affectedEdgeCount = featureResult.validation.affectedEdgeCount ?? (edgeOperation ? 1 : 0);
         const seedEdgeStatusText = `种子稳定边状态为${featureResult.stableEdgeStatus === 'inherited' ? '已继承' : '已失效'}`;
-        const edgeResultText = edgeLoopOperation
+        const edgeResultText = manualEdgeChainOperation
+          ? `已对手工选择的 ${affectedEdgeCount} 条连续边执行${request.operation === 'fillet-edge-manual-chain' ? '圆角' : '倒角'}；OpenCascade 已验证其构成一条无分叉的开放或闭合边链。`
+          : edgeLoopOperation
           ? `已从种子稳定边 ${request.stableEdgeId} 定位唯一平面边界，共对 ${affectedEdgeCount} 条边执行${request.operation === 'fillet-edge-loop' ? '整圈圆角' : '整圈倒角'}；${seedEdgeStatusText}。`
           : edgeChainOperation
             ? `已从种子稳定边 ${request.stableEdgeId} 的两端自动传播到唯一切线连续边链，共对 ${affectedEdgeCount} 条边执行${request.operation === 'fillet-edge-chain' ? '圆角' : '倒角'}；${seedEdgeStatusText}。`
@@ -1275,7 +1312,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         const curvedValidationText = !edgeOperation && request.surfaceGeometryType !== 'PLANE'
           ? `曲率比 ${featureResult.validation.curvatureRatio?.toFixed(3) ?? '未知'}；局部壁厚约 ${featureResult.validation.localWallThicknessMm?.toFixed(3) ?? '未知'} 毫米${featureResult.validation.throughCut ? '，本次为通孔' : featureResult.validation.remainingWallMm != null ? `，剩余壁厚约 ${featureResult.validation.remainingWallMm.toFixed(3)} 毫米` : ''}。${featureResult.validation.interferenceCheckPassed ? `曲面干涉检查通过，检查 ${featureResult.validation.contactFaceCount ?? 0} 个接触面和 ${featureResult.validation.contactSampleCount ?? 0} 个接触采样，未发现目标曲面自交或非目标面干涉。` : ''}`
           : '';
-        const invalidatedSelectionText = curvedEdge
+        const invalidatedSelectionText = curvedEdge || manualEdgeChainOperation
           ? '原三角面索引（triangleIndex）、曲面 UV 和稳定边选择全部失效'
           : `原三角面索引（triangleIndex）${edgeOperation ? '和稳定边选择' : ''}已失效`;
         set((state) => ({
@@ -1284,7 +1321,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           messages: state.messages.concat({
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: `${request.summary}已完成；零件体积 ${featureResult.validation.volumeBeforeMm3.toFixed(2)} → ${featureResult.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过有效性、封闭性、单 Solid、点击坐标和法线一致性检查；${stableFaceText}。${edgeResultText}${curvedValidationText}局部特征已记录，后续参数化整模重建会从基础实体开始按顺序安全重放；修改后选择网格已重新生成，${invalidatedSelectionText}，继续修改前请重新选择。${edgeLoopOperation ? '本次只传播到种子边所属的唯一平面边界，不支持手工多选边链或可变半径。' : edgeChainOperation ? '本次只传播到两端唯一且夹角不超过 5 度的切线连续边，不支持分叉链、手工多选边链或可变半径。' : edgeOperation ? '当前为单条稳定边；如需切线传播请明确写“切线链”，如需平面边界整圈请明确写“整圈”。仍不支持手工多选边链或可变半径。' : ''}`
+            content: `${request.summary}已完成；零件体积 ${featureResult.validation.volumeBeforeMm3.toFixed(2)} → ${featureResult.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过有效性、封闭性、单 Solid、点击坐标和法线一致性检查；${stableFaceText}。${edgeResultText}${curvedValidationText}局部特征已记录，后续参数化整模重建会从基础实体开始按顺序安全重放；修改后选择网格已重新生成，${invalidatedSelectionText}，继续修改前请重新选择。${manualEdgeChainOperation ? '手工边链第一版只支持无分叉的开放链或闭合链，不支持可变半径、连续性等级控制或永久拓扑命名。' : edgeLoopOperation ? '本次只传播到种子边所属的唯一平面边界，不支持可变半径。' : edgeChainOperation ? '本次只传播到两端唯一且夹角不超过 5 度的切线连续边，不支持分叉链或可变半径。' : edgeOperation ? '当前为单条稳定边；如需切线传播请明确写“切线链”，如需平面边界整圈请明确写“整圈”，如需逐条指定请切换“多选边链”。' : ''}`
           })
         }));
       } catch (error) {

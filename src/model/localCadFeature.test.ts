@@ -81,6 +81,32 @@ const edgeSelection: CadFaceSelectionContext = {
   }
 };
 
+const edgeChainSelection: CadFaceSelectionContext = {
+  ...selection,
+  selectionMode: 'edge-chain',
+  faces: [selection.faces[0]],
+  edge: undefined,
+  hit: null,
+  edgeSelections: [
+    { face: selection.faces[0], edge: edgeSelection.edge!, hit: edgeSelection.hit! },
+    {
+      face: selection.faces[0],
+      edge: {
+        ...edgeSelection.edge!,
+        stableEdgeId: 'edge-top-right',
+        centerMm: [25, 0, 10],
+        samplePointsMm: [[25, -15, 10], [25, 15, 10]]
+      },
+      hit: {
+        ...edgeSelection.hit!,
+        stableEdgeId: 'edge-top-right',
+        pointMm: { x: 25, y: 2, z: 10 },
+        surfaceUv: { u: 25, v: 2 }
+      }
+    }
+  ]
+};
+
 describe('稳定 CAD 面局部特征请求', () => {
   it('把底层面和边的几何枚举转换为中文显示名称', () => {
     expect(describeCadSurfaceGeometryType('CYLINDER')).toBe('圆柱面');
@@ -199,7 +225,7 @@ describe('稳定 CAD 面局部特征请求', () => {
 
   it('拒绝框选多面', () => {
     expect(() => buildLocalCadFeatureRequest({ ...selection, selectionMode: 'box' }, '开直径 4 毫米、深 3 毫米的孔'))
-      .toThrow('只支持点击选择单个稳定面或单条边');
+      .toThrow('只支持点击单面、单边或手工多选边链');
   });
 
   it('拒绝仍在解析或解析失败的选择网格预览', () => {
@@ -413,7 +439,58 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误开孔', {
       operation: 'cut-cylinder', partId: 'body', stableFaceId: 'face-top',
       stableEdgeId: null, radiusMm: 2, depthMm: 3, reason: '错误模式'
-    }, '错误计划')).toThrow('当前选择的是种子稳定边，只允许执行单边、切线连续边链或平面边界整圈圆角与倒角');
+    }, '错误计划')).toThrow('当前选择的是稳定边，只允许执行单边、自动边链、整圈或手工边链圆角与倒角');
+  });
+
+  it('为手工多选边链生成按原顺序绑定的逐边精确目标', () => {
+    const request = buildLocalCadFeatureRequest(edgeChainSelection, '将这些边做 2 毫米圆角');
+    expect(request).toMatchObject({
+      operation: 'fillet-edge-manual-chain', stableFaceId: 'face-top', stableEdgeId: null, depthMm: 2,
+      edgeTargets: [
+        { stableFaceId: 'face-top', stableEdgeId: 'edge-top-front', center: { xMm: 2, yMm: -15, zMm: 10 } },
+        { stableFaceId: 'face-top', stableEdgeId: 'edge-top-right', center: { xMm: 25, yMm: 2, zMm: 10 } }
+      ]
+    });
+    expect(buildLocalCadFeatureRequest(edgeChainSelection, '将这些边做 1 毫米倒角').operation)
+      .toBe('chamfer-edge-manual-chain');
+  });
+
+  it('拒绝 Codex 增删、换边或重排手工边链', () => {
+    const selectedEdges = edgeChainSelection.edgeSelections!.map((target) => ({
+      stableFaceId: target.face.stableId,
+      stableEdgeId: target.edge.stableEdgeId
+    }));
+    const plan = {
+      operation: 'fillet-edge-manual-chain' as const,
+      partId: 'body', stableFaceId: 'face-top', stableEdgeId: null,
+      selectedEdges, depthMm: 1, reason: '手工边链圆角'
+    };
+    expect(buildLocalCadFeatureRequestFromPlan(edgeChainSelection, '圆角', plan, '计划').edgeTargets)
+      .toHaveLength(2);
+    expect(() => buildLocalCadFeatureRequestFromPlan(edgeChainSelection, '圆角', {
+      ...plan, selectedEdges: [...selectedEdges].reverse()
+    }, '错误计划')).toThrow('增删、排序或替换');
+    expect(() => buildLocalCadFeatureRequestFromPlan(edgeChainSelection, '圆角', {
+      ...plan, selectedEdges: selectedEdges.slice(0, 1)
+    }, '错误计划')).toThrow('增删、排序或替换');
+  });
+
+  it('拒绝少于两条、重复或未完成精确解析的手工边链', () => {
+    expect(() => buildLocalCadFeatureRequest({
+      ...edgeChainSelection,
+      edgeSelections: edgeChainSelection.edgeSelections!.slice(0, 1)
+    }, '将这些边做 1 毫米圆角')).toThrow('2 至 64 条');
+    expect(() => buildLocalCadFeatureRequest({
+      ...edgeChainSelection,
+      edgeSelections: [edgeChainSelection.edgeSelections![0], edgeChainSelection.edgeSelections![0]]
+    }, '将这些边做 1 毫米圆角')).toThrow('重复稳定边');
+    expect(() => buildLocalCadFeatureRequest({
+      ...edgeChainSelection,
+      edgeSelections: edgeChainSelection.edgeSelections!.map((target, index) => index === 1 ? {
+        ...target,
+        hit: { ...target.hit, resolutionStatus: 'resolving', precision: 'mesh' }
+      } : target)
+    }, '将这些边做 1 毫米圆角')).toThrow('尚未完成 OpenCascade 精确解析');
   });
 
   it('接受曲面所属边，并拒绝平面轮廓字段和越界边尺寸', () => {

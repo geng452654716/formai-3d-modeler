@@ -25,6 +25,7 @@ import {
   findCadFaceRangeByTriangleIndex,
   findNearestCadEdge,
   type CadFaceSelectionContext,
+  type CadSelectedEdgeTarget,
   type CadSelectionScreenshot
 } from '../model/cadFaceSelection';
 import { createLidGeometry, createTrayGeometry } from '../model/createEnclosureGeometry';
@@ -353,6 +354,7 @@ function LoadedCadMesh({
   const cadFaceSelection = useModelStore((state) => state.cadFaceSelection);
   const localCadFeaturePreview = useModelStore((state) => state.localCadFeaturePreview);
   const selectCadFaces = useModelStore((state) => state.selectCadFaces);
+  const clearCadFaceSelection = useModelStore((state) => state.clearCadFaceSelection);
   const resolveCadSurfaceHitSelection = useModelStore((state) => state.resolveCadSurfaceHitSelection);
   const addAssistantMessage = useModelStore((state) => state.addAssistantMessage);
   const selectWallThicknessSample = useModelStore((state) => state.selectWallThicknessSample);
@@ -462,16 +464,21 @@ function LoadedCadMesh({
     [coordinateTransform, focusedInterferenceRange]
   );
   const selectedEdgeGeometry = useMemo(() => {
-    const edge = cadFaceSelection?.selectionMode === 'edge'
-      && cadFaceSelection.edge?.partId === cadPart?.id
-      ? cadFaceSelection.edge : null;
-    if (!edge || edge.samplePointsMm.length < 2) return null;
+    const edges = cadFaceSelection?.selectionMode === 'edge-chain'
+      ? (cadFaceSelection.edgeSelections ?? []).map((target) => target.edge)
+      : cadFaceSelection?.selectionMode === 'edge' && cadFaceSelection.edge
+        ? [cadFaceSelection.edge]
+        : [];
+    const visibleEdges = edges.filter((edge) => edge.partId === cadPart?.id && edge.samplePointsMm.length >= 2);
+    if (!visibleEdges.length) return null;
     const positions: number[] = [];
-    for (let index = 1; index < edge.samplePointsMm.length; index += 1) {
-      const start = new Vector3(...edge.samplePointsMm[index - 1]).applyMatrix4(coordinateTransform);
-      const end = new Vector3(...edge.samplePointsMm[index]).applyMatrix4(coordinateTransform);
-      positions.push(start.x, start.y, start.z, end.x, end.y, end.z);
-    }
+    visibleEdges.forEach((edge) => {
+      for (let index = 1; index < edge.samplePointsMm.length; index += 1) {
+        const start = new Vector3(...edge.samplePointsMm[index - 1]).applyMatrix4(coordinateTransform);
+        const end = new Vector3(...edge.samplePointsMm[index]).applyMatrix4(coordinateTransform);
+        positions.push(start.x, start.y, start.z, end.x, end.y, end.z);
+      }
+    });
     const lineGeometry = new BufferGeometry();
     lineGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
     return lineGeometry;
@@ -562,7 +569,7 @@ function LoadedCadMesh({
         meshRef={meshRef}
         cadSelectionData={cadPart?.faceTessellation ? { part: cadPart, coordinateTransform } : undefined}
         onSurfacePick={(point, event) => {
-          if (cadPart?.faceTessellation && (cadFaceSelectionMode === 'click' || cadFaceSelectionMode === 'edge') && cadResult) {
+          if (cadPart?.faceTessellation && (cadFaceSelectionMode === 'click' || cadFaceSelectionMode === 'edge' || cadFaceSelectionMode === 'edge-chain') && cadResult) {
             const faceRange = findCadFaceRangeByTriangleIndex(cadPart.faceTessellation, event.faceIndex);
             if (!faceRange) return;
             const pointCad = point.clone().applyMatrix4(inverseCoordinateTransform);
@@ -575,10 +582,10 @@ function LoadedCadMesh({
                 : new Vector3(0, 0, 1);
             const screenshot = captureClickScreenshot(gl.domElement, event.clientX, event.clientY);
             const faceDescriptor = cadPart.faces?.find((face) => face.stableId === faceRange.stableId);
-            const nearestEdge = cadFaceSelectionMode === 'edge'
+            const nearestEdge = cadFaceSelectionMode === 'edge' || cadFaceSelectionMode === 'edge-chain'
               ? findNearestCadEdge(faceDescriptor?.edges, { x: pointCad.x, y: pointCad.y, z: pointCad.z })
               : null;
-            if (cadFaceSelectionMode === 'edge') {
+            if (cadFaceSelectionMode === 'edge' || cadFaceSelectionMode === 'edge-chain') {
               const bounds = cadPart.metrics.boundsMm;
               const diagonal = Math.hypot(bounds.x, bounds.y, bounds.z);
               const maximumDistance = Math.max(0.35, Math.min(3, diagonal * 0.025));
@@ -587,48 +594,92 @@ function LoadedCadMesh({
                 return;
               }
             }
-            const context: CadFaceSelectionContext = {
-              protocol: 'FormAI-CAD-局部编辑上下文',
-              protocolVersion: 1,
-              sourceKind: 'cad-face',
-              selectionMode: cadFaceSelectionMode,
+            const selectedFace = cadSelectedFaceFromDescriptor(cadPart, faceRange);
+            const selectedEdge = nearestEdge ? {
+              partId: cadPart.id,
+              partLabel: cadPart.label,
+              stableFaceId: faceRange.stableId,
+              stableEdgeId: nearestEdge.edge.stableId,
+              geometryType: nearestEdge.edge.geometryType,
+              lengthMm: nearestEdge.edge.lengthMm,
+              centerMm: nearestEdge.edge.centerMm,
+              samplePointsMm: nearestEdge.edge.samplePointsMm
+            } : null;
+            const selectedHit = {
+              partId: cadPart.id,
+              stableId: faceRange.stableId,
+              stableEdgeId: nearestEdge?.edge.stableId ?? null,
+              triangleIndex: event.faceIndex ?? faceRange.triangleStart,
+              pointMm: { x: pointCad.x, y: pointCad.y, z: pointCad.z },
+              normal: { x: normalCad.x, y: normalCad.y, z: normalCad.z },
+              meshPointMm: { x: pointCad.x, y: pointCad.y, z: pointCad.z },
+              meshNormal: { x: normalCad.x, y: normalCad.y, z: normalCad.z },
+              surfaceUv: null,
+              uvBounds: null,
+              surfaceTangentU: null,
+              precision: 'mesh' as const,
+              resolutionStatus: 'resolving' as const,
+              pointDistanceMm: null,
+              normalDot: null,
+              resolutionError: null
+            };
+            const baseContext = {
+              protocol: 'FormAI-CAD-局部编辑上下文' as const,
+              protocolVersion: 1 as const,
+              sourceKind: 'cad-face' as const,
               revision: cadResult.revision,
-              units: 'mm',
+              units: 'mm' as const,
               partBoundsMm: { [cadPart.id]: cadPart.metrics.boundsMm },
-              faces: [cadSelectedFaceFromDescriptor(cadPart, faceRange)],
-              edge: nearestEdge ? {
-                partId: cadPart.id,
-                partLabel: cadPart.label,
-                stableFaceId: faceRange.stableId,
-                stableEdgeId: nearestEdge.edge.stableId,
-                geometryType: nearestEdge.edge.geometryType,
-                lengthMm: nearestEdge.edge.lengthMm,
-                centerMm: nearestEdge.edge.centerMm,
-                samplePointsMm: nearestEdge.edge.samplePointsMm
-              } : null,
-              hit: {
-                partId: cadPart.id,
-                stableId: faceRange.stableId,
-                stableEdgeId: nearestEdge?.edge.stableId ?? null,
-                triangleIndex: event.faceIndex ?? faceRange.triangleStart,
-                pointMm: { x: pointCad.x, y: pointCad.y, z: pointCad.z },
-                normal: { x: normalCad.x, y: normalCad.y, z: normalCad.z },
-                meshPointMm: { x: pointCad.x, y: pointCad.y, z: pointCad.z },
-                meshNormal: { x: normalCad.x, y: normalCad.y, z: normalCad.z },
-                surfaceUv: null,
-                uvBounds: null,
-                surfaceTangentU: null,
-                precision: 'mesh',
-                resolutionStatus: 'resolving',
-                pointDistanceMm: null,
-                normalDot: null,
-                resolutionError: null
-              },
               camera: cameraSelectionContext(camera, size.width, size.height),
               screenshot,
               parameters: { ...parameters },
               printer: cadResult.printer,
               warning: CAD_FACE_SELECTION_WARNING
+            };
+            if (cadFaceSelectionMode === 'edge-chain' && selectedEdge) {
+              const target: CadSelectedEdgeTarget = { face: selectedFace, edge: selectedEdge, hit: selectedHit };
+              const currentTargets = cadFaceSelection?.selectionMode === 'edge-chain'
+                && cadFaceSelection.revision === cadResult.revision
+                && cadFaceSelection.edgeSelections?.every((candidate) => candidate.edge.partId === cadPart.id)
+                ? cadFaceSelection.edgeSelections
+                : [];
+              const key = `${selectedFace.stableId}::${selectedEdge.stableEdgeId}`;
+              const exists = currentTargets.some((candidate) =>
+                `${candidate.face.stableId}::${candidate.edge.stableEdgeId}` === key
+              );
+              const edgeSelections = exists
+                ? currentTargets.filter((candidate) =>
+                    `${candidate.face.stableId}::${candidate.edge.stableEdgeId}` !== key
+                  )
+                : [...currentTargets, target];
+              if (!exists && edgeSelections.length > 64) {
+                addAssistantMessage('手工多选边链最多允许选择 64 条边，请先移除部分边。');
+                return;
+              }
+              if (!edgeSelections.length) {
+                clearCadFaceSelection();
+                return;
+              }
+              const first = edgeSelections[0];
+              const context: CadFaceSelectionContext = {
+                ...baseContext,
+                selectionMode: 'edge-chain',
+                faces: Array.from(new Map(edgeSelections.map((candidate) => [candidate.face.stableId, candidate.face])).values()),
+                edgeSelections,
+                edge: first.edge,
+                hit: first.hit
+              };
+              selectCadFaces(context);
+              addAssistantMessage(`${exists ? '已移除' : '已加入'}稳定边 ${selectedEdge.stableEdgeId}；当前手工边链共 ${edgeSelections.length} 条边。`);
+              if (!exists) void resolveCadSurfaceHitSelection(context, target);
+              return;
+            }
+            const context: CadFaceSelectionContext = {
+              ...baseContext,
+              selectionMode: cadFaceSelectionMode,
+              faces: [selectedFace],
+              edge: selectedEdge,
+              hit: selectedHit
             };
             selectCadFaces(context);
             void resolveCadSurfaceHitSelection(context);
@@ -1501,12 +1552,20 @@ export function ModelViewport() {
       )}
       {cadFaceSelection && (
         <div className={`cad-face-selection-overlay ${localCadFeaturePreview ? 'has-feature-preview' : ''}`}>
-          <strong>{cadFaceSelection.selectionMode === 'click' ? '已点击选择稳定 CAD 面' : cadFaceSelection.selectionMode === 'edge' ? `已点击选择${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')}所属种子稳定 CAD 边` : '已框选稳定 CAD 面'}</strong>
+          <strong>{cadFaceSelection.selectionMode === 'click'
+            ? '已点击选择稳定 CAD 面'
+            : cadFaceSelection.selectionMode === 'edge'
+              ? `已点击选择${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')}所属种子稳定 CAD 边`
+              : cadFaceSelection.selectionMode === 'edge-chain'
+                ? '已手工选择稳定 CAD 边链'
+                : '已框选稳定 CAD 面'}</strong>
           <span>
             {cadFaceSelection.selectionMode === 'edge'
               ? cadFaceSelection.faces[0]?.geometryType === 'PLANE'
                 ? '1 条种子边；支持单边、唯一切线连续边链或所属平面边界整圈圆角/倒角，不支持手工多选边链或可变半径'
                 : '1 条种子边；支持曲面所属单边或唯一切线连续边链圆角/倒角，不支持整圈、手工多选边链或可变半径'
+              : cadFaceSelection.selectionMode === 'edge-chain'
+                ? `${cadFaceSelection.edgeSelections?.length ?? 0} 条边；只支持同一零件中无分叉的开放链或闭合链，执行前每条边都必须完成 OpenCascade 精确解析`
               : `${cadFaceSelection.faces.length} 个面`} · {new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件 · 下一条指令将附带原始毫米坐标、法线和局部截图
           </span>
           {localCadFeaturePreview && (

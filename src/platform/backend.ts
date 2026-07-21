@@ -297,6 +297,7 @@ function localCadFeaturePayload(request: LocalCadFeatureRequest, previewOnly: bo
     partId: request.partId,
     stableFaceId: request.stableFaceId,
     stableEdgeId: request.stableEdgeId,
+    edgeTargets: request.edgeTargets,
     operation: request.operation,
     centerXmm: request.center.xMm,
     centerYmm: request.center.yMm,

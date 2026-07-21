@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -184,6 +185,59 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
             "depthMm": 1.0,
             "rotationDeg": 0.0,
             "command": "沿切线链做 1 毫米圆角",
+        }
+        return model, faces, record
+
+    def _manual_chain_replay_fixture(
+        self,
+        operation: str = "fillet-edge-manual-chain",
+    ) -> tuple[cq.Workplane, list[dict[str, Any]], dict[str, Any]]:
+        """创建两条相邻稳定边组成的手工开放链重放记录。"""
+        model = cq.Workplane("XY").box(20, 16, 10)
+        sources, _ = match_shape_faces_with_sources(model)
+        faces = [descriptor for _, descriptor in sources]
+        face = next(
+            value for value in faces
+            if value.get("geometryType") == "PLANE"
+            and value.get("normal") == [0.0, 0.0, 1.0]
+        )
+        edges_by_center = {
+            tuple(float(value) for value in edge["centerMm"]): edge
+            for edge in face["edges"]
+        }
+        edge_targets = []
+        for center in ((0.0, -8.0, 5.0), (10.0, 0.0, 5.0)):
+            edge = edges_by_center[center]
+            edge_targets.append({
+                "stableFaceId": face["stableId"],
+                "stableEdgeId": edge["stableId"],
+                "centerMm": {"x": center[0], "y": center[1], "z": center[2]},
+                "outwardNormal": {"x": 0.0, "y": 0.0, "z": 1.0},
+                "surfaceGeometryType": "PLANE",
+                "surfaceUv": {"u": center[0], "v": center[1]},
+                "targetFace": copy.deepcopy(face),
+                "targetEdge": copy.deepcopy(edge),
+            })
+        first = edge_targets[0]
+        record = {
+            "operation": operation,
+            "partId": "generic-part",
+            "stableFaceId": face["stableId"],
+            "stableEdgeId": None,
+            "edgeTargets": edge_targets,
+            "surfaceGeometryType": "PLANE",
+            "surfaceUv": None,
+            "centerMm": dict(first["centerMm"]),
+            "outwardNormal": dict(first["outwardNormal"]),
+            "targetFace": copy.deepcopy(face),
+            "targetEdge": None,
+            "radiusMm": None,
+            "widthMm": None,
+            "heightMm": None,
+            "lengthMm": None,
+            "depthMm": 1.0,
+            "rotationDeg": 0.0,
+            "command": "将手工选中的两条相邻边做 1 毫米圆角",
         }
         return model, faces, record
 
@@ -480,6 +534,96 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
         self.assertEqual(replayed[0]["operation"], "fillet-edge-chain")
         self.assertEqual(replayed[0]["stableEdgeId"], record["stableEdgeId"])
         self.assertEqual(replayed[0]["replayStatus"], "replayed")
+
+    def test_manual_open_chain_replays_and_refreshes_each_edge_snapshot(self) -> None:
+        model, faces, record = self._manual_chain_replay_fixture()
+        original_targets = record["edgeTargets"]
+        for target in original_targets:
+            target["targetFace"]["测试旧快照标记"] = True
+            target["targetEdge"]["测试旧快照标记"] = True
+        direct_targets = [
+            {
+                "stableFaceId": target["stableFaceId"],
+                "stableEdgeId": target["stableEdgeId"],
+                "center": {
+                    "xMm": target["centerMm"]["x"],
+                    "yMm": target["centerMm"]["y"],
+                    "zMm": target["centerMm"]["z"],
+                },
+                "hitNormal": dict(target["outwardNormal"]),
+                "surfaceGeometryType": target["surfaceGeometryType"],
+                "surfaceUv": dict(target["surfaceUv"]),
+                "targetFace": target["targetFace"],
+                "targetEdge": target["targetEdge"],
+            }
+            for target in original_targets
+        ]
+        direct = apply_edge_feature(
+            model,
+            faces,
+            "fillet-edge-manual-chain",
+            record["stableFaceId"],
+            "",
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0),
+            1.0,
+            manual_edge_targets=direct_targets,
+        )
+
+        models, replayed = _replay_local_features(
+            {"generic-part": model},
+            {"generic-part": faces},
+            [record],
+            "manual-chain-replay",
+        )
+
+        self.assertAlmostEqual(
+            models["generic-part"].val().Volume(),
+            direct["model"].val().Volume(),
+            places=6,
+        )
+        replayed_record = replayed[0]
+        self.assertEqual(replayed_record["operation"], "fillet-edge-manual-chain")
+        self.assertEqual(replayed_record["replayStatus"], "replayed")
+        self.assertEqual(replayed_record["replayedRevision"], "manual-chain-replay")
+        self.assertEqual(
+            [target["stableEdgeId"] for target in replayed_record["edgeTargets"]],
+            [target["stableEdgeId"] for target in original_targets],
+        )
+        for target in replayed_record["edgeTargets"]:
+            self.assertNotIn("测试旧快照标记", target["targetFace"])
+            self.assertNotIn("测试旧快照标记", target["targetEdge"])
+
+    def test_manual_chain_replay_rejects_stale_edge_id_or_snapshot_atomically(self) -> None:
+        mutations = (
+            (
+                lambda value: value["edgeTargets"][1].__setitem__("stableEdgeId", "edge-invalid"),
+                "稳定边 ID 与几何签名快照不一致",
+            ),
+            (
+                lambda value: value["edgeTargets"][1]["targetEdge"].__setitem__(
+                    "centerMm", [500.0, 500.0, 500.0]
+                ),
+                "几何签名",
+            ),
+        )
+        for mutation, expected in mutations:
+            with self.subTest(expected=expected):
+                model, faces, record = self._manual_chain_replay_fixture()
+                original_volume = model.val().Volume()
+                models = {"generic-part": model}
+                mutation(record)
+
+                with self.assertRaisesRegex(ValueError, expected):
+                    _replay_local_features(
+                        models,
+                        {"generic-part": faces},
+                        [record],
+                        "manual-chain-replay-invalid",
+                    )
+
+                self.assertIs(models["generic-part"], model)
+                self.assertAlmostEqual(models["generic-part"].val().Volume(), original_volume)
 
     def test_curved_owner_edge_replays_with_real_uv_safety_chain(self) -> None:
         model, faces, record = self._curved_edge_replay_fixture()

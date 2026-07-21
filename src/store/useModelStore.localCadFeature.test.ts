@@ -184,6 +184,32 @@ const edgeSelection = {
   }
 } satisfies CadFaceSelectionContext;
 
+const secondEdgeTarget = {
+  face: selection.faces[0],
+  edge: {
+    ...edgeSelection.edge!,
+    stableEdgeId: 'edge-test-2',
+    centerMm: [6, 2, 3] as [number, number, number],
+    samplePointsMm: [[6, 2, 3], [6, 7, 3]] as Array<[number, number, number]>
+  },
+  hit: {
+    ...edgeSelection.hit!,
+    stableEdgeId: 'edge-test-2',
+    pointMm: { x: 6, y: 2, z: 3 },
+    meshPointMm: { x: 6, y: 2, z: 3 },
+    surfaceUv: { u: 6, v: 2 }
+  }
+};
+
+const manualEdgeSelection = {
+  ...edgeSelection,
+  selectionMode: 'edge-chain',
+  edgeSelections: [
+    { face: selection.faces[0], edge: edgeSelection.edge!, hit: edgeSelection.hit! },
+    secondEdgeTarget
+  ]
+} satisfies CadFaceSelectionContext;
+
 const updatedEdgeCadResult = {
   ...readyCadResult,
   revision: 'edge-feature-after',
@@ -222,6 +248,18 @@ const updatedEdgeChainCadResult = {
     revision: 'edge-chain-feature-after',
     operation: 'fillet-edge-chain' as const,
     command: '沿切线链做 0.8 毫米圆角'
+  }]
+} satisfies CadGenerationResult;
+
+const updatedManualEdgeCadResult = {
+  ...updatedEdgeCadResult,
+  revision: 'manual-edge-feature-after',
+  localFeatures: [{
+    ...updatedEdgeCadResult.localFeatures![0],
+    revision: 'manual-edge-feature-after',
+    operation: 'fillet-edge-manual-chain' as const,
+    stableEdgeId: null,
+    command: '将手工选中的两条相邻边做 0.8 毫米圆角'
   }]
 } satisfies CadGenerationResult;
 
@@ -601,6 +639,28 @@ function edgeChainFeatureResult(): LocalCadFeatureResult {
     },
     updatedCadResult: updatedEdgeChainCadResult,
     limitations: ['只传播到两端唯一且夹角不超过 5 度的切线连续边']
+  };
+}
+
+function manualEdgeFeatureResult(): LocalCadFeatureResult {
+  return {
+    ...edgeFeatureResult(),
+    revision: updatedManualEdgeCadResult.revision,
+    operation: 'fillet-edge-manual-chain',
+    command: '将手工选中的两条相邻边做 0.8 毫米圆角',
+    stableEdgeId: null,
+    selectedEdges: [
+      { stableFaceId: 'face-test', stableEdgeId: 'edge-test' },
+      { stableFaceId: 'face-test', stableEdgeId: 'edge-test-2' }
+    ],
+    stableEdgeStatus: 'disappeared',
+    validation: {
+      ...edgeFeatureResult().validation,
+      affectedEdgeCount: 2,
+      edgeScope: 'manual-chain'
+    },
+    updatedCadResult: updatedManualEdgeCadResult,
+    limitations: ['手工边链第一版只支持无分叉的开放链或闭合链']
   };
 }
 
@@ -1145,7 +1205,7 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.cadFaceSelectionMode).toBe('off');
     expect(state.messages.at(-1)?.content).toContain('共对 4 条边执行整圈圆角');
     expect(state.messages.at(-1)?.content).toContain('只传播到种子边所属的唯一平面边界');
-    expect(state.messages.at(-1)?.content).toContain('不支持手工多选边链或可变半径');
+    expect(state.messages.at(-1)?.content).toContain('不支持可变半径');
   });
 
   it('成功执行切线连续边链圆角后显示传播边数和安全边界', async () => {
@@ -1167,7 +1227,51 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.cadFaceSelection).toBeNull();
     expect(state.messages.at(-1)?.content).toContain('共对 3 条边执行圆角');
     expect(state.messages.at(-1)?.content).toContain('夹角不超过 5 度');
-    expect(state.messages.at(-1)?.content).toContain('不支持分叉链、手工多选边链或可变半径');
+    expect(state.messages.at(-1)?.content).toContain('不支持分叉链或可变半径');
+  });
+
+  it('成功执行手工多选边链圆角后逐边传递精确目标并清除过期选择', async () => {
+    useModelStore.setState({
+      cadFaceSelectionMode: 'edge-chain',
+      cadFaceSelection: manualEdgeSelection
+    });
+    backendMocks.runLocalCadFeature.mockResolvedValue(manualEdgeFeatureResult());
+
+    await useModelStore.getState().executeCommand('将手工选中的两条相邻边做 0.8 毫米圆角');
+
+    expect(backendMocks.runLocalCadFeature).toHaveBeenCalledWith(expect.objectContaining({
+      selectionRevision: 'local-feature-before',
+      partId: 'custom-part',
+      stableFaceId: 'face-test',
+      stableEdgeId: null,
+      operation: 'fillet-edge-manual-chain',
+      depthMm: 0.8,
+      edgeTargets: [
+        {
+          stableFaceId: 'face-test',
+          stableEdgeId: 'edge-test',
+          center: { xMm: 1, yMm: 2, zMm: 3 },
+          hitNormal: { x: 0, y: 0, z: 1 },
+          surfaceGeometryType: 'PLANE',
+          surfaceUv: { u: 1, v: 2 }
+        },
+        {
+          stableFaceId: 'face-test',
+          stableEdgeId: 'edge-test-2',
+          center: { xMm: 6, yMm: 2, zMm: 3 },
+          hitNormal: { x: 0, y: 0, z: 1 },
+          surfaceGeometryType: 'PLANE',
+          surfaceUv: { u: 6, v: 2 }
+        }
+      ]
+    }));
+    const state = useModelStore.getState();
+    expect(state.cadResult).toBe(updatedManualEdgeCadResult);
+    expect(state.cadFaceSelection).toBeNull();
+    expect(state.cadFaceSelectionMode).toBe('off');
+    expect(state.messages.at(-1)?.content).toContain('手工选择的 2 条连续边');
+    expect(state.messages.at(-1)?.content).toContain('无分叉的开放或闭合边链');
+    expect(state.messages.at(-1)?.content).toContain('不支持可变半径');
   });
 
   it('Codex 试图切换稳定边时拒绝调用 Worker并保留当前边选择', async () => {
@@ -1225,6 +1329,23 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.cadFaceSelectionMode).toBe('edge');
     expect(state.aiError).toBe('测试圆角失败');
     expect(state.messages.at(-1)?.content).toContain('已保留修改前模型：测试圆角失败');
+  });
+
+  it('手工多选边链 Worker 失败时保留原 CAD 和全部边选择', async () => {
+    useModelStore.setState({
+      cadFaceSelectionMode: 'edge-chain',
+      cadFaceSelection: manualEdgeSelection
+    });
+    backendMocks.runLocalCadFeature.mockRejectedValue(new Error('测试手工边链圆角失败'));
+
+    await useModelStore.getState().executeCommand('将手工选中的两条相邻边做 0.8 毫米圆角');
+
+    const state = useModelStore.getState();
+    expect(state.cadResult).toBe(readyCadResult);
+    expect(state.cadFaceSelection).toBe(manualEdgeSelection);
+    expect(state.cadFaceSelectionMode).toBe('edge-chain');
+    expect(state.aiError).toBe('测试手工边链圆角失败');
+    expect(state.messages.at(-1)?.content).toContain('已保留修改前模型：测试手工边链圆角失败');
   });
 
   it('Codex 返回空局部计划时显示摘要但不执行 Worker', async () => {

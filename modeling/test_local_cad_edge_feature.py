@@ -38,6 +38,44 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
             point, (0, 0, 1), size_mm,
         )
 
+    def _manual_target(
+        self,
+        face: dict,
+        edge: dict,
+    ) -> dict:
+        """把稳定面和稳定边描述转换为手工边链逐边精确目标。"""
+        center = [float(value) for value in edge["centerMm"]]
+        normal = [float(value) for value in face["normal"]]
+        return {
+            "stableFaceId": face["stableId"],
+            "stableEdgeId": edge["stableId"],
+            "center": {"xMm": center[0], "yMm": center[1], "zMm": center[2]},
+            "hitNormal": {"x": normal[0], "y": normal[1], "z": normal[2]},
+            "surfaceGeometryType": face["geometryType"],
+            "surfaceUv": {"u": center[0], "v": center[1]},
+            "targetFace": face,
+            "targetEdge": edge,
+        }
+
+    def _edge_at(
+        self,
+        faces: list[dict],
+        center: tuple[float, float, float],
+        *,
+        face_normal: tuple[float, float, float] | None = None,
+    ) -> tuple[dict, dict]:
+        """按几何中心和可选所属面法线定位测试稳定边。"""
+        for face in faces:
+            if face_normal is not None and tuple(face.get("normal", [])) != face_normal:
+                continue
+            for edge in face.get("edges", []):
+                if all(
+                    abs(float(actual) - expected) < 1e-6
+                    for actual, expected in zip(edge.get("centerMm", []), center)
+                ):
+                    return face, edge
+        self.fail(f"未找到中心为 {center} 的测试稳定边")
+
     def _project(
         self,
         root: Path,
@@ -129,6 +167,100 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
                 self.assertTrue(validation["valid"])
                 self.assertTrue(validation["watertight"])
                 self.assertEqual(validation["solidCount"], 1)
+
+    def test_manual_open_chain_fillet_and_closed_chain_chamfer_are_valid(self):
+        model, faces, top_face, _ = self._fixture()
+        top_edges = {
+            tuple(float(value) for value in edge["centerMm"]): edge
+            for edge in top_face["edges"]
+        }
+        cases = (
+            (
+                "fillet-edge-manual-chain",
+                [(0.0, -8.0, 5.0), (10.0, 0.0, 5.0)],
+                2,
+            ),
+            (
+                "chamfer-edge-manual-chain",
+                [
+                    (0.0, -8.0, 5.0),
+                    (10.0, 0.0, 5.0),
+                    (0.0, 8.0, 5.0),
+                    (-10.0, 0.0, 5.0),
+                ],
+                4,
+            ),
+        )
+        for operation, centers, expected_count in cases:
+            with self.subTest(operation=operation):
+                result = apply_edge_feature(
+                    model,
+                    faces,
+                    operation,
+                    top_face["stableId"],
+                    "",
+                    (0.0, 0.0, 0.0),
+                    (0.0, 0.0, 1.0),
+                    1.0,
+                    manual_edge_targets=[
+                        self._manual_target(top_face, top_edges[center])
+                        for center in centers
+                    ],
+                )
+                validation = result["validation"]
+                self.assertTrue(validation["valid"])
+                self.assertTrue(validation["watertight"])
+                self.assertEqual(validation["solidCount"], 1)
+                self.assertEqual(validation["affectedEdgeCount"], expected_count)
+                self.assertEqual(validation["edgeScope"], "manual-chain")
+                self.assertLess(validation["volumeDeltaMm3"], 0)
+                self.assertEqual(len(result["targetEdges"]), expected_count)
+
+    def test_manual_chain_rejects_disconnected_and_branched_edges(self):
+        model, faces, top_face, _ = self._fixture()
+        disconnected = [
+            self._manual_target(*self._edge_at(faces, (0.0, -8.0, 5.0), face_normal=(0.0, 0.0, 1.0))),
+            self._manual_target(*self._edge_at(faces, (0.0, 8.0, 5.0), face_normal=(0.0, 0.0, 1.0))),
+        ]
+        with self.assertRaisesRegex(ValueError, "不连续"):
+            apply_edge_feature(
+                model, faces, "fillet-edge-manual-chain", top_face["stableId"], "",
+                (0, 0, 0), (0, 0, 1), 1.0, manual_edge_targets=disconnected,
+            )
+
+        branched = [
+            self._manual_target(*self._edge_at(faces, (0.0, 8.0, 5.0), face_normal=(0.0, 0.0, 1.0))),
+            self._manual_target(*self._edge_at(faces, (10.0, 0.0, 5.0), face_normal=(0.0, 0.0, 1.0))),
+            self._manual_target(*self._edge_at(faces, (10.0, 8.0, 0.0), face_normal=(1.0, 0.0, 0.0))),
+        ]
+        with self.assertRaisesRegex(ValueError, "分叉顶点"):
+            apply_edge_feature(
+                model, faces, "chamfer-edge-manual-chain", top_face["stableId"], "",
+                (0, 0, 0), (0, 0, 1), 1.0, manual_edge_targets=branched,
+            )
+
+    def test_manual_chain_rejects_duplicate_physical_edge_and_invalid_count(self):
+        model, faces, top_face, _ = self._fixture()
+        same_top_edge_from_two_faces = [
+            self._manual_target(*self._edge_at(faces, (0.0, 8.0, 5.0), face_normal=(0.0, 0.0, 1.0))),
+            self._manual_target(*self._edge_at(faces, (0.0, 8.0, 5.0), face_normal=(0.0, 1.0, 0.0))),
+        ]
+        with self.assertRaisesRegex(ValueError, "重复物理边"):
+            apply_edge_feature(
+                model, faces, "fillet-edge-manual-chain", top_face["stableId"], "",
+                (0, 0, 0), (0, 0, 1), 1.0,
+                manual_edge_targets=same_top_edge_from_two_faces,
+            )
+
+        valid_target = self._manual_target(
+            *self._edge_at(faces, (0.0, -8.0, 5.0), face_normal=(0.0, 0.0, 1.0))
+        )
+        for targets in ([valid_target], [valid_target] * 65):
+            with self.subTest(count=len(targets)), self.assertRaisesRegex(ValueError, "2 至 64"):
+                apply_edge_feature(
+                    model, faces, "fillet-edge-manual-chain", top_face["stableId"], "",
+                    (0, 0, 0), (0, 0, 1), 1.0, manual_edge_targets=targets,
+                )
 
     def test_rejects_wrong_edge_id_and_click_far_from_edge(self):
         model, faces, face, edge = self._fixture()
@@ -321,6 +453,60 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
             self.assertEqual(feature["targetEdge"]["stableId"], edge["stableId"])
             self.assertEqual(result["validation"]["affectedEdgeCount"], 2)
             self.assertEqual(result["validation"]["edgeScope"], "tangent-chain")
+
+    def test_worker_executes_manual_chain_and_records_each_selected_edge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face, _ = self._project(root)
+            edges_by_center = {
+                tuple(float(value) for value in edge["centerMm"]): edge
+                for edge in face["edges"]
+            }
+            selected = [
+                self._manual_target(face, edges_by_center[(0.0, -8.0, 5.0)]),
+                self._manual_target(face, edges_by_center[(10.0, 0.0, 5.0)]),
+            ]
+            first_center = selected[0]["center"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = edit_cad_feature(
+                    root,
+                    "fillet-edge-manual-chain",
+                    manifest["revision"],
+                    "generic-part",
+                    face["stableId"],
+                    (first_center["xMm"], first_center["yMm"], first_center["zMm"]),
+                    (0, 0, 1),
+                    None,
+                    1,
+                    "将手工选中的两条相邻边做 1 毫米圆角",
+                    edge_targets=selected,
+                )
+
+            feature = result["updatedCadResult"]["localFeatures"][0]
+            expected_edges = [
+                {
+                    "stableFaceId": target["stableFaceId"],
+                    "stableEdgeId": target["stableEdgeId"],
+                }
+                for target in selected
+            ]
+            self.assertEqual(feature["operation"], "fillet-edge-manual-chain")
+            self.assertIsNone(feature["stableEdgeId"])
+            self.assertEqual(result["selectedEdges"], expected_edges)
+            self.assertEqual(
+                [
+                    {
+                        "stableFaceId": target["stableFaceId"],
+                        "stableEdgeId": target["stableEdgeId"],
+                    }
+                    for target in feature["edgeTargets"]
+                ],
+                expected_edges,
+            )
+            self.assertTrue(all(target["targetFace"] for target in feature["edgeTargets"]))
+            self.assertTrue(all(target["targetEdge"] for target in feature["edgeTargets"]))
+            self.assertEqual(result["validation"]["affectedEdgeCount"], 2)
+            self.assertEqual(result["validation"]["edgeScope"], "manual-chain")
 
     def test_worker_executes_curved_owner_edge_and_records_real_uv(self):
         with tempfile.TemporaryDirectory() as directory:

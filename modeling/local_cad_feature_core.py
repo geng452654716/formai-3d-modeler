@@ -37,6 +37,8 @@ Operation = Literal[
     "chamfer-edge-loop",
     "fillet-edge-chain",
     "chamfer-edge-chain",
+    "fillet-edge-manual-chain",
+    "chamfer-edge-manual-chain",
 ]
 
 
@@ -168,7 +170,7 @@ def validate_edge_feature_inputs(
     size_mm: float,
 ) -> None:
     """校验稳定边圆角或倒角的受限输入。"""
-    if operation not in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"):
+    if operation not in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain", "fillet-edge-manual-chain", "chamfer-edge-manual-chain"):
         raise ValueError("稳定 CAD 边特征操作无效")
     if not stable_face_id.strip() or not stable_edge_id.strip():
         raise ValueError("稳定 CAD 边选择缺少稳定面或稳定边 ID，请重新点击目标边")
@@ -1034,11 +1036,185 @@ def apply_edge_feature(
     target_face_descriptor: dict[str, Any] | None = None,
     target_edge_descriptor: dict[str, Any] | None = None,
     surface_uv: tuple[float, float] | None = None,
+    manual_edge_targets: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """对点击并复核后的单边、平面整圈或唯一切线连续边链执行圆角/倒角。"""
-    validate_edge_feature_inputs(
-        operation, stable_face_id, stable_edge_id, hit_point, hit_normal, size_mm
+    """对点击并复核后的单边、自动边链或手工无分叉边链执行圆角/倒角。"""
+    manual_chain_operation = operation in (
+        "fillet-edge-manual-chain", "chamfer-edge-manual-chain"
     )
+    if manual_chain_operation:
+        if not math.isfinite(size_mm) or not 0.2 <= size_mm <= 50.0:
+            raise ValueError("圆角半径或倒角距离必须在 0.20 至 50.00 毫米之间")
+        if not manual_edge_targets or not 2 <= len(manual_edge_targets) <= 64:
+            raise ValueError("手工多选边链必须包含 2 至 64 条逐边精确目标")
+    else:
+        validate_edge_feature_inputs(
+            operation, stable_face_id, stable_edge_id, hit_point, hit_normal, size_mm
+        )
+        if manual_edge_targets:
+            raise ValueError("非手工边链操作不能携带逐边目标列表")
+
+    bounds = model.val().BoundingBox()
+    diagonal = math.sqrt(bounds.xlen ** 2 + bounds.ylen ** 2 + bounds.zlen ** 2)
+    if manual_chain_operation:
+        target_edges: list[cq.Edge] = []
+        resolved_targets: list[dict[str, Any]] = []
+        point_distances: list[float] = []
+        surface_point_distances: list[float] = []
+        normal_dots: list[float] = []
+        maximum_distance = max(0.35, min(3.0, diagonal * 0.025))
+        maximum_surface_point_distance = max(0.2, min(0.75, diagonal * 0.005))
+        for index, raw_target in enumerate(manual_edge_targets or []):
+            label = f"手工边链第 {index + 1} 条目标"
+            if not isinstance(raw_target, dict):
+                raise ValueError(f"{label}格式无效")
+            face_id = str(raw_target.get("stableFaceId", "")).strip()
+            edge_id = str(raw_target.get("stableEdgeId", "")).strip()
+            center_value = raw_target.get("center")
+            normal_value = raw_target.get("hitNormal")
+            uv_value = raw_target.get("surfaceUv")
+            if not isinstance(center_value, dict) or not isinstance(normal_value, dict) or not isinstance(uv_value, dict):
+                raise ValueError(f"{label}缺少点击坐标、法线或真实 UV")
+            center = tuple(float(center_value[key]) for key in ("xMm", "yMm", "zMm"))
+            normal = tuple(float(normal_value[key]) for key in ("x", "y", "z"))
+            uv = (float(uv_value["u"]), float(uv_value["v"]))
+            validate_edge_feature_inputs(operation, face_id, edge_id, center, normal, size_mm)
+            face_snapshot = raw_target.get("targetFace")
+            edge_snapshot = raw_target.get("targetEdge")
+            if face_snapshot is not None and not isinstance(face_snapshot, dict):
+                raise ValueError(f"{label}的稳定面签名快照无效")
+            if edge_snapshot is not None and not isinstance(edge_snapshot, dict):
+                raise ValueError(f"{label}的稳定边签名快照无效")
+            target_face, face_descriptor = _target_pair(
+                model, current_faces, face_id, face_snapshot
+            )
+            geometry_type = str(face_descriptor.get("geometryType", ""))
+            requested_type = str(raw_target.get("surfaceGeometryType", geometry_type)).strip()
+            if requested_type != geometry_type:
+                raise ValueError(f"{label}的曲面类型与当前稳定面不一致")
+            if edge_snapshot is not None and edge_snapshot.get("stableId") != edge_id:
+                raise ValueError(f"{label}的稳定边 ID 与几何签名快照不一致")
+            edge_descriptor = _edge_descriptor(face_descriptor, edge_id)
+            target_edge = _target_edge(target_face, edge_descriptor, diagonal)
+            if edge_snapshot is not None:
+                snapshot_edge = _target_edge(target_face, edge_snapshot, diagonal)
+                if not snapshot_edge.isSame(target_edge):
+                    raise ValueError(f"{label}的稳定边几何签名快照与当前目标不一致")
+            if any(candidate.isSame(target_edge) for candidate in target_edges):
+                raise ValueError("手工多选边链包含重复物理边")
+            point_distance = float(target_edge.distance(cq.Vertex.makeVertex(*center)))
+            if point_distance > maximum_distance:
+                raise ValueError(
+                    f"{label}点击位置距离目标边 {point_distance:.3f} 毫米，超过允许的 {maximum_distance:.3f} 毫米"
+                )
+            supplied = _unit_vector(normal, f"{label}点击命中法线")
+            surface_point_distance = 0.0
+            if geometry_type != "PLANE":
+                if not all(math.isfinite(value) for value in uv):
+                    raise ValueError(f"{label}缺少有限的真实 UV")
+                surface_point, outward, _ = _surface_frame(target_face, uv)
+                surface_point_distance = float(surface_point.sub(cq.Vector(*center)).Length)
+                if surface_point_distance > maximum_surface_point_distance:
+                    raise ValueError(
+                        f"{label}点击点距离真实 UV 点 {surface_point_distance:.3f} 毫米，超过安全阈值 {maximum_surface_point_distance:.3f} 毫米"
+                    )
+            else:
+                normal_values = face_descriptor.get("normal")
+                if not isinstance(normal_values, list) or len(normal_values) != 3:
+                    normal_values = list(target_face.normalAt().toTuple())
+                outward = _unit_vector(tuple(float(value) for value in normal_values), f"{label}目标面外法线")
+            normal_dot = float(outward.dot(supplied))
+            if normal_dot < 0.75:
+                raise ValueError(f"{label}点击法线与目标面的真实外法线不一致")
+            target_edges.append(target_edge)
+            point_distances.append(point_distance)
+            surface_point_distances.append(surface_point_distance)
+            normal_dots.append(normal_dot)
+            resolved_targets.append({
+                **raw_target,
+                "targetFace": face_descriptor,
+                "targetEdge": edge_descriptor,
+                "outwardNormal": {"x": float(outward.x), "y": float(outward.y), "z": float(outward.z)},
+            })
+
+        vertex_tolerance = max(1e-6, min(0.05, diagonal * 1e-5))
+        vertices: list[cq.Vector] = []
+        edge_vertices: list[tuple[int, int]] = []
+        def vertex_index(point: cq.Vector) -> int:
+            for candidate_index, candidate in enumerate(vertices):
+                if _point_distance(point, candidate) <= vertex_tolerance:
+                    return candidate_index
+            vertices.append(point)
+            return len(vertices) - 1
+        for edge in target_edges:
+            edge_vertices.append((vertex_index(edge.startPoint()), vertex_index(edge.endPoint())))
+        degrees = [0 for _ in vertices]
+        incident: list[list[int]] = [[] for _ in vertices]
+        for edge_index, (start_index, end_index) in enumerate(edge_vertices):
+            degrees[start_index] += 1
+            degrees[end_index] += 1
+            incident[start_index].append(edge_index)
+            incident[end_index].append(edge_index)
+        if any(degree > 2 for degree in degrees):
+            raise ValueError("手工多选边链存在分叉顶点，当前第一版只支持无分叉链")
+        visited = {0}
+        pending = [0]
+        while pending:
+            current = pending.pop()
+            for vertex in edge_vertices[current]:
+                for neighbor in incident[vertex]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        pending.append(neighbor)
+        if len(visited) != len(target_edges):
+            raise ValueError("手工多选边链不连续，请只选择一条连通的开放链或闭合链")
+        endpoint_count = sum(1 for degree in degrees if degree == 1)
+        if endpoint_count not in (0, 2) or any(degree not in (1, 2) for degree in degrees):
+            raise ValueError("手工多选边链拓扑无效，只允许一条开放链或闭合链")
+
+        volume_before = float(model.val().Volume())
+        try:
+            stack = cq.Workplane(obj=model.val()).newObject(target_edges)
+            edited = stack.fillet(size_mm) if operation == "fillet-edge-manual-chain" else stack.chamfer(size_mm)
+        except Exception as error:
+            label = "圆角" if operation == "fillet-edge-manual-chain" else "倒角"
+            raise ValueError(f"OpenCascade 无法对手工边链执行{label}：{error}") from error
+        solids = _closed_solids(edited, "手工多选边链特征结果")
+        if len(solids) != 1 or not edited.val().isValid():
+            raise ValueError("手工边链特征结果不是有效、封闭且唯一的 Solid")
+        volume_after = float(edited.val().Volume())
+        if abs(volume_after - volume_before) <= max(volume_before * 1e-8, 1e-6):
+            raise ValueError("手工边链特征没有产生可验证的实体体积变化")
+        updated_sources, matching = match_shape_faces_with_sources(edited, current_faces)
+        updated_faces = [descriptor for _, descriptor in updated_sources]
+        inherited_face = next((value for value in updated_faces if value.get("stableId") == stable_face_id), None)
+        first = resolved_targets[0]
+        return {
+            "model": edited,
+            "faceSources": updated_sources,
+            "faces": updated_faces,
+            "faceMatching": matching,
+            "targetFace": first["targetFace"],
+            "targetEdge": first["targetEdge"],
+            "targetEdges": resolved_targets,
+            "stableFaceStatus": "inherited" if inherited_face is not None else "disappeared",
+            "stableEdgeStatus": "disappeared",
+            "outwardNormal": first["outwardNormal"],
+            "validation": {
+                "valid": True, "watertight": True, "solidCount": 1,
+                "pointDistanceMm": max(point_distances),
+                "maximumPointDistanceMm": maximum_distance,
+                "affectedEdgeCount": len(target_edges), "edgeScope": "manual-chain",
+                "surfacePointDistanceMm": max(surface_point_distances),
+                "maximumSurfacePointDistanceMm": maximum_surface_point_distance,
+                "surfaceGeometryType": str(first.get("surfaceGeometryType", "")),
+                "surfaceUv": first.get("surfaceUv"),
+                "normalDot": min(normal_dots),
+                "volumeBeforeMm3": volume_before, "volumeAfterMm3": volume_after,
+                "volumeDeltaMm3": volume_after - volume_before,
+            },
+        }
+
     target_face, face_descriptor = _target_pair(
         model, current_faces, stable_face_id, target_face_descriptor
     )
@@ -1061,8 +1237,6 @@ def apply_edge_feature(
     else:
         edge_descriptor = _edge_descriptor(face_descriptor, stable_edge_id)
 
-    bounds = model.val().BoundingBox()
-    diagonal = math.sqrt(bounds.xlen ** 2 + bounds.ylen ** 2 + bounds.zlen ** 2)
     target_edge = _target_edge(target_face, edge_descriptor, diagonal)
     target_edges = [target_edge]
     if loop_operation:

@@ -33,7 +33,7 @@ from local_cad_feature_core import (
 from local_stl_edit import _commit_files_with_rollback
 from split_and_cap import _closed_solids, import_stl_as_solid
 
-Operation = Literal["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"]
+Operation = Literal["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain", "fillet-edge-manual-chain", "chamfer-edge-manual-chain"]
 P1S_BUILD_VOLUME_MM = (256.0, 256.0, 256.0)
 MODEL_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -288,15 +288,44 @@ def edit_cad_feature(
     surface_geometry_type: str | None = None,
     surface_uv: tuple[float, float] | None = None,
     surface_tangent_u: tuple[float, float, float] | None = None,
+    edge_targets: list[dict[str, Any]] | None = None,
     preview_only: bool = False,
 ) -> dict[str, Any]:
     if not selection_revision.strip() or not part_id.strip() or not stable_face_id.strip():
         raise ValueError("稳定 CAD 面选择上下文不完整，请重新选择平面")
-    edge_operation = operation in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain")
+    manual_edge_chain_operation = operation in (
+        "fillet-edge-manual-chain", "chamfer-edge-manual-chain"
+    )
+    edge_operation = manual_edge_chain_operation or operation in (
+        "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop",
+        "fillet-edge-chain", "chamfer-edge-chain",
+    )
     if edge_operation:
-        validate_edge_feature_inputs(
-            operation, stable_face_id, stable_edge_id or "", center, hit_normal, depth_mm
-        )
+        if manual_edge_chain_operation:
+            if stable_edge_id is not None:
+                raise ValueError("手工多选边链不能携带单一种子边 ID")
+            if not isinstance(edge_targets, list) or not 2 <= len(edge_targets) <= 64:
+                raise ValueError("手工多选边链必须携带 2 至 64 条逐边精确目标")
+            stable_keys: set[tuple[str, str]] = set()
+            for index, target in enumerate(edge_targets):
+                if not isinstance(target, dict):
+                    raise ValueError(f"手工边链第 {index + 1} 条目标格式无效")
+                face_id = str(target.get("stableFaceId", "")).strip()
+                edge_id = str(target.get("stableEdgeId", "")).strip()
+                if not face_id or not edge_id:
+                    raise ValueError(f"手工边链第 {index + 1} 条目标缺少稳定面或稳定边 ID")
+                key = (face_id, edge_id)
+                if key in stable_keys:
+                    raise ValueError("手工多选边链不能包含重复稳定边")
+                stable_keys.add(key)
+            if str(edge_targets[0].get("stableFaceId", "")).strip() != stable_face_id:
+                raise ValueError("手工边链首条目标必须与请求中的稳定面 ID 一致")
+        else:
+            if edge_targets:
+                raise ValueError("单边、整圈或自动切线边链操作不能携带手工边链目标")
+            validate_edge_feature_inputs(
+                operation, stable_face_id, stable_edge_id or "", center, hit_normal, depth_mm
+            )
         if any(value is not None for value in (radius_mm, width_mm, height_mm, length_mm)):
             raise ValueError("圆角或倒角不能携带平面轮廓尺寸")
         if abs(rotation_deg) > 1e-9:
@@ -382,6 +411,7 @@ def edit_cad_feature(
                 depth_mm,
                 target_face_descriptor=requested_descriptor,
                 surface_uv=surface_uv,
+                manual_edge_targets=edge_targets if manual_edge_chain_operation else None,
             )
         else:
             application = apply_planar_feature(
@@ -514,12 +544,40 @@ def edit_cad_feature(
 
         manifest["revision"] = revision
         manifest["faceMatching"] = _aggregate_face_matching(part_summaries)
+        recorded_edge_targets = None
+        if manual_edge_chain_operation:
+            recorded_edge_targets = []
+            for target in application.get("targetEdges", []):
+                target_center = target.get("center")
+                target_normal = target.get("outwardNormal")
+                if not isinstance(target_center, dict) or not isinstance(target_normal, dict):
+                    raise ValueError("手工边链执行结果缺少逐边点击坐标或真实外法线")
+                recorded_edge_targets.append({
+                    "stableFaceId": target["stableFaceId"],
+                    "stableEdgeId": target["stableEdgeId"],
+                    "centerMm": {
+                        "x": float(target_center["xMm"]),
+                        "y": float(target_center["yMm"]),
+                        "z": float(target_center["zMm"]),
+                    },
+                    "outwardNormal": {
+                        "x": float(target_normal["x"]),
+                        "y": float(target_normal["y"]),
+                        "z": float(target_normal["z"]),
+                    },
+                    "surfaceGeometryType": str(target.get("surfaceGeometryType", "")),
+                    "surfaceUv": target.get("surfaceUv"),
+                    "targetFace": target["targetFace"],
+                    "targetEdge": target["targetEdge"],
+                })
+
         feature_record = {
             "revision": revision,
             "operation": operation,
             "partId": part_id,
             "stableFaceId": stable_face_id,
             "stableEdgeId": stable_edge_id,
+            "edgeTargets": recorded_edge_targets,
             "centerMm": {"x": center[0], "y": center[1], "z": center[2]},
             "outwardNormal": outward,
             "surfaceGeometryType": requested_geometry_type,
@@ -583,6 +641,13 @@ def edit_cad_feature(
             "partId": part_id,
             "stableFaceId": stable_face_id,
             "stableEdgeId": stable_edge_id,
+            "selectedEdges": [] if recorded_edge_targets is None else [
+                {
+                    "stableFaceId": target["stableFaceId"],
+                    "stableEdgeId": target["stableEdgeId"],
+                }
+                for target in recorded_edge_targets
+            ],
             "stableFaceStatus": target_face_status,
             "stableEdgeStatus": target_edge_status,
             "outputs": [stl_file, step_file, selection_mesh_file, mapping_file, assembly_file, "generation-result.json"],
@@ -622,7 +687,7 @@ def edit_cad_feature(
             "faceMatching": target_face_matching,
             "updatedCadResult": manifest,
             "limitations": [
-                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击稳定面所属种子边执行单边、唯一切线连续边链或平面边界整圈圆角与倒角",
+                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击稳定面所属种子边执行单边、唯一切线连续边链、平面边界整圈或手工无分叉连续边链圆角与倒角",
                 "曲面局部特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；矩形按半对角线、槽孔按长度一半作为保守包络半径，通孔只放行局部壁厚附近的正常出口接触",
                 "曲面矩形和槽孔位于真实 UV 点击位置的切平面，0 度沿当前修订的真实 U 切向，不是沿任意曲面贴合或测地线轮廓",
                 "稳定面和面内稳定边 ID 使用几何签名匹配第一版，不是 OpenCascade 原生永久拓扑命名",
@@ -655,11 +720,12 @@ def edit_cad_feature(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="当前精确 CAD 输出目录")
-    parser.add_argument("--operation", choices=("add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"), required=True)
+    parser.add_argument("--operation", choices=("add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain", "fillet-edge-manual-chain", "chamfer-edge-manual-chain"), required=True)
     parser.add_argument("--selection-revision", required=True)
     parser.add_argument("--part-id", required=True)
     parser.add_argument("--stable-face-id", required=True)
     parser.add_argument("--stable-edge-id")
+    parser.add_argument("--edge-targets-json", default="[]")
     parser.add_argument("--center-x", type=float, required=True)
     parser.add_argument("--center-y", type=float, required=True)
     parser.add_argument("--center-z", type=float, required=True)
@@ -695,6 +761,9 @@ def main() -> int:
             value is not None for value in tangent_components
         ):
             raise ValueError("曲面 U 切向必须同时提供三个有限分量，或全部留空")
+        edge_targets = json.loads(arguments.edge_targets_json)
+        if not isinstance(edge_targets, list):
+            raise ValueError("手工边链目标 JSON 必须是数组")
         edit_cad_feature(
             output_dir=arguments.output,
             operation=arguments.operation,
@@ -706,6 +775,7 @@ def main() -> int:
             surface_uv=(arguments.surface_u, arguments.surface_v),
             surface_tangent_u=tangent_components
             if all(value is not None for value in tangent_components) else None,
+            edge_targets=edge_targets,
             center=(arguments.center_x, arguments.center_y, arguments.center_z),
             hit_normal=(arguments.normal_x, arguments.normal_y, arguments.normal_z),
             radius_mm=arguments.radius,

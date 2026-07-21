@@ -125,10 +125,21 @@ export interface CadPartDescriptor {
 
 export interface CadLocalFeatureRecord {
   revision: string;
-  operation: 'add-cylinder' | 'cut-cylinder' | 'add-rectangle' | 'cut-rectangle' | 'cut-slot' | 'offset-face-outward' | 'offset-face-inward' | 'fillet-edge' | 'chamfer-edge' | 'fillet-edge-loop' | 'chamfer-edge-loop' | 'fillet-edge-chain' | 'chamfer-edge-chain';
+  operation: 'add-cylinder' | 'cut-cylinder' | 'add-rectangle' | 'cut-rectangle' | 'cut-slot' | 'offset-face-outward' | 'offset-face-inward' | 'fillet-edge' | 'chamfer-edge' | 'fillet-edge-loop' | 'chamfer-edge-loop' | 'fillet-edge-chain' | 'chamfer-edge-chain' | 'fillet-edge-manual-chain' | 'chamfer-edge-manual-chain';
   partId: string;
   stableFaceId: string;
   stableEdgeId?: string | null;
+  /** 手工边链重放所需的逐边稳定签名和精确命中快照。 */
+  edgeTargets?: Array<{
+    stableFaceId: string;
+    stableEdgeId: string;
+    centerMm: { x: number; y: number; z: number };
+    outwardNormal: { x: number; y: number; z: number };
+    surfaceGeometryType: string;
+    surfaceUv: { u: number; v: number } | null;
+    targetFace: CadFaceDescriptor;
+    targetEdge: CadEdgeDescriptor;
+  }>;
   centerMm: { x: number; y: number; z: number };
   outwardNormal: { x: number; y: number; z: number };
   surfaceGeometryType?: string;

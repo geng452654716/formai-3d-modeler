@@ -112,6 +112,7 @@ pub struct CodexLocalCadFeaturePlan {
     part_id: String,
     stable_face_id: String,
     stable_edge_id: Option<String>,
+    selected_edges: Vec<CodexSelectedEdgeTarget>,
     radius_mm: Option<f64>,
     width_mm: Option<f64>,
     height_mm: Option<f64>,
@@ -119,6 +120,13 @@ pub struct CodexLocalCadFeaturePlan {
     depth_mm: f64,
     rotation_deg: f64,
     reason: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexSelectedEdgeTarget {
+    stable_face_id: String,
+    stable_edge_id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1272,6 +1280,7 @@ pub async fn run_local_cad_feature(
     part_id: String,
     stable_face_id: String,
     stable_edge_id: Option<String>,
+    edge_targets: Vec<Value>,
     operation: String,
     center_xmm: f64,
     center_ymm: f64,
@@ -1298,7 +1307,7 @@ pub async fn run_local_cad_feature(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = state.generation_lock.lock().map_err(|_| "CAD 工作进程锁已损坏".to_string())?;
-        if !matches!(operation.as_str(), "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot" | "offset-face-outward" | "offset-face-inward" | "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop" | "fillet-edge-chain" | "chamfer-edge-chain") {
+        if !matches!(operation.as_str(), "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot" | "offset-face-outward" | "offset-face-inward" | "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop" | "fillet-edge-chain" | "chamfer-edge-chain" | "fillet-edge-manual-chain" | "chamfer-edge-manual-chain") {
             return Err("稳定 CAD 局部特征操作无效".to_string());
         }
         if selection_revision.is_empty() || selection_revision.chars().count() > 200
@@ -1326,7 +1335,8 @@ pub async fn run_local_cad_feature(
         let slot = operation == "cut-slot";
         let rectangle = matches!(operation.as_str(), "add-rectangle" | "cut-rectangle");
         let whole_face = matches!(operation.as_str(), "offset-face-outward" | "offset-face-inward");
-        let edge_feature = matches!(operation.as_str(), "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop" | "fillet-edge-chain" | "chamfer-edge-chain");
+        let manual_edge_chain = matches!(operation.as_str(), "fillet-edge-manual-chain" | "chamfer-edge-manual-chain");
+        let edge_feature = manual_edge_chain || matches!(operation.as_str(), "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop" | "fillet-edge-chain" | "chamfer-edge-chain");
         let edge_loop_feature = matches!(operation.as_str(), "fillet-edge-loop" | "chamfer-edge-loop");
         let curved_face = surface_geometry_type != "PLANE";
         if preview_only && !curved_face {
@@ -1346,7 +1356,45 @@ pub async fn run_local_cad_feature(
                 return Err("曲面方向轮廓的 OpenCascade 真实 U 切向已退化，请重新点击目标面".to_string());
             }
         }
-        if edge_feature {
+        if manual_edge_chain {
+            if stable_edge_id.is_some() || !(2..=64).contains(&edge_targets.len()) {
+                return Err("手工多选边链必须携带 2 至 64 条逐边目标，且不能携带单一种子边 ID".into());
+            }
+            let mut keys = std::collections::HashSet::new();
+            for (index, target) in edge_targets.iter().enumerate() {
+                let object = target.as_object().ok_or_else(|| format!("手工边链第 {} 条目标格式无效", index + 1))?;
+                let face_id = object.get("stableFaceId").and_then(Value::as_str).map(str::trim)
+                    .filter(|value| !value.is_empty() && value.chars().count() <= 200)
+                    .ok_or_else(|| format!("手工边链第 {} 条目标缺少稳定面 ID", index + 1))?;
+                let edge_id = object.get("stableEdgeId").and_then(Value::as_str).map(str::trim)
+                    .filter(|value| !value.is_empty() && value.chars().count() <= 200)
+                    .ok_or_else(|| format!("手工边链第 {} 条目标缺少稳定边 ID", index + 1))?;
+                let center = object.get("center").and_then(Value::as_object)
+                    .ok_or_else(|| format!("手工边链第 {} 条目标缺少点击坐标", index + 1))?;
+                let normal = object.get("hitNormal").and_then(Value::as_object)
+                    .ok_or_else(|| format!("手工边链第 {} 条目标缺少点击法线", index + 1))?;
+                let uv = object.get("surfaceUv").and_then(Value::as_object)
+                    .ok_or_else(|| format!("手工边链第 {} 条目标缺少真实 UV", index + 1))?;
+                let values = [
+                    center.get("xMm").and_then(Value::as_f64), center.get("yMm").and_then(Value::as_f64), center.get("zMm").and_then(Value::as_f64),
+                    normal.get("x").and_then(Value::as_f64), normal.get("y").and_then(Value::as_f64), normal.get("z").and_then(Value::as_f64),
+                    uv.get("u").and_then(Value::as_f64), uv.get("v").and_then(Value::as_f64),
+                ];
+                if values.iter().any(|value| value.is_none_or(|number| !number.is_finite())) {
+                    return Err(format!("手工边链第 {} 条目标包含无效坐标、法线或 UV", index + 1));
+                }
+                let geometry_type = object.get("surfaceGeometryType").and_then(Value::as_str).map(str::trim)
+                    .filter(|value| !value.is_empty() && value.chars().count() <= 100)
+                    .ok_or_else(|| format!("手工边链第 {} 条目标缺少曲面类型", index + 1))?;
+                if !keys.insert((face_id.to_string(), edge_id.to_string())) {
+                    return Err("手工多选边链包含重复稳定边".into());
+                }
+                let _ = geometry_type;
+            }
+        } else if !edge_targets.is_empty() {
+            return Err("非手工边链操作不能携带逐边目标列表".into());
+        }
+        if edge_feature && !manual_edge_chain {
             if stable_edge_id.as_deref().is_none_or(|value| value.is_empty() || value.chars().count() > 200)
                 || depth_mm > 50.0 || radius_mm.is_some() || width_mm.is_some() || height_mm.is_some()
                 || length_mm.is_some() || rotation_deg.abs() > 1e-9 {
@@ -1400,6 +1448,12 @@ pub async fn run_local_cad_feature(
         ];
         if let Some(stable_edge_id) = stable_edge_id {
             arguments.extend(["--stable-edge-id".into(), stable_edge_id]);
+        }
+        if manual_edge_chain {
+            arguments.extend([
+                "--edge-targets-json".into(),
+                serde_json::to_string(&edge_targets).map_err(|error| format!("无法序列化手工边链目标：{error}"))?,
+            ]);
         }
         if let Some((x, y, z)) = surface_tangent_u {
             arguments.extend([
@@ -1873,10 +1927,23 @@ fn codex_output_schema() -> Value {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "operation": { "type": "string", "enum": ["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"] },
+                "operation": { "type": "string", "enum": ["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain", "fillet-edge-manual-chain", "chamfer-edge-manual-chain"] },
                 "partId": { "type": "string" },
                 "stableFaceId": { "type": "string" },
                 "stableEdgeId": { "type": ["string", "null"] },
+                "selectedEdges": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "stableFaceId": { "type": "string" },
+                      "stableEdgeId": { "type": "string" }
+                    },
+                    "required": ["stableFaceId", "stableEdgeId"]
+                  }
+                },
                 "radiusMm": { "type": ["number", "null"] },
                 "widthMm": { "type": ["number", "null"] },
                 "heightMm": { "type": ["number", "null"] },
@@ -1885,7 +1952,7 @@ fn codex_output_schema() -> Value {
                 "rotationDeg": { "type": "number", "minimum": -180.0, "maximum": 180.0 },
                 "reason": { "type": "string" }
               },
-              "required": ["operation", "partId", "stableFaceId", "stableEdgeId", "radiusMm", "widthMm", "heightMm", "lengthMm", "depthMm", "rotationDeg", "reason"]
+              "required": ["operation", "partId", "stableFaceId", "stableEdgeId", "selectedEdges", "radiusMm", "widthMm", "heightMm", "lengthMm", "depthMm", "rotationDeg", "reason"]
             }
           ]
         }
@@ -1905,6 +1972,8 @@ fn codex_prompt(command: &str, parameters: &Value, selection_context: Option<&Va
 曲面操作必须使用上下文中 resolutionStatus=resolved、precision=opencascade 的真实点击点、外法线和 surfaceUv，不得改写 UV、切换目标或伪造曲面参数。\
 曲面矩形和槽孔的 rotationDeg=0 表示沿上下文中的真实 U 切向，正角度围绕真实外法线旋转；真实 U 切向由 OpenCascade 命中结果提供，Codex 不得改写，也不得在 localFeature 中增加切向字段。\
 当 selectionMode=edge 时：fillet-edge/chamfer-edge 对当前种子稳定边执行单边圆角或倒角；fillet-edge-chain/chamfer-edge-chain 只在用户明确要求“切线链、相切边、切线连续、连续边链、沿切线或顺着切线”时使用，从当前种子边两端自动传播到唯一且夹角不超过 5 度的切线连续边，允许平面或非平面所属种子边；fillet-edge-loop/chamfer-edge-loop 只在用户明确要求“这圈、整圈、一圈、整周、周边、轮廓边或边界圈”且所属面为 PLANE 时使用，以当前 stableEdgeId 作为种子边，对其所属唯一平面边界 Wire 执行整圈圆角或倒角；若同时要求整圈和切线链必须拒绝并要求用户明确范围。非平面所属边仍必须使用当前 OpenCascade 精确点击点、真实 UV 和外法线；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，不得改成任意手工多边链或可变半径。\
+当 selectionMode=edge-chain 时，只允许使用 fillet-edge-manual-chain 或 chamfer-edge-manual-chain；partId 和 stableFaceId 必须逐字复制首条目标，stableEdgeId 必须为 null，selectedEdges 必须按 edgeSelections 原始顺序逐项复制 stableFaceId 与 stableEdgeId，不得增删、排序、去重、替换或推断其他边。用户同时要求自动整圈或自动切线传播时必须返回 localFeature=null 并要求明确范围。\
+除手工边链操作外 selectedEdges 必须为空数组；手工边链操作必须包含 2 至 64 项。\
 四个轮廓尺寸必须全部为 null，rotationDeg 必须为 0，depthMm 表示圆角半径或倒角距离，范围为 0.20 至 50.00 毫米。\
 所有 localFeature 都必须让 changes 为空，不得自行切换到其他零件、面或边。点击平面操作中：圆形凸台/圆孔使用 add-cylinder/cut-cylinder；矩形凸台/孔使用 add-rectangle/cut-rectangle；\
 槽孔使用 cut-slot；整面向外拉伸/向内偏移使用 offset-face-outward/offset-face-inward。radiusMm 只用于圆柱，widthMm+heightMm 只用于矩形，widthMm+lengthMm 只用于槽孔；\
@@ -1937,6 +2006,7 @@ fn codex_prompt(command: &str, parameters: &Value, selection_context: Option<&Va
 enum LocalSelectionMode {
     Face,
     Edge,
+    EdgeChain,
 }
 
 #[derive(Debug)]
@@ -1945,6 +2015,7 @@ struct SelectedLocalTarget {
     part_id: String,
     stable_face_id: String,
     stable_edge_id: Option<String>,
+    selected_edges: Vec<CodexSelectedEdgeTarget>,
     geometry_type: String,
     /// 当前修订中由 OpenCascade 解析出的真实 U 切向；只用于校验方向轮廓上下文。
     surface_tangent_u: Option<[f64; 3]>,
@@ -1957,8 +2028,131 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
     {
         Some("click") => LocalSelectionMode::Face,
         Some("edge") => LocalSelectionMode::Edge,
-        _ => return Err("Codex 局部特征第一版只允许点击选择单个稳定平面或单条稳定边".into()),
+        Some("edge-chain") => LocalSelectionMode::EdgeChain,
+        _ => return Err("Codex 局部特征只允许点击单个稳定面、单条稳定边或手工多选边链".into()),
     };
+    if mode == LocalSelectionMode::EdgeChain {
+        let selections = selection_context
+            .get("edgeSelections")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "手工多选边链缺少逐边选择数组".to_string())?;
+        if !(2..=64).contains(&selections.len()) {
+            return Err("手工多选边链必须包含 2 至 64 条稳定边".into());
+        }
+        let revision = selection_context
+            .get("revision")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "手工多选边链缺少 CAD 修订号".to_string())?;
+        let mut part_id: Option<String> = None;
+        let mut selected_edges = Vec::with_capacity(selections.len());
+        let mut stable_face_id = String::new();
+        let mut geometry_type = String::new();
+        let mut surface_tangent_u = None;
+        let mut unique = std::collections::HashSet::new();
+        for (index, selection) in selections.iter().enumerate() {
+            let object = selection
+                .as_object()
+                .ok_or_else(|| format!("手工边链第 {} 条目标格式无效", index + 1))?;
+            let face = object
+                .get("face")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("手工边链第 {} 条目标缺少稳定面", index + 1))?;
+            let edge = object
+                .get("edge")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("手工边链第 {} 条目标缺少稳定边", index + 1))?;
+            let hit = object
+                .get("hit")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("手工边链第 {} 条目标缺少精确命中", index + 1))?;
+            let current_part = face
+                .get("partId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("手工边链第 {} 条目标缺少零件 ID", index + 1))?;
+            let current_face = face
+                .get("stableId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("手工边链第 {} 条目标缺少稳定面 ID", index + 1))?;
+            let current_edge = edge
+                .get("stableEdgeId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("手工边链第 {} 条目标缺少稳定边 ID", index + 1))?;
+            if part_id
+                .as_deref()
+                .is_some_and(|value| value != current_part)
+            {
+                return Err("手工多选边链只能选择同一个 CAD 零件中的边".into());
+            }
+            part_id.get_or_insert_with(|| current_part.to_string());
+            if edge.get("partId").and_then(Value::as_str) != Some(current_part)
+                || edge.get("stableFaceId").and_then(Value::as_str) != Some(current_face)
+                || hit.get("partId").and_then(Value::as_str) != Some(current_part)
+                || hit.get("stableId").and_then(Value::as_str) != Some(current_face)
+                || hit.get("stableEdgeId").and_then(Value::as_str) != Some(current_edge)
+            {
+                return Err(format!(
+                    "手工边链第 {} 条稳定面、稳定边与命中不一致",
+                    index + 1
+                ));
+            }
+            let surface_uv = hit.get("surfaceUv").and_then(Value::as_object);
+            let precise = hit.get("resolutionStatus").and_then(Value::as_str) == Some("resolved")
+                && hit.get("precision").and_then(Value::as_str) == Some("opencascade")
+                && surface_uv
+                    .and_then(|value| Some((value.get("u")?.as_f64()?, value.get("v")?.as_f64()?)))
+                    .is_some_and(|(u, v)| u.is_finite() && v.is_finite());
+            if !precise {
+                return Err(format!(
+                    "手工边链第 {} 条尚未完成 OpenCascade 精确解析",
+                    index + 1
+                ));
+            }
+            if !unique.insert((current_face.to_string(), current_edge.to_string())) {
+                return Err("手工多选边链包含重复稳定边".into());
+            }
+            if index == 0 {
+                stable_face_id = current_face.to_string();
+                geometry_type = face
+                    .get("geometryType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                surface_tangent_u = hit
+                    .get("surfaceTangentU")
+                    .and_then(Value::as_object)
+                    .and_then(|value| {
+                        Some([
+                            value.get("x")?.as_f64()?,
+                            value.get("y")?.as_f64()?,
+                            value.get("z")?.as_f64()?,
+                        ])
+                    })
+                    .filter(|values| values.iter().all(|value| value.is_finite()));
+            }
+            selected_edges.push(CodexSelectedEdgeTarget {
+                stable_face_id: current_face.to_string(),
+                stable_edge_id: current_edge.to_string(),
+            });
+        }
+        let _ = revision;
+        return Ok(SelectedLocalTarget {
+            mode,
+            part_id: part_id.unwrap_or_default(),
+            stable_face_id,
+            stable_edge_id: None,
+            selected_edges,
+            geometry_type,
+            surface_tangent_u,
+        });
+    }
     let faces = selection_context
         .get("faces")
         .and_then(Value::as_array)
@@ -2049,6 +2243,7 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
             }
             Some(edge_id.to_string())
         }
+        LocalSelectionMode::EdgeChain => unreachable!("手工边链已在前置分支返回"),
     };
 
     Ok(SelectedLocalTarget {
@@ -2056,6 +2251,7 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
         part_id: part_id.to_string(),
         stable_face_id: stable_face_id.to_string(),
         stable_edge_id,
+        selected_edges: Vec::new(),
         geometry_type: geometry_type.to_string(),
         surface_tangent_u,
     })
@@ -2102,15 +2298,20 @@ fn validate_codex_model_result(
         return Err("Codex 计划试图修改当前选择之外的零件或稳定面，已拒绝执行".into());
     }
 
-    let edge_operation = matches!(
+    let manual_edge_chain_operation = matches!(
         feature.operation.as_str(),
-        "fillet-edge"
-            | "chamfer-edge"
-            | "fillet-edge-loop"
-            | "chamfer-edge-loop"
-            | "fillet-edge-chain"
-            | "chamfer-edge-chain"
+        "fillet-edge-manual-chain" | "chamfer-edge-manual-chain"
     );
+    let edge_operation = manual_edge_chain_operation
+        || matches!(
+            feature.operation.as_str(),
+            "fillet-edge"
+                | "chamfer-edge"
+                | "fillet-edge-loop"
+                | "chamfer-edge-loop"
+                | "fillet-edge-chain"
+                | "chamfer-edge-chain"
+        );
     let edge_loop_operation = matches!(
         feature.operation.as_str(),
         "fillet-edge-loop" | "chamfer-edge-loop"
@@ -2123,15 +2324,32 @@ fn validate_codex_model_result(
             if feature.stable_edge_id.is_some() {
                 return Err("点击稳定面计划不能携带稳定边 ID".into());
             }
+            if !feature.selected_edges.is_empty() {
+                return Err("点击稳定面计划不能携带手工边列表".into());
+            }
         }
         LocalSelectionMode::Edge => {
-            if !edge_operation {
+            if !edge_operation || manual_edge_chain_operation {
                 return Err(
                     "点击稳定边时只允许执行单边、切线连续边链或平面边界整圈圆角与倒角".into(),
                 );
             }
             if feature.stable_edge_id.as_deref() != target.stable_edge_id.as_deref() {
                 return Err("Codex 计划试图修改当前选择之外的稳定边，已拒绝执行".into());
+            }
+            if !feature.selected_edges.is_empty() {
+                return Err("单边或自动边链计划不能携带手工边列表".into());
+            }
+        }
+        LocalSelectionMode::EdgeChain => {
+            if !manual_edge_chain_operation {
+                return Err("手工多选边链只允许执行手工边链圆角或倒角".into());
+            }
+            if feature.stable_edge_id.is_some() {
+                return Err("手工多选边链计划不能携带单一种子稳定边 ID".into());
+            }
+            if feature.selected_edges != target.selected_edges {
+                return Err("Codex 计划增删、排序或替换了手工选择边列表，已拒绝执行".into());
             }
         }
     }
@@ -2152,6 +2370,8 @@ fn validate_codex_model_result(
                 | "chamfer-edge"
                 | "fillet-edge-chain"
                 | "chamfer-edge-chain"
+                | "fillet-edge-manual-chain"
+                | "chamfer-edge-manual-chain"
         )
     {
         return Err("当前选中的是非平面曲面；当前只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选稳定边执行单边或切线连续边链圆角与倒角".into());
@@ -2186,6 +2406,8 @@ fn validate_codex_model_result(
             | "chamfer-edge-loop"
             | "fillet-edge-chain"
             | "chamfer-edge-chain"
+            | "fillet-edge-manual-chain"
+            | "chamfer-edge-manual-chain"
     ) {
         return Err("Codex 返回了未知的稳定 CAD 局部特征操作".into());
     }
@@ -2663,6 +2885,7 @@ mod tests {
                 part_id: "body".into(),
                 stable_face_id: "face-top".into(),
                 stable_edge_id: None,
+                selected_edges: Vec::new(),
                 radius_mm: cylinder.then_some(2.0),
                 width_mm: (!cylinder && !whole_face).then_some(5.0),
                 height_mm: (!cylinder && !whole_face && !slot).then_some(8.0),
@@ -2707,6 +2930,7 @@ mod tests {
                 part_id: "body".into(),
                 stable_face_id: "face-top".into(),
                 stable_edge_id: Some("edge-top-front".into()),
+                selected_edges: Vec::new(),
                 radius_mm: None,
                 width_mm: None,
                 height_mm: None,
@@ -2716,6 +2940,187 @@ mod tests {
                 reason: "按用户要求修改当前点击边".into(),
             }),
         }
+    }
+
+    fn manual_edge_selection_item(stable_face_id: &str, stable_edge_id: &str) -> Value {
+        json!({
+            "face": {
+                "partId": "body",
+                "stableId": stable_face_id,
+                "geometryType": "PLANE"
+            },
+            "edge": {
+                "partId": "body",
+                "stableFaceId": stable_face_id,
+                "stableEdgeId": stable_edge_id
+            },
+            "hit": {
+                "partId": "body",
+                "stableId": stable_face_id,
+                "stableEdgeId": stable_edge_id,
+                "precision": "opencascade",
+                "resolutionStatus": "resolved",
+                "surfaceUv": {"u": 1.0, "v": 2.0}
+            }
+        })
+    }
+
+    fn valid_manual_edge_selection() -> Value {
+        json!({
+            "selectionMode": "edge-chain",
+            "revision": "revision-manual-chain",
+            "edgeSelections": [
+                manual_edge_selection_item("face-top", "edge-top-front"),
+                manual_edge_selection_item("face-top", "edge-top-right")
+            ]
+        })
+    }
+
+    fn manual_edge_feature_result(operation: &str) -> CodexModelCommandResult {
+        CodexModelCommandResult {
+            summary: "已生成受限的手工边链特征计划".into(),
+            changes: vec![],
+            local_feature: Some(CodexLocalCadFeaturePlan {
+                operation: operation.into(),
+                part_id: "body".into(),
+                stable_face_id: "face-top".into(),
+                stable_edge_id: None,
+                selected_edges: vec![
+                    CodexSelectedEdgeTarget {
+                        stable_face_id: "face-top".into(),
+                        stable_edge_id: "edge-top-front".into(),
+                    },
+                    CodexSelectedEdgeTarget {
+                        stable_face_id: "face-top".into(),
+                        stable_edge_id: "edge-top-right".into(),
+                    },
+                ],
+                radius_mm: None,
+                width_mm: None,
+                height_mm: None,
+                length_mm: None,
+                depth_mm: 1.0,
+                rotation_deg: 0.0,
+                reason: "按用户手工选择顺序修改两条相邻边".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn accepts_valid_codex_manual_edge_chain_plans() {
+        let context = valid_manual_edge_selection();
+        for operation in ["fillet-edge-manual-chain", "chamfer-edge-manual-chain"] {
+            validate_codex_model_result(&manual_edge_feature_result(operation), Some(&context))
+                .expect("合法手工多选边链圆角或倒角计划应通过协议校验");
+        }
+    }
+
+    #[test]
+    fn rejects_codex_manual_edge_chain_list_add_remove_reorder_or_replace() {
+        let context = valid_manual_edge_selection();
+        let mutations: Vec<Box<dyn Fn(&mut Vec<CodexSelectedEdgeTarget>)>> = vec![
+            Box::new(|edges| {
+                edges.push(CodexSelectedEdgeTarget {
+                    stable_face_id: "face-top".into(),
+                    stable_edge_id: "edge-extra".into(),
+                })
+            }),
+            Box::new(|edges| {
+                edges.pop();
+            }),
+            Box::new(|edges| edges.swap(0, 1)),
+            Box::new(|edges| edges[1].stable_edge_id = "edge-replaced".into()),
+        ];
+        for mutation in mutations {
+            let mut result = manual_edge_feature_result("fillet-edge-manual-chain");
+            mutation(
+                &mut result
+                    .local_feature
+                    .as_mut()
+                    .expect("feature")
+                    .selected_edges,
+            );
+            assert!(validate_codex_model_result(&result, Some(&context))
+                .expect_err("Codex 不得改变用户手工选择边列表")
+                .contains("增删、排序或替换"));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_manual_edge_selection_count_or_unresolved_hit() {
+        let mut too_few = valid_manual_edge_selection();
+        too_few["edgeSelections"] =
+            json!([manual_edge_selection_item("face-top", "edge-top-front")]);
+        assert!(validate_codex_model_result(
+            &manual_edge_feature_result("fillet-edge-manual-chain"),
+            Some(&too_few),
+        )
+        .expect_err("少于两条手工边必须拒绝")
+        .contains("2 至 64"));
+
+        let mut too_many = valid_manual_edge_selection();
+        too_many["edgeSelections"] = Value::Array(
+            (0..65)
+                .map(|index| manual_edge_selection_item("face-top", &format!("edge-{index}")))
+                .collect(),
+        );
+        assert!(validate_codex_model_result(
+            &manual_edge_feature_result("fillet-edge-manual-chain"),
+            Some(&too_many),
+        )
+        .expect_err("超过六十四条手工边必须拒绝")
+        .contains("2 至 64"));
+
+        let mut unresolved = valid_manual_edge_selection();
+        unresolved["edgeSelections"][1]["hit"]["resolutionStatus"] = json!("pending");
+        assert!(validate_codex_model_result(
+            &manual_edge_feature_result("fillet-edge-manual-chain"),
+            Some(&unresolved),
+        )
+        .expect_err("任一手工边未完成精确解析必须拒绝")
+        .contains("尚未完成 OpenCascade 精确解析"));
+    }
+
+    #[test]
+    fn rejects_manual_and_single_edge_operation_mode_mismatch() {
+        assert!(validate_codex_model_result(
+            &manual_edge_feature_result("fillet-edge-manual-chain"),
+            Some(&valid_local_edge_selection()),
+        )
+        .expect_err("单边上下文不得执行手工边链操作")
+        .contains("点击稳定边时只允许"));
+
+        assert!(validate_codex_model_result(
+            &edge_feature_result("fillet-edge"),
+            Some(&valid_manual_edge_selection()),
+        )
+        .expect_err("手工边链上下文不得退化为单边操作")
+        .contains("手工多选边链只允许"));
+
+        let context = valid_manual_edge_selection();
+        let mut seeded = manual_edge_feature_result("chamfer-edge-manual-chain");
+        seeded
+            .local_feature
+            .as_mut()
+            .expect("feature")
+            .stable_edge_id = Some("edge-top-front".into());
+        assert!(validate_codex_model_result(&seeded, Some(&context))
+            .expect_err("手工边链计划不得携带单一种子边")
+            .contains("不能携带单一种子"));
+
+        let context = valid_local_edge_selection();
+        let mut ordinary = edge_feature_result("chamfer-edge");
+        ordinary
+            .local_feature
+            .as_mut()
+            .expect("feature")
+            .selected_edges = vec![CodexSelectedEdgeTarget {
+            stable_face_id: "face-top".into(),
+            stable_edge_id: "edge-top-front".into(),
+        }];
+        assert!(validate_codex_model_result(&ordinary, Some(&context))
+            .expect_err("普通单边计划必须保持 selectedEdges 为空")
+            .contains("不能携带手工边列表"));
     }
 
     #[test]
@@ -2904,7 +3309,7 @@ mod tests {
         box_selection["selectionMode"] = json!("box");
         assert!(validate_codex_model_result(&result, Some(&box_selection))
             .expect_err("框选必须被拒绝")
-            .contains("只允许点击选择"));
+            .contains("只允许点击单个稳定面、单条稳定边或手工多选边链"));
 
         let mut multiple_faces = valid_local_feature_selection();
         multiple_faces["faces"] = json!([

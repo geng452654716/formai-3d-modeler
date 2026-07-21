@@ -8,7 +8,7 @@ import type {
 import type { EnclosureParameters } from './types';
 import { describeCadEdgeGeometryType, describeCadSurfaceGeometryType } from './localCadFeature';
 
-export type CadFaceSelectionMode = 'off' | 'click' | 'edge' | 'box';
+export type CadFaceSelectionMode = 'off' | 'click' | 'edge' | 'edge-chain' | 'box';
 
 export interface CadSelectionVector {
   x: number;
@@ -71,6 +71,12 @@ export interface CadSelectedEdge {
   samplePointsMm: Array<[number, number, number]>;
 }
 
+export interface CadSelectedEdgeTarget {
+  face: CadSelectedFace;
+  edge: CadSelectedEdge;
+  hit: CadFaceSelectionHit;
+}
+
 export interface CadSelectionCameraContext {
   positionMm: CadSelectionVector;
   projectionMatrix: number[];
@@ -95,6 +101,8 @@ export interface CadFaceSelectionContext {
   partBoundsMm: Record<string, { x: number; y: number; z: number }>;
   faces: CadSelectedFace[];
   edge?: CadSelectedEdge | null;
+  /** 手工多选边链的精确目标；每一项都绑定所属稳定面、稳定边和独立 OpenCascade 命中。 */
+  edgeSelections?: CadSelectedEdgeTarget[];
   hit: CadFaceSelectionHit | null;
   camera: CadSelectionCameraContext;
   screenshot: CadSelectionScreenshot | null;

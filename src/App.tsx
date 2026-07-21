@@ -302,6 +302,14 @@ function App() {
               <Wrench size={15} /> 点击选边
             </button>
             <button
+              className={`cad-face-tool-button ${cadFaceSelectionMode === 'edge-chain' ? 'active' : ''}`}
+              title="逐条点击加入或移除稳定 CAD 边，形成一条开放或闭合的手工边链"
+              disabled={!canSelectCadFaces}
+              onClick={() => setCadFaceSelectionMode(cadFaceSelectionMode === 'edge-chain' ? 'off' : 'edge-chain')}
+            >
+              <Wrench size={15} /> 多选边链
+            </button>
+            <button
               className={`cad-face-tool-button ${cadFaceSelectionMode === 'box' ? 'active' : ''}`}
               title="拖动框选多个稳定 CAD 面，并附带框选截图交给 Codex"
               disabled={!canSelectCadFaces}

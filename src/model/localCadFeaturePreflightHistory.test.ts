@@ -16,6 +16,7 @@ function request(overrides: Partial<LocalCadFeatureRequest> = {}): LocalCadFeatu
     partId: 'part-a',
     stableFaceId: 'face-a',
     stableEdgeId: null,
+    edgeTargets: [],
     operation: 'cut-cylinder',
     center: { xMm: 1, yMm: 2, zMm: 3 },
     hitNormal: { x: 0, y: 0, z: 1 },

@@ -65,7 +65,9 @@ function describePreflightOperation(record: LocalCadFeaturePreflightRecord) {
     'fillet-edge-loop': '平面边界整圈圆角',
     'chamfer-edge-loop': '平面边界整圈倒角',
     'fillet-edge-chain': '切线连续边链圆角',
-    'chamfer-edge-chain': '切线连续边链倒角'
+    'chamfer-edge-chain': '切线连续边链倒角',
+    'fillet-edge-manual-chain': '手工多选边链圆角',
+    'chamfer-edge-manual-chain': '手工多选边链倒角'
   } as const)[record.request.operation];
 }
 

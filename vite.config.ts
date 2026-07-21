@@ -453,6 +453,7 @@ function runLocalCadFeatureWorker(body: {
   partId?: string;
   stableFaceId?: string;
   stableEdgeId?: string | null;
+  edgeTargets?: unknown;
   operation?: string;
   centerXmm?: number;
   centerYmm?: number;
@@ -475,7 +476,7 @@ function runLocalCadFeatureWorker(body: {
   command?: string;
   previewOnly?: boolean;
 }) {
-  const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'];
+  const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain', 'fillet-edge-manual-chain', 'chamfer-edge-manual-chain'];
   if (!operations.includes(body.operation ?? '')) throw new Error('稳定 CAD 局部特征操作无效');
   const identifiers = [body.selectionRevision, body.partId, body.stableFaceId];
   if (identifiers.some((value) => typeof value !== 'string' || !value.trim() || Array.from(value).length > 200)) {
@@ -498,7 +499,8 @@ function runLocalCadFeatureWorker(body: {
   }
   const cylinder = body.operation === 'add-cylinder' || body.operation === 'cut-cylinder';
   const wholeFace = body.operation === 'offset-face-outward' || body.operation === 'offset-face-inward';
-  const edgeFeature = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(body.operation!);
+  const manualEdgeChainFeature = ['fillet-edge-manual-chain', 'chamfer-edge-manual-chain'].includes(body.operation!);
+  const edgeFeature = manualEdgeChainFeature || ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(body.operation!);
   const edgeLoopFeature = body.operation === 'fillet-edge-loop' || body.operation === 'chamfer-edge-loop';
   const curvedFace = body.surfaceGeometryType !== 'PLANE';
   if (body.previewOnly !== undefined && typeof body.previewOnly !== 'boolean') {
@@ -528,8 +530,40 @@ function runLocalCadFeatureWorker(body: {
     const tangentLength = Math.hypot(body.surfaceTangentUx!, body.surfaceTangentUy!, body.surfaceTangentUz!);
     if (tangentLength < 0.5) throw new Error('曲面方向轮廓的 OpenCascade 真实 U 切向已退化，请重新点击目标面');
   }
+  const edgeTargets = Array.isArray(body.edgeTargets) ? body.edgeTargets : [];
+  if (manualEdgeChainFeature) {
+    if (body.stableEdgeId != null || edgeTargets.length < 2 || edgeTargets.length > 64
+      || edgeTargets.some((target) => !target || typeof target !== 'object')) {
+      throw new Error('手工多选边链必须携带 2 至 64 条逐边精确目标，且不能携带单一种子边 ID');
+    }
+    const stableKeys = new Set<string>();
+    for (let index = 0; index < edgeTargets.length; index += 1) {
+      const target = edgeTargets[index];
+      const value = target as Record<string, unknown>;
+      const stableFaceId = typeof value.stableFaceId === 'string' ? value.stableFaceId.trim() : '';
+      const stableEdgeId = typeof value.stableEdgeId === 'string' ? value.stableEdgeId.trim() : '';
+      const center = value.center && typeof value.center === 'object' ? value.center as Record<string, unknown> : null;
+      const hitNormal = value.hitNormal && typeof value.hitNormal === 'object' ? value.hitNormal as Record<string, unknown> : null;
+      const surfaceUv = value.surfaceUv && typeof value.surfaceUv === 'object' ? value.surfaceUv as Record<string, unknown> : null;
+      const geometryType = typeof value.surfaceGeometryType === 'string' ? value.surfaceGeometryType.trim() : '';
+      const numbers = [center?.xMm, center?.yMm, center?.zMm, hitNormal?.x, hitNormal?.y, hitNormal?.z, surfaceUv?.u, surfaceUv?.v];
+      if (!stableFaceId || !stableEdgeId || stableFaceId.length > 200 || stableEdgeId.length > 200
+        || !geometryType || geometryType.length > 100
+        || numbers.some((number) => typeof number !== 'number' || !Number.isFinite(number))) {
+        throw new Error(`手工边链第 ${index + 1} 条逐边精确目标格式无效`);
+      }
+      const stableKey = `${stableFaceId}\u0000${stableEdgeId}`;
+      if (stableKeys.has(stableKey)) throw new Error('手工多选边链不能包含重复稳定边');
+      stableKeys.add(stableKey);
+    }
+    if ((edgeTargets[0] as Record<string, unknown>).stableFaceId !== body.stableFaceId) {
+      throw new Error('手工边链首条目标必须与请求中的稳定面 ID 一致');
+    }
+  } else if (edgeTargets.length) {
+    throw new Error('非手工边链操作不能携带逐边目标列表');
+  }
   if (edgeFeature) {
-    if (typeof body.stableEdgeId !== 'string' || !body.stableEdgeId.trim() || Array.from(body.stableEdgeId).length > 200) {
+    if (!manualEdgeChainFeature && (typeof body.stableEdgeId !== 'string' || !body.stableEdgeId.trim() || Array.from(body.stableEdgeId).length > 200)) {
       throw new Error('稳定 CAD 边选择标识无效，请重新选择目标边');
     }
     if (body.depthMm! > 50 || body.radiusMm != null || body.widthMm != null || body.heightMm != null || body.lengthMm != null || Math.abs(body.rotationDeg!) > 1e-9) {
@@ -566,7 +600,8 @@ function runLocalCadFeatureWorker(body: {
     '--surface-geometry-type', body.surfaceGeometryType!.trim(), '--surface-u', String(body.surfaceU), '--surface-v', String(body.surfaceV),
     '--depth', String(body.depthMm), '--rotation', String(body.rotationDeg), '--command', body.command ?? ''
   ];
-  if (edgeFeature) arguments_.push('--stable-edge-id', body.stableEdgeId!.trim());
+  if (edgeFeature && !manualEdgeChainFeature) arguments_.push('--stable-edge-id', body.stableEdgeId!.trim());
+  if (manualEdgeChainFeature) arguments_.push('--edge-targets-json', JSON.stringify(edgeTargets));
   if (tangentValueCount === 3) {
     arguments_.push(
       '--surface-tangent-u-x', String(body.surfaceTangentUx),

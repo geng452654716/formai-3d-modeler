@@ -629,11 +629,73 @@ def _replay_local_features(
             surface_tangent_u = _optional_record_vector(record, "surfaceTangentU", f"{label}曲面 U 切向")
             if surface_geometry_type != "PLANE" and surface_uv is None:
                 raise ValueError("曲面局部特征记录缺少真实 UV")
-            if operation in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"):
-                stable_edge_id = str(record.get("stableEdgeId", "")).strip()
-                validate_edge_feature_inputs(
-                    operation, stable_face_id, stable_edge_id, center, normal, depth_mm
-                )
+            manual_edge_chain_operation = operation in (
+                "fillet-edge-manual-chain", "chamfer-edge-manual-chain"
+            )
+            if manual_edge_chain_operation or operation in (
+                "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop",
+                "fillet-edge-chain", "chamfer-edge-chain",
+            ):
+                stable_edge_id = str(record.get("stableEdgeId") or "").strip()
+                manual_edge_targets: list[dict[str, Any]] | None = None
+                if manual_edge_chain_operation:
+                    if stable_edge_id:
+                        raise ValueError("手工多选边链记录不能携带单一种子边 ID")
+                    raw_edge_targets = record.get("edgeTargets")
+                    if not isinstance(raw_edge_targets, list) or not 2 <= len(raw_edge_targets) <= 64:
+                        raise ValueError("手工多选边链记录必须包含 2 至 64 条逐边目标")
+                    manual_edge_targets = []
+                    stable_keys: set[tuple[str, str]] = set()
+                    for target_index, target in enumerate(raw_edge_targets):
+                        target_label = f"{label}第 {target_index + 1} 条手工边"
+                        if not isinstance(target, dict):
+                            raise ValueError(f"{target_label}格式无效")
+                        face_id = str(target.get("stableFaceId", "")).strip()
+                        edge_id = str(target.get("stableEdgeId", "")).strip()
+                        key = (face_id, edge_id)
+                        if not face_id or not edge_id:
+                            raise ValueError(f"{target_label}缺少稳定面或稳定边 ID")
+                        if key in stable_keys:
+                            raise ValueError("手工多选边链记录包含重复稳定边")
+                        stable_keys.add(key)
+                        target_center = _record_vector(target, "centerMm", f"{target_label}记录中心")
+                        target_normal = _record_vector(target, "outwardNormal", f"{target_label}记录法线")
+                        target_uv = _record_surface_uv(target, f"{target_label}曲面 UV")
+                        target_face_snapshot = target.get("targetFace")
+                        target_edge_snapshot = target.get("targetEdge")
+                        if not isinstance(target_face_snapshot, dict) or not isinstance(target_edge_snapshot, dict):
+                            raise ValueError(f"{target_label}缺少稳定面或稳定边几何签名快照")
+                        target_geometry_type = str(
+                            target.get("surfaceGeometryType")
+                            or target_face_snapshot.get("geometryType")
+                            or ""
+                        ).strip()
+                        if not target_geometry_type:
+                            raise ValueError(f"{target_label}缺少曲面类型")
+                        if target_uv is None:
+                            raise ValueError(f"{target_label}缺少真实 UV")
+                        manual_edge_targets.append({
+                            "stableFaceId": face_id,
+                            "stableEdgeId": edge_id,
+                            "center": {
+                                "xMm": target_center[0], "yMm": target_center[1], "zMm": target_center[2],
+                            },
+                            "hitNormal": {
+                                "x": target_normal[0], "y": target_normal[1], "z": target_normal[2],
+                            },
+                            "surfaceGeometryType": target_geometry_type,
+                            "surfaceUv": {"u": target_uv[0], "v": target_uv[1]},
+                            "targetFace": target_face_snapshot,
+                            "targetEdge": target_edge_snapshot,
+                        })
+                    if manual_edge_targets[0]["stableFaceId"] != stable_face_id:
+                        raise ValueError("手工边链首条目标与记录中的稳定面 ID 不一致")
+                else:
+                    if record.get("edgeTargets") not in (None, []):
+                        raise ValueError("非手工边链记录不能携带逐边目标")
+                    validate_edge_feature_inputs(
+                        operation, stable_face_id, stable_edge_id, center, normal, depth_mm
+                    )
                 if any(value is not None for value in (radius_mm, width_mm, height_mm, length_mm)):
                     raise ValueError("圆角或倒角记录不能携带平面轮廓尺寸")
                 if abs(rotation_deg) > 1e-9:
@@ -647,6 +709,7 @@ def _replay_local_features(
                     target_face_descriptor=target_face,
                     target_edge_descriptor=target_edge,
                     surface_uv=surface_uv,
+                    manual_edge_targets=manual_edge_targets,
                 )
             else:
                 validate_planar_feature_inputs(
@@ -693,6 +756,24 @@ def _replay_local_features(
                 "replayedRevision": replay_revision,
                 "failureReason": None,
             }
+            if manual_edge_chain_operation:
+                replayed_record["edgeTargets"] = [
+                    {
+                        "stableFaceId": target["stableFaceId"],
+                        "stableEdgeId": target["stableEdgeId"],
+                        "centerMm": {
+                            "x": float(target["center"]["xMm"]),
+                            "y": float(target["center"]["yMm"]),
+                            "z": float(target["center"]["zMm"]),
+                        },
+                        "outwardNormal": target["outwardNormal"],
+                        "surfaceGeometryType": target["surfaceGeometryType"],
+                        "surfaceUv": target["surfaceUv"],
+                        "targetFace": target["targetFace"],
+                        "targetEdge": target["targetEdge"],
+                    }
+                    for target in application["targetEdges"]
+                ]
             curved_diagnostics = build_curved_feature_diagnostics(
                 operation,
                 surface_geometry_type,

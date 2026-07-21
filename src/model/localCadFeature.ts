@@ -15,13 +15,16 @@ export type LocalCadFeatureOperation =
   | 'fillet-edge-loop'
   | 'chamfer-edge-loop'
   | 'fillet-edge-chain'
-  | 'chamfer-edge-chain';
+  | 'chamfer-edge-chain'
+  | 'fillet-edge-manual-chain'
+  | 'chamfer-edge-manual-chain';
 
 export interface CodexLocalCadFeaturePlan {
   operation: LocalCadFeatureOperation;
   partId: string;
   stableFaceId: string;
   stableEdgeId?: string | null;
+  selectedEdges?: Array<{ stableFaceId: string; stableEdgeId: string }>;
   radiusMm?: number | null;
   widthMm?: number | null;
   heightMm?: number | null;
@@ -37,6 +40,15 @@ export interface LocalCadFeatureRequest {
   partId: string;
   stableFaceId: string;
   stableEdgeId: string | null;
+  /** 手工边链执行与安全重放使用的逐边精确目标。 */
+  edgeTargets: Array<{
+    stableFaceId: string;
+    stableEdgeId: string;
+    center: { xMm: number; yMm: number; zMm: number };
+    hitNormal: { x: number; y: number; z: number };
+    surfaceGeometryType: string;
+    surfaceUv: { u: number; v: number };
+  }>;
   operation: LocalCadFeatureOperation;
   center: { xMm: number; yMm: number; zMm: number };
   hitNormal: { x: number; y: number; z: number };
@@ -125,6 +137,7 @@ export interface LocalCadFeatureResult {
   partId: string;
   stableFaceId: string;
   stableEdgeId?: string | null;
+  selectedEdges?: Array<{ stableFaceId: string; stableEdgeId: string }>;
   stableFaceStatus: 'inherited' | 'disappeared';
   stableEdgeStatus?: 'inherited' | 'disappeared' | null;
   outputs: string[];
@@ -147,7 +160,7 @@ export interface LocalCadFeatureResult {
     maximumSurfacePointDistanceMm?: number | null;
     /** OpenCascade 实际参与圆角或倒角的边数量。 */
     affectedEdgeCount?: number | null;
-    edgeScope?: 'single' | 'loop' | 'tangent-chain' | null;
+    edgeScope?: 'single' | 'loop' | 'tangent-chain' | 'manual-chain' | null;
     /** OpenCascade 在当前曲面 UV 点击位置计算的单位 U 切向。 */
     surfaceTangentU?: { x: number; y: number; z: number } | null;
     maximumAbsCurvaturePerMm?: number | null;
@@ -330,16 +343,46 @@ function finiteVector(vector: { x: number; y: number; z: number }) {
 }
 
 function validatedSelection(selection: CadFaceSelectionContext) {
-  if (!['click', 'edge'].includes(selection.selectionMode) || selection.faces.length !== 1 || !selection.hit) {
-    throw new Error('稳定 CAD 局部特征只支持点击选择单个稳定面或单条边，不支持框选多面');
+  if (!['click', 'edge', 'edge-chain'].includes(selection.selectionMode)) {
+    throw new Error('稳定 CAD 局部特征只支持点击单面、单边或手工多选边链，不支持框选多面');
+  }
+  if (!selection.revision.trim()) {
+    throw new Error('当前稳定 CAD 局部选择缺少 CAD 修订号，请重新生成并选择目标');
+  }
+  if (selection.selectionMode === 'edge-chain') {
+    const targets = selection.edgeSelections ?? [];
+    if (targets.length < 2 || targets.length > 64) {
+      throw new Error('手工多选边链必须包含 2 至 64 条稳定边');
+    }
+    const partIds = new Set(targets.map((target) => target.edge.partId));
+    if (partIds.size !== 1) throw new Error('手工多选边链只能选择同一个 CAD 零件中的边');
+    const keys = new Set<string>();
+    targets.forEach((target) => {
+      const { face, edge, hit } = target;
+      const key = `${face.stableId}::${edge.stableEdgeId}`;
+      if (keys.has(key)) throw new Error('手工多选边链包含重复稳定边，请移除重复目标');
+      keys.add(key);
+      if (face.partId !== edge.partId || face.partId !== hit.partId
+        || face.stableId !== edge.stableFaceId || face.stableId !== hit.stableId
+        || edge.stableEdgeId !== hit.stableEdgeId) {
+        throw new Error('手工边链中的稳定面、稳定边与点击命中不一致，请重新选择');
+      }
+      if (!finiteVector(hit.pointMm) || !finiteVector(hit.normal)
+        || hit.resolutionStatus !== 'resolved' || hit.precision !== 'opencascade'
+        || !hit.surfaceUv || !Number.isFinite(hit.surfaceUv.u) || !Number.isFinite(hit.surfaceUv.v)) {
+        throw new Error('手工边链中存在尚未完成 OpenCascade 精确解析的边，请等待解析完成');
+      }
+    });
+    const first = targets[0];
+    return { face: first.face, hit: first.hit, edge: first.edge, edgeTargets: targets };
+  }
+  if (selection.faces.length !== 1 || !selection.hit) {
+    throw new Error('稳定 CAD 局部特征只支持点击选择单个稳定面或单条边');
   }
   const face = selection.faces[0];
   const hit = selection.hit;
   if (face.partId !== hit.partId || face.stableId !== hit.stableId) {
     throw new Error('稳定面描述与点击命中不一致，请重新点击目标面或目标边');
-  }
-  if (!selection.revision.trim()) {
-    throw new Error('当前稳定 CAD 局部选择缺少 CAD 修订号，请重新生成并选择目标');
   }
   if (!finiteVector(hit.pointMm) || !finiteVector(hit.normal)) {
     throw new Error('点击坐标或法线无效，请重新点击目标面或目标边');
@@ -356,7 +399,7 @@ function validatedSelection(selection: CadFaceSelectionContext) {
       throw new Error('稳定边描述与点击命中 ID 不一致，请重新点击目标边');
     }
   }
-  return { face, hit, edge: selection.edge ?? null };
+  return { face, hit, edge: selection.edge ?? null, edgeTargets: [] };
 }
 
 function dimension(value: number | null | undefined) {
@@ -367,10 +410,12 @@ function validatePlanDimensions(plan: CodexLocalCadFeaturePlan) {
   const supported: LocalCadFeatureOperation[] = [
     'add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot',
     'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge',
-    'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'
+    'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain',
+    'fillet-edge-manual-chain', 'chamfer-edge-manual-chain'
   ];
   if (!supported.includes(plan.operation)) throw new Error('Codex 返回了未知的稳定 CAD 局部特征操作');
-  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(plan.operation);
+  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain',
+    'fillet-edge-manual-chain', 'chamfer-edge-manual-chain'].includes(plan.operation);
   const maximumDepth = edgeOperation ? 50 : 200;
   if (!Number.isFinite(plan.depthMm) || plan.depthMm < 0.2 || plan.depthMm > maximumDepth) {
     throw new Error(`Codex 返回的${edgeOperation ? '圆角半径或倒角距离' : '局部修改深度'}必须在 0.20 至 ${maximumDepth.toFixed(2)} 毫米之间`);
@@ -413,20 +458,33 @@ function validatePlanDimensions(plan: CodexLocalCadFeaturePlan) {
 }
 
 function requestFromPlan(selection: CadFaceSelectionContext, command: string, plan: CodexLocalCadFeaturePlan, summary: string): LocalCadFeatureRequest {
-  const { face, hit, edge } = validatedSelection(selection);
+  const { face, hit, edge, edgeTargets } = validatedSelection(selection);
   validatePlanDimensions(plan);
   if (plan.partId !== face.partId || plan.stableFaceId !== face.stableId) {
-    throw new Error('Codex 计划试图修改当前选择之外的零件或稳定面，已拒绝执行');
+    throw new Error('Codex 计划试图修改当前选择之外的零件或首条稳定面，已拒绝执行');
   }
-  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(plan.operation);
-  if (edgeOperation && (!edge || plan.stableEdgeId !== edge.stableEdgeId)) {
+  const manualOperation = ['fillet-edge-manual-chain', 'chamfer-edge-manual-chain'].includes(plan.operation);
+  const edgeOperation = manualOperation || ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(plan.operation);
+  if (manualOperation) {
+    if (selection.selectionMode !== 'edge-chain') throw new Error('手工边链圆角或倒角必须先使用“多选边链”工具');
+    const expected = edgeTargets.map((target) => ({
+      stableFaceId: target.face.stableId,
+      stableEdgeId: target.edge.stableEdgeId
+    }));
+    if (JSON.stringify(plan.selectedEdges ?? []) !== JSON.stringify(expected)) {
+      throw new Error('Codex 计划增删、排序或替换了手工选择边列表，已拒绝执行');
+    }
+    if (plan.stableEdgeId !== null && plan.stableEdgeId !== undefined) {
+      throw new Error('手工边链计划不能再携带单一种子稳定边 ID');
+    }
+  } else if (edgeOperation && (!edge || plan.stableEdgeId !== edge.stableEdgeId)) {
     throw new Error('Codex 计划试图修改当前选择之外的稳定边，已拒绝执行');
   }
-  if (!edgeOperation && selection.selectionMode === 'edge') {
-    throw new Error('当前选择的是种子稳定边，只允许执行单边、切线连续边链或平面边界整圈圆角与倒角');
+  if (!edgeOperation && (selection.selectionMode === 'edge' || selection.selectionMode === 'edge-chain')) {
+    throw new Error('当前选择的是稳定边，只允许执行单边、自动边链、整圈或手工边链圆角与倒角');
   }
-  if (edgeOperation && selection.selectionMode !== 'edge') {
-    throw new Error('圆角或倒角必须先使用“点击选边”选择一条稳定 CAD 边');
+  if (edgeOperation && !manualOperation && selection.selectionMode !== 'edge') {
+    throw new Error('单边、自动切线链或整圈圆角倒角必须先使用“点击选边”选择种子边');
   }
   const curvedFace = face.geometryType !== 'PLANE';
   const edgeLoopOperation = plan.operation === 'fillet-edge-loop' || plan.operation === 'chamfer-edge-loop';
@@ -442,7 +500,16 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
   }
   return {
     sourceKind: 'cad-part', selectionRevision: selection.revision, partId: face.partId,
-    stableFaceId: face.stableId, stableEdgeId: edgeOperation ? edge!.stableEdgeId : null, operation: plan.operation,
+    stableFaceId: face.stableId, stableEdgeId: edgeOperation && !manualOperation ? edge!.stableEdgeId : null,
+    edgeTargets: manualOperation ? edgeTargets.map((target) => ({
+      stableFaceId: target.face.stableId,
+      stableEdgeId: target.edge.stableEdgeId,
+      center: { xMm: target.hit.pointMm.x, yMm: target.hit.pointMm.y, zMm: target.hit.pointMm.z },
+      hitNormal: { ...target.hit.normal },
+      surfaceGeometryType: target.face.geometryType,
+      surfaceUv: { u: target.hit.surfaceUv!.u, v: target.hit.surfaceUv!.v }
+    })) : [],
+    operation: plan.operation,
     center: { xMm: hit.pointMm.x, yMm: hit.pointMm.y, zMm: hit.pointMm.z },
     hitNormal: { ...hit.normal }, surfaceTangentU: hit.surfaceTangentU ? { ...hit.surfaceTangentU } : null,
     surfaceGeometryType: face.geometryType, surfaceUv: { u: hit.surfaceUv!.u, v: hit.surfaceUv!.v }, radiusMm: dimension(plan.radiusMm), widthMm: dimension(plan.widthMm),
@@ -511,32 +578,42 @@ function parsePlanarCommand(command: string, partId: string, stableFaceId: strin
   return { operation: isCut ? 'cut-rectangle' : 'add-rectangle', partId, stableFaceId, radiusMm: null, widthMm, heightMm, lengthMm: null, depthMm, rotationDeg, reason: `${isCut ? '切除矩形孔' : '增加矩形凸台'} ${widthMm}×${heightMm} 毫米` };
 }
 
-function parseEdgeCommand(command: string, partId: string, stableFaceId: string, stableEdgeId: string): CodexLocalCadFeaturePlan {
+function parseEdgeCommand(command: string, partId: string, stableFaceId: string, stableEdgeId: string | null, selectedEdges?: Array<{ stableFaceId: string; stableEdgeId: string }>): CodexLocalCadFeaturePlan {
   const trimmed = command.trim();
   const fillet = /圆角|圆滑|倒圆/.test(trimmed);
   const chamfer = /倒角|切角|斜角/.test(trimmed);
   if (fillet === chamfer) throw new Error('请明确说明要对所选边执行圆角还是倒角');
   const depthMm = numberFor(trimmed, fillet ? ['圆角(?:半径)?', '半径', 'R'] : ['倒角(?:距离)?', '距离', '边长']);
   if (depthMm === null) throw new Error(fillet ? '请提供圆角半径，例如“将这条边做 2 毫米圆角”' : '请提供倒角距离，例如“将这条边做 1 毫米倒角”');
+  const manualChain = Boolean(selectedEdges?.length);
   const wholeLoop = /这圈|这一圈|整圈|一圈|整周|周边|轮廓边|边界圈/.test(trimmed);
   const tangentChain = /切线链|相切边|切线连续|连续边链|沿切线|顺着切线/.test(trimmed);
   if (wholeLoop && tangentChain) throw new Error('请明确选择“平面边界整圈”或“切线连续边链”，不能同时要求两种传播范围');
-  const scope = wholeLoop ? 'loop' : tangentChain ? 'chain' : 'single';
+  if (manualChain && (wholeLoop || tangentChain)) throw new Error('已使用“多选边链”工具，请不要再要求自动整圈或切线传播');
+  const scope = manualChain ? 'manual' : wholeLoop ? 'loop' : tangentChain ? 'chain' : 'single';
   return {
     operation: fillet
-      ? scope === 'loop' ? 'fillet-edge-loop' : scope === 'chain' ? 'fillet-edge-chain' : 'fillet-edge'
-      : scope === 'loop' ? 'chamfer-edge-loop' : scope === 'chain' ? 'chamfer-edge-chain' : 'chamfer-edge',
-    partId, stableFaceId, stableEdgeId,
+      ? scope === 'manual' ? 'fillet-edge-manual-chain' : scope === 'loop' ? 'fillet-edge-loop' : scope === 'chain' ? 'fillet-edge-chain' : 'fillet-edge'
+      : scope === 'manual' ? 'chamfer-edge-manual-chain' : scope === 'loop' ? 'chamfer-edge-loop' : scope === 'chain' ? 'chamfer-edge-chain' : 'chamfer-edge',
+    partId, stableFaceId, stableEdgeId, selectedEdges,
     radiusMm: null, widthMm: null, heightMm: null, lengthMm: null, depthMm, rotationDeg: 0,
-    reason: `${scope === 'loop' ? '平面边界整圈' : scope === 'chain' ? '切线连续边链' : '单边'}${fillet ? '圆角' : '倒角'} ${depthMm} 毫米`
+    reason: `${scope === 'manual' ? '手工多选边链' : scope === 'loop' ? '平面边界整圈' : scope === 'chain' ? '切线连续边链' : '单边'}${fillet ? '圆角' : '倒角'} ${depthMm} 毫米`
   };
 }
 
 /** Codex 不可用时使用的确定性中文解析入口。 */
 export function buildLocalCadFeatureRequest(selection: CadFaceSelectionContext, command: string): LocalCadFeatureRequest {
-  const { face, edge } = validatedSelection(selection);
-  const plan = selection.selectionMode === 'edge'
-    ? parseEdgeCommand(command, face.partId, face.stableId, edge!.stableEdgeId)
+  const { face, edge, edgeTargets } = validatedSelection(selection);
+  const plan = selection.selectionMode === 'edge' || selection.selectionMode === 'edge-chain'
+    ? parseEdgeCommand(
+        command,
+        face.partId,
+        face.stableId,
+        selection.selectionMode === 'edge' ? edge!.stableEdgeId : null,
+        selection.selectionMode === 'edge-chain'
+          ? edgeTargets.map((target) => ({ stableFaceId: target.face.stableId, stableEdgeId: target.edge.stableEdgeId }))
+          : undefined
+      )
     : parsePlanarCommand(command, face.partId, face.stableId);
   return requestFromPlan(selection, command, plan, plan.reason);
 }
