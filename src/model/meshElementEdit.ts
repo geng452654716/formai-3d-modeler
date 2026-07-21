@@ -3,6 +3,8 @@ import type { ModelBoundsMm, ImportedStlModel } from './importedModel';
 export type MeshElementKind = 'vertex' | 'edge' | 'face';
 export type MeshElementEditMode = 'off' | MeshElementKind;
 export type MeshElementSelectionMethod = 'click' | 'box';
+export type MeshTransformAxis = 'x' | 'y' | 'z';
+export type MeshElementTransformKind = 'move' | 'rotate' | 'scale';
 
 export interface MeshPointMm {
   x: number;
@@ -46,6 +48,17 @@ export interface MeshScreenProjection {
   depth: number;
 }
 
+export type MeshElementTransformOperation =
+  | { kind: 'move'; displacementMm: MeshPointMm }
+  | { kind: 'rotate'; axis: MeshTransformAxis; angleDegrees: number }
+  | { kind: 'scale'; scaleFactor: number };
+
+export interface MeshElementTransformRequest {
+  selection: MeshElementSelectionSet;
+  operation: MeshElementTransformOperation;
+}
+
+/** 兼容既有位移调用的请求别名。 */
 export interface MeshElementMoveRequest {
   selection: MeshElementSelectionSet;
   displacementMm: MeshPointMm;
@@ -59,7 +72,12 @@ export interface MeshElementEditResult {
   kind: MeshElementKind;
   selectionMethod: MeshElementSelectionMethod;
   selectedElementCount: number;
-  displacementMm: MeshPointMm;
+  operation: MeshElementTransformKind;
+  pivotMm: MeshPointMm;
+  displacementMm?: MeshPointMm;
+  rotationAxis?: MeshTransformAxis;
+  rotationDegrees?: number;
+  scaleFactor?: number;
   movedCoordinateCount: number;
   movedVertexOccurrenceCount: number;
   sourceFile: string;
@@ -179,6 +197,19 @@ export function selectedMeshElementPoints(selection: MeshElementSelection) {
     return [selection.triangleMm[start], selection.triangleMm[end]];
   }
   return selection.triangleMm;
+}
+
+/** 汇总选择集合中的唯一源坐标，作为统一旋转和缩放的稳定输入。 */
+export function uniqueMeshElementSelectionPoints(selection: MeshElementSelectionSet) {
+  return Array.from(new Map(
+    selection.elements.flatMap(selectedMeshElementPoints).map((point) => [coordinateKey(point), point])
+  ).values());
+}
+
+/** 计算选择集合唯一源坐标的几何中心。 */
+export function meshElementSelectionPivot(selection: MeshElementSelectionSet) {
+  const points = uniqueMeshElementSelectionPoints(selection);
+  return points.length ? averagePoints(points) : null;
 }
 
 

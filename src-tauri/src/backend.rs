@@ -1511,6 +1511,77 @@ fn validate_mesh_element_selections(
     serde_json::to_string(selections).map_err(|error| format!("无法序列化网格元素选择：{error}"))
 }
 
+#[derive(Debug, PartialEq)]
+struct MeshElementTransformParameters {
+    displacement: [f64; 3],
+    rotation_axis: String,
+    rotation_degrees: f64,
+    scale_factor: f64,
+}
+
+/// 统一校验网格元素变换参数，并生成传递给 Python Worker 的完整参数集合。
+fn validate_mesh_element_transform(
+    operation: &str,
+    delta_xmm: Option<f64>,
+    delta_ymm: Option<f64>,
+    delta_zmm: Option<f64>,
+    rotation_axis: Option<String>,
+    rotation_degrees: Option<f64>,
+    scale_factor: Option<f64>,
+) -> Result<MeshElementTransformParameters, String> {
+    let displacement = [
+        delta_xmm.unwrap_or(0.0),
+        delta_ymm.unwrap_or(0.0),
+        delta_zmm.unwrap_or(0.0),
+    ];
+    let rotation_axis = rotation_axis.unwrap_or_default();
+    let rotation_degrees = rotation_degrees.unwrap_or(0.0);
+    let scale_factor = scale_factor.unwrap_or(1.0);
+    match operation {
+        "move" => {
+            if !displacement
+                .iter()
+                .all(|value| value.is_finite() && value.abs() <= 500.0)
+            {
+                return Err("网格元素每轴位移必须是 -500 至 500 毫米的有限数值".to_string());
+            }
+            if displacement.iter().all(|value| value.abs() < 1e-9) {
+                return Err("请至少输入一个非零位移".to_string());
+            }
+        }
+        "rotate" => {
+            if !matches!(rotation_axis.as_str(), "x" | "y" | "z") {
+                return Err("旋转轴只能是源模型 X、Y 或 Z 轴".to_string());
+            }
+            if !rotation_degrees.is_finite()
+                || rotation_degrees.abs() > 180.0
+                || rotation_degrees.abs() < 1e-9
+            {
+                return Err("旋转角度必须是 -180° 至 180° 之间的非零有限数值".to_string());
+            }
+        }
+        "scale" => {
+            if !scale_factor.is_finite()
+                || !(0.25..=4.0).contains(&scale_factor)
+                || (scale_factor - 1.0).abs() < 1e-9
+            {
+                return Err("缩放比例必须在 0.25 至 4 倍之间，且不能等于 1".to_string());
+            }
+        }
+        _ => return Err("网格元素操作只能是位移、旋转或缩放".to_string()),
+    }
+    Ok(MeshElementTransformParameters {
+        displacement,
+        rotation_axis: if rotation_axis.is_empty() {
+            "z".to_string()
+        } else {
+            rotation_axis
+        },
+        rotation_degrees,
+        scale_factor,
+    })
+}
+
 #[tauri::command]
 pub async fn run_mesh_element_edit(
     source_part_id: String,
@@ -1518,9 +1589,13 @@ pub async fn run_mesh_element_edit(
     element_kind: String,
     selection_method: String,
     selections: Vec<Value>,
-    delta_xmm: f64,
-    delta_ymm: f64,
-    delta_zmm: f64,
+    operation: String,
+    delta_xmm: Option<f64>,
+    delta_ymm: Option<f64>,
+    delta_zmm: Option<f64>,
+    rotation_axis: Option<String>,
+    rotation_degrees: Option<f64>,
+    scale_factor: Option<f64>,
     state: tauri::State<'_, BackendState>,
 ) -> Result<Value, String> {
     let state = state.inner().clone();
@@ -1537,16 +1612,15 @@ pub async fn run_mesh_element_edit(
         }
         let selections_json =
             validate_mesh_element_selections(&element_kind, &selection_method, &selections)?;
-        let displacement = [delta_xmm, delta_ymm, delta_zmm];
-        if !displacement
-            .iter()
-            .all(|value| value.is_finite() && value.abs() <= 500.0)
-        {
-            return Err("网格元素每轴位移必须是 -500 至 500 毫米的有限数值".to_string());
-        }
-        if displacement.iter().all(|value| value.abs() < 1e-9) {
-            return Err("请至少输入一个非零位移".to_string());
-        }
+        let transform = validate_mesh_element_transform(
+            &operation,
+            delta_xmm,
+            delta_ymm,
+            delta_zmm,
+            rotation_axis,
+            rotation_degrees,
+            scale_factor,
+        )?;
         if !state.paths.mesh_element_edit_worker_path.is_file() {
             return Err(format!(
                 "未找到网格元素编辑 Worker：{}",
@@ -1573,13 +1647,21 @@ pub async fn run_mesh_element_edit(
             element_kind,
             "--selection-method".into(),
             selection_method,
+            "--operation".into(),
+            operation,
             "--selections-stdin".into(),
             "--delta-x".into(),
-            delta_xmm.to_string(),
+            transform.displacement[0].to_string(),
             "--delta-y".into(),
-            delta_ymm.to_string(),
+            transform.displacement[1].to_string(),
             "--delta-z".into(),
-            delta_zmm.to_string(),
+            transform.displacement[2].to_string(),
+            "--rotation-axis".into(),
+            transform.rotation_axis,
+            "--rotation-degrees".into(),
+            transform.rotation_degrees.to_string(),
+            "--scale-factor".into(),
+            transform.scale_factor.to_string(),
         ];
         let output = run_process_with_input(
             &state.paths.python_path,
@@ -3447,6 +3529,68 @@ mod tests {
             validate_mesh_element_selections("vertex", "click", &triangle)
                 .expect_err("超范围三角面索引必须被拒绝")
                 .contains("三角面索引超过")
+        );
+    }
+
+    #[test]
+    fn validates_mesh_element_move_rotate_and_scale_parameters() {
+        let moved =
+            validate_mesh_element_transform("move", Some(0.2), None, Some(-0.1), None, None, None)
+                .expect("有效位移应通过");
+        assert_eq!(moved.displacement, [0.2, 0.0, -0.1]);
+
+        let rotated = validate_mesh_element_transform(
+            "rotate",
+            None,
+            None,
+            None,
+            Some("z".into()),
+            Some(10.0),
+            None,
+        )
+        .expect("有效旋转应通过");
+        assert_eq!(rotated.rotation_axis, "z");
+        assert_eq!(rotated.rotation_degrees, 10.0);
+
+        let scaled =
+            validate_mesh_element_transform("scale", None, None, None, None, None, Some(0.9))
+                .expect("有效缩放应通过");
+        assert_eq!(scaled.scale_factor, 0.9);
+    }
+
+    #[test]
+    fn rejects_invalid_mesh_element_rotation_parameters() {
+        for (axis, degrees) in [
+            (Some("任意轴".into()), Some(10.0)),
+            (None, Some(10.0)),
+            (Some("x".into()), Some(0.0)),
+            (Some("y".into()), Some(180.1)),
+        ] {
+            assert!(validate_mesh_element_transform(
+                "rotate", None, None, None, axis, degrees, None
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_mesh_element_scale_and_unknown_operation() {
+        for scale_factor in [0.24, 1.0, 4.01] {
+            assert!(validate_mesh_element_transform(
+                "scale",
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(scale_factor),
+            )
+            .is_err());
+        }
+        assert!(
+            validate_mesh_element_transform("twist", None, None, None, None, None, None,)
+                .unwrap_err()
+                .contains("位移、旋转或缩放")
         );
     }
 

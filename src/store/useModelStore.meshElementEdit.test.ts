@@ -103,6 +103,8 @@ function result(overrides: Partial<MeshElementEditResult> = {}): MeshElementEdit
     kind: 'vertex',
     selectionMethod: 'click',
     selectedElementCount: 1,
+    operation: 'move',
+    pivotMm: { x: 10, y: 0, z: 0 },
     displacementMm: { x: 1, y: 0, z: 0 },
     movedCoordinateCount: 1,
     movedVertexOccurrenceCount: 3,
@@ -215,7 +217,7 @@ describe('上传 STL 网格元素批量编辑', () => {
         selectionMethod: 'click',
         elements: [selection]
       },
-      displacementMm: { x: 1, y: 0, z: 0 }
+      operation: { kind: 'move', displacementMm: { x: 1, y: 0, z: 0 } }
     });
     const state = useModelStore.getState();
     expect(state.importedStlModel?.revision).toBe('mesh-after');
@@ -245,9 +247,46 @@ describe('上传 STL 网格元素批量编辑', () => {
 
     expect(backendMocks.runMeshElementEdit).toHaveBeenCalledWith({
       selection: selectionSet,
-      displacementMm: { x: 0.2, y: 0, z: 0 }
+      operation: { kind: 'move', displacementMm: { x: 0.2, y: 0, z: 0 } }
     });
     expect(useModelStore.getState().messages.at(-1)?.content).toContain('批量移动 2 个顶点');
+  });
+
+  it('统一旋转和均匀缩放沿用选择集合、中文版本和结果消息', async () => {
+    const edgeSelection = createMeshElementSelectionSet([{ ...selection, kind: 'edge', elementIndex: 0 }], 'click')!;
+    useModelStore.getState().setMeshElementEditMode('edge');
+    useModelStore.getState().selectMeshElements(edgeSelection);
+    backendMocks.runMeshElementEdit.mockResolvedValueOnce(result({
+      kind: 'edge',
+      operation: 'rotate',
+      pivotMm: { x: 5, y: 0, z: 0 },
+      displacementMm: undefined,
+      rotationAxis: 'z',
+      rotationDegrees: 30,
+      movedCoordinateCount: 2
+    }));
+
+    await useModelStore.getState().applyMeshElementTransform({ kind: 'rotate', axis: 'z', angleDegrees: 30 });
+
+    expect(backendMocks.runMeshElementEdit).toHaveBeenCalledWith({
+      selection: edgeSelection,
+      operation: { kind: 'rotate', axis: 'z', angleDegrees: 30 }
+    });
+    expect(useModelStore.getState().versions.at(-1)?.label).toBe('统一旋转上传模型边');
+    expect(useModelStore.getState().messages.at(-1)?.content).toContain('绕几何中心的 Z 轴旋转 30°');
+
+    useModelStore.setState({ importedStlModel: model('mesh-before'), meshElementSelection: edgeSelection });
+    backendMocks.runMeshElementEdit.mockResolvedValueOnce(result({
+      kind: 'edge',
+      operation: 'scale',
+      pivotMm: { x: 5, y: 0, z: 0 },
+      displacementMm: undefined,
+      scaleFactor: 1.2,
+      movedCoordinateCount: 2
+    }));
+    await useModelStore.getState().applyMeshElementTransform({ kind: 'scale', scaleFactor: 1.2 });
+    expect(useModelStore.getState().versions.at(-1)?.label).toBe('均匀缩放上传模型边');
+    expect(useModelStore.getState().messages.at(-1)?.content).toContain('按 1.2 倍均匀缩放');
   });
 
   it('Worker 失败时保留最后有效模型和整个集合并显示中文错误', async () => {

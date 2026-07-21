@@ -53,6 +53,7 @@ import {
   type MeshElementSelection,
   type MeshElementSelectionMethod,
   type MeshElementSelectionSet,
+  type MeshElementTransformOperation,
   type MeshPointMm
 } from '../model/meshElementEdit';
 import {
@@ -200,6 +201,7 @@ interface ModelStore {
   selectMeshElements: (selection: MeshElementSelectionSet) => void;
   requestMeshElementBoxSelection: (request: MeshElementBoxSelectionRequest) => void;
   clearMeshElementSelection: () => void;
+  applyMeshElementTransform: (operation: MeshElementTransformOperation) => Promise<MeshElementEditResult | null>;
   applyMeshElementMove: (displacementMm: MeshPointMm) => Promise<MeshElementEditResult | null>;
   runManufacturingSplit: (request: ManufacturingSplitRequest) => Promise<ManufacturingSplitResult | null>;
   clearManufacturingSplit: () => void;
@@ -979,7 +981,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     meshElementBoxRequest: null,
     meshElementEditError: null
   }),
-  applyMeshElementMove: async (displacementMm) => {
+  applyMeshElementTransform: async (operation) => {
     const state = get();
     const selection = state.meshElementSelection;
     const importedModel = state.importedStlModel;
@@ -992,20 +994,21 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       return null;
     }
     if (!selection.elements.length) {
-      set({ meshElementSelection: null, meshElementEditError: '当前没有可移动的网格元素，请重新选择' });
+      set({ meshElementSelection: null, meshElementEditError: '当前没有可变换的网格元素，请重新选择' });
       return null;
     }
     const selectionCount = selection.elements.length;
+    const actionLabel = operation.kind === 'move' ? '批量移动' : operation.kind === 'rotate' ? '统一旋转' : '均匀缩放';
     set({
       meshElementEditStatus: 'editing',
       meshElementEditError: null,
       aiStatus: 'running',
-      aiActivity: `OpenCascade 正在校验并批量移动 ${selectionCount} 个${MESH_ELEMENT_LABELS[selection.kind]}`
+      aiActivity: `OpenCascade 正在校验并${actionLabel} ${selectionCount} 个${MESH_ELEMENT_LABELS[selection.kind]}`
     });
     try {
       try {
         const beforeSnapshot = await createVersionSnapshot(
-          `网格元素批量位移前-${MESH_ELEMENT_LABELS[selection.kind]}`,
+          `网格元素${actionLabel}前-${MESH_ELEMENT_LABELS[selection.kind]}`,
           { ...state.parameters, interfaceOpenings: state.interfaceOpenings },
           { modelSource: 'uploaded-stl', modelRevision: importedModel.revision }
         );
@@ -1017,7 +1020,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       } catch {
         // 前置快照失败不影响 Worker 的原子回滚安全门。
       }
-      const result = await runMeshElementEdit({ selection, displacementMm });
+      const result = await runMeshElementEdit({ selection, operation });
       set({
         importedStlModel: result.updatedModel,
         importedStlStatus: 'ready',
@@ -1043,10 +1046,10 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         aiActivity: null,
         aiError: null
       });
-      get().commitVersion(`批量移动上传模型${MESH_ELEMENT_LABELS[selection.kind]}`);
+      get().commitVersion(`${actionLabel}上传模型${MESH_ELEMENT_LABELS[selection.kind]}`);
       try {
         const afterSnapshot = await createVersionSnapshot(
-          `网格元素批量位移后-${MESH_ELEMENT_LABELS[selection.kind]}`,
+          `网格元素${actionLabel}后-${MESH_ELEMENT_LABELS[selection.kind]}`,
           { ...state.parameters, interfaceOpenings: state.interfaceOpenings },
           { modelSource: 'uploaded-stl', modelRevision: result.updatedModel.revision }
         );
@@ -1059,16 +1062,21 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         // 修改结果已经验证写回；后置快照失败只影响版本留档。
       }
       const delta = result.validation.volumeDeltaMm3;
+      const transformDetail = result.operation === 'move' && result.displacementMm
+        ? `位移 (${result.displacementMm.x}, ${result.displacementMm.y}, ${result.displacementMm.z}) 毫米`
+        : result.operation === 'rotate'
+          ? `绕几何中心的 ${result.rotationAxis?.toUpperCase()} 轴旋转 ${result.rotationDegrees}°`
+          : `以几何中心按 ${result.scaleFactor} 倍均匀缩放`;
       set((current) => ({
         messages: current.messages.concat({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `已批量移动 ${result.selectedElementCount} 个${MESH_ELEMENT_LABELS[selection.kind]}，同步更新 ${result.movedCoordinateCount} 个源坐标、${result.movedVertexOccurrenceCount} 个 STL 顶点副本；体积 ${result.validation.volumeBeforeMm3.toFixed(2)} → ${result.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过封闭性、实体有效性、退化面和 Solid 数量检查；旧拆件与壁厚分析已失效。`
+          content: `已${actionLabel} ${result.selectedElementCount} 个${MESH_ELEMENT_LABELS[selection.kind]}：${transformDetail}；同步更新 ${result.movedCoordinateCount} 个源坐标、${result.movedVertexOccurrenceCount} 个 STL 顶点副本；体积 ${result.validation.volumeBeforeMm3.toFixed(2)} → ${result.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过封闭性、实体有效性、退化面和 Solid 数量检查；旧拆件与壁厚分析已失效。`
         })
       }));
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : '上传 STL 网格元素批量位移失败';
+      const message = error instanceof Error ? error.message : '上传 STL 网格元素变换失败';
       set((current) => ({
         meshElementEditStatus: 'error',
         meshElementEditError: message,
@@ -1078,12 +1086,13 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         messages: current.messages.concat({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `网格元素批量位移未通过安全校验，最后有效模型未被覆盖：${message}`
+          content: `网格元素${actionLabel}未通过安全校验，最后有效模型未被覆盖：${message}`
         })
       }));
       return null;
     }
   },
+  applyMeshElementMove: (displacementMm) => get().applyMeshElementTransform({ kind: 'move', displacementMm }),
   runManufacturingSplit: async (request) => {
     set({
       manufacturingStatus: 'generating',

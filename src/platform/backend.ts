@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ImageCalibration, ReferenceImageAnalysis } from '../model/imageRecognition';
 import type { ImportedStlModel } from '../model/importedModel';
 import type { LocalStlEditRequest, LocalStlEditResult } from '../model/localStlEdit';
-import type { MeshElementEditResult, MeshElementMoveRequest } from '../model/meshElementEdit';
+import type { MeshElementEditResult, MeshElementTransformRequest } from '../model/meshElementEdit';
 import type {
   CodexLocalCadFeaturePlan,
   LocalCadFeaturePreflightResult,
@@ -335,8 +335,17 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
 }
 
 
-/** 对任意上传 STL 的同类顶点、边或三角面集合执行安全批量位移。 */
-export async function runMeshElementEdit(request: MeshElementMoveRequest) {
+/** 对任意上传 STL 的同类元素集合执行受限位移、单轴旋转或均匀缩放。 */
+export async function runMeshElementEdit(request: MeshElementTransformRequest) {
+  const operationPayload = request.operation.kind === 'move'
+    ? {
+        deltaXmm: request.operation.displacementMm.x,
+        deltaYmm: request.operation.displacementMm.y,
+        deltaZmm: request.operation.displacementMm.z
+      }
+    : request.operation.kind === 'rotate'
+      ? { rotationAxis: request.operation.axis, rotationDegrees: request.operation.angleDegrees }
+      : { scaleFactor: request.operation.scaleFactor };
   const payload = {
     sourcePartId: request.selection.sourcePartId,
     selectionRevision: request.selection.revision,
@@ -347,9 +356,8 @@ export async function runMeshElementEdit(request: MeshElementMoveRequest) {
       elementIndex,
       triangleMm
     })),
-    deltaXmm: request.displacementMm.x,
-    deltaYmm: request.displacementMm.y,
-    deltaZmm: request.displacementMm.z
+    operation: request.operation.kind,
+    ...operationPayload
   };
   if (isDesktopRuntime()) {
     return invoke<MeshElementEditResult>('run_mesh_element_edit', payload);
@@ -362,7 +370,7 @@ export async function runMeshElementEdit(request: MeshElementMoveRequest) {
   });
   const result = await response.json() as MeshElementEditResult | { message?: string };
   if (!response.ok || !('status' in result) || result.status !== 'ok') {
-    throw new Error('message' in result && result.message ? result.message : '上传 STL 网格元素位移失败');
+    throw new Error('message' in result && result.message ? result.message : '上传 STL 网格元素变换失败');
   }
   return result;
 }

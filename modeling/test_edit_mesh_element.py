@@ -1,4 +1,4 @@
-"""上传 STL 顶点、边和面位移回归测试。"""
+"""上传 STL 顶点、边和面集合变换回归测试。"""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 import cadquery as cq
 from cadquery import exporters
 
-from edit_mesh_element import edit_mesh_element, edit_mesh_elements
+from edit_mesh_element import edit_mesh_element, edit_mesh_elements, transform_mesh_elements
 from export_transformed_model import read_stl
 from split_and_cap import inspect_stl_file
 
@@ -97,6 +97,58 @@ class MeshElementEditTests(unittest.TestCase):
             self.assertEqual(result["selectedElementCount"], 4)
             self.assertEqual(result["movedCoordinateCount"], 4)
             self.assertTrue(result["validation"]["watertight"])
+
+    def test_rotates_and_scales_top_vertex_collection_around_geometric_center(self) -> None:
+        for operation, options in (
+            ("rotate", {"rotation_axis": "z", "rotation_degrees": 10.0}),
+            ("scale", {"scale_factor": 0.9}),
+        ):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, manifest = self._project(root)
+                selections: list[dict[str, object]] = []
+                seen: set[tuple[float, float, float]] = set()
+                for triangle_index, triangle in enumerate(read_stl(source)):
+                    for element_index, point in enumerate(triangle):
+                        key = tuple(round(value, 6) for value in point)
+                        if round(point[2], 6) != 10 or key in seen:
+                            continue
+                        seen.add(key)
+                        selections.append(self._selection(source, triangle_index, element_index))
+                result = transform_mesh_elements(
+                    source,
+                    root,
+                    str(manifest["revision"]),
+                    "vertex",
+                    selections,
+                    operation,
+                    "box",
+                    **options,
+                )
+                self.assertEqual(result["operation"], operation)
+                self.assertEqual(result["pivotMm"], {"x": 10.0, "y": 8.0, "z": 10.0})
+                self.assertEqual(result["movedCoordinateCount"], 4)
+                self.assertTrue(result["validation"]["watertight"])
+                self.assertEqual(result["validation"]["solidCountBefore"], result["validation"]["solidCountAfter"])
+
+    def test_rejects_noop_single_vertex_rotation_and_unsafe_transform_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            revision = str(manifest["revision"])
+            one_vertex = [self._selection(source, 0, 0)]
+            with self.assertRaisesRegex(ValueError, "旋转轴只能"):
+                transform_mesh_elements(source, root, revision, "vertex", one_vertex, "rotate", rotation_degrees=30)
+            with self.assertRaisesRegex(ValueError, "不会产生坐标变化"):
+                transform_mesh_elements(
+                    source, root, revision, "vertex", one_vertex, "rotate", rotation_axis="z", rotation_degrees=30
+                )
+            with self.assertRaisesRegex(ValueError, "-180° 至 180°"):
+                transform_mesh_elements(
+                    source, root, revision, "vertex", one_vertex, "rotate", rotation_axis="z", rotation_degrees=181
+                )
+            with self.assertRaisesRegex(ValueError, "0.25 至 4"):
+                transform_mesh_elements(source, root, revision, "vertex", one_vertex, "scale", scale_factor=5)
 
     def test_deduplicates_same_source_vertex_across_triangles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

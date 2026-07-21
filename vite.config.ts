@@ -457,9 +457,13 @@ function runMeshElementEditWorker(body: {
   elementKind?: string;
   selectionMethod?: string;
   selections?: unknown;
+  operation?: string;
   deltaXmm?: number;
   deltaYmm?: number;
   deltaZmm?: number;
+  rotationAxis?: string;
+  rotationDegrees?: number;
+  scaleFactor?: number;
 }) {
   if (body.sourcePartId !== 'uploaded-model') throw new Error('网格元素编辑只允许当前上传模型');
   if (typeof body.selectionRevision !== 'string' || !body.selectionRevision.trim() || body.selectionRevision.length > 200) {
@@ -494,11 +498,24 @@ function runMeshElementEditWorker(body: {
       ))) throw new Error('网格元素源坐标必须是安全范围内的有限毫米数值');
     }
   }
-  const displacement = [body.deltaXmm, body.deltaYmm, body.deltaZmm];
-  if (displacement.some((value) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 500)) {
-    throw new Error('网格元素每轴位移必须是 -500 至 500 毫米的有限数值');
+  if (!['move', 'rotate', 'scale'].includes(body.operation ?? '')) throw new Error('网格元素操作只能是位移、旋转或缩放');
+  const displacement = [body.deltaXmm ?? 0, body.deltaYmm ?? 0, body.deltaZmm ?? 0];
+  const rotationAxis = body.rotationAxis;
+  const rotationDegrees = body.rotationDegrees ?? 0;
+  const scaleFactor = body.scaleFactor ?? 1;
+  if (body.operation === 'move') {
+    if (displacement.some((value) => !Number.isFinite(value) || Math.abs(value) > 500)) {
+      throw new Error('网格元素每轴位移必须是 -500 至 500 毫米的有限数值');
+    }
+    if (displacement.every((value) => Math.abs(value) < 1e-9)) throw new Error('请至少输入一个非零位移');
+  } else if (body.operation === 'rotate') {
+    if (!rotationAxis || !['x', 'y', 'z'].includes(rotationAxis)) throw new Error('旋转轴只能是源模型 X、Y 或 Z 轴');
+    if (!Number.isFinite(rotationDegrees) || Math.abs(rotationDegrees) > 180 || Math.abs(rotationDegrees) < 1e-9) {
+      throw new Error('旋转角度必须是 -180° 至 180° 之间的非零有限数值');
+    }
+  } else if (!Number.isFinite(scaleFactor) || scaleFactor < 0.25 || scaleFactor > 4 || Math.abs(scaleFactor - 1) < 1e-9) {
+    throw new Error('缩放比例必须在 0.25 至 4 倍之间，且不能等于 1');
   }
-  if (displacement.every((value) => Math.abs(value!) < 1e-9)) throw new Error('请至少输入一个非零位移');
   if (!existsSync(meshElementEditWorkerPath)) throw new Error(`未找到网格元素编辑 Worker：${meshElementEditWorkerPath}`);
   if (!existsSync(pythonPath)) throw new Error(`CAD Python 环境不可用：${pythonPath}`);
   const sourcePath = readImportedModelSourceFile();
@@ -510,10 +527,14 @@ function runMeshElementEditWorker(body: {
       '--selection-revision', body.selectionRevision!.trim(),
       '--kind', body.elementKind!,
       '--selection-method', body.selectionMethod!,
+      '--operation', body.operation!,
       '--selections-stdin',
-      '--delta-x', String(body.deltaXmm),
-      '--delta-y', String(body.deltaYmm),
-      '--delta-z', String(body.deltaZmm)
+      '--delta-x', String(displacement[0]),
+      '--delta-y', String(displacement[1]),
+      '--delta-z', String(displacement[2]),
+      '--rotation-axis', rotationAxis ?? 'z',
+      '--rotation-degrees', String(rotationDegrees),
+      '--scale-factor', String(scaleFactor)
     ], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -897,7 +918,7 @@ function cadWorkerPlugin(): Plugin {
             const result = JSON.parse(readFileSync(resolve(artifactsDirectory, 'mesh-element-edit-result.json'), 'utf8')) as Record<string, unknown>;
             writeJson(response, 200, result);
           } catch (error) {
-            writeJson(response, 400, { status: 'error', message: error instanceof Error ? error.message : '上传 STL 网格元素位移失败' });
+            writeJson(response, 400, { status: 'error', message: error instanceof Error ? error.message : '上传 STL 网格元素变换失败' });
           } finally {
             generating = false;
           }

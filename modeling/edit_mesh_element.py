@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对任意上传 STL 的同类顶点、边或三角面集合执行可回滚的精确毫米位移。"""
+"""对任意上传 STL 的同类元素集合执行可回滚的位移、旋转或均匀缩放。"""
 from __future__ import annotations
 
 import argparse
@@ -18,8 +18,13 @@ from split_and_cap import _bounds_json, _closed_solids, import_stl_as_solid
 
 ElementKind = Literal["vertex", "edge", "face"]
 SelectionMethod = Literal["click", "box"]
+TransformOperation = Literal["move", "rotate", "scale"]
+TransformAxis = Literal["x", "y", "z"]
 EDGE_VERTEX_INDEXES = ((0, 1), (1, 2), (2, 0))
 MAX_DISPLACEMENT_MM = 500.0
+MAX_ROTATION_DEGREES = 180.0
+MIN_SCALE_FACTOR = 0.25
+MAX_SCALE_FACTOR = 4.0
 MAX_SELECTIONS = 512
 MAX_TRIANGLE_INDEX = 5_000_000
 MAX_COORDINATE_MM = 1_000_000.0
@@ -92,7 +97,7 @@ def _validate_and_collect_selections(
     selections: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], set[tuple[float, float, float]]]:
     if not selections:
-        raise ValueError("请至少选择一个要移动的网格元素")
+        raise ValueError("请至少选择一个要变换的网格元素")
     if len(selections) > MAX_SELECTIONS:
         raise ValueError(f"单次最多选择 {MAX_SELECTIONS} 个同类网格元素")
 
@@ -124,27 +129,77 @@ def _validate_and_collect_selections(
     return list(unique.values()), selected_keys
 
 
-def edit_mesh_elements(
+def _selection_pivot(selected_keys: set[tuple[float, float, float]]) -> tuple[float, float, float]:
+    """使用选择集合唯一源坐标的几何中心作为旋转和缩放枢轴。"""
+
+    if not selected_keys:
+        raise ValueError("当前选择没有可变换的源坐标")
+    count = len(selected_keys)
+    return tuple(sum(point[index] for point in selected_keys) / count for index in range(3))  # type: ignore[return-value]
+
+
+def _transform_point(
+    point: tuple[float, float, float],
+    operation: TransformOperation,
+    pivot: tuple[float, float, float],
+    displacement_mm: tuple[float, float, float],
+    rotation_axis: TransformAxis,
+    rotation_degrees: float,
+    scale_factor: float,
+) -> tuple[float, float, float]:
+    if operation == "move":
+        return tuple(point[index] + displacement_mm[index] for index in range(3))  # type: ignore[return-value]
+    relative = tuple(point[index] - pivot[index] for index in range(3))
+    if operation == "scale":
+        return tuple(pivot[index] + relative[index] * scale_factor for index in range(3))  # type: ignore[return-value]
+    angle = math.radians(rotation_degrees)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    x, y, z = relative
+    rotated = (
+        (x, y * cosine - z * sine, y * sine + z * cosine)
+        if rotation_axis == "x"
+        else (x * cosine + z * sine, y, -x * sine + z * cosine)
+        if rotation_axis == "y"
+        else (x * cosine - y * sine, x * sine + y * cosine, z)
+    )
+    return tuple(pivot[index] + rotated[index] for index in range(3))  # type: ignore[return-value]
+
+
+def transform_mesh_elements(
     input_path: Path,
     output_dir: Path,
     selection_revision: str,
     kind: ElementKind,
     selections: list[dict[str, object]],
-    displacement_mm: tuple[float, float, float],
+    operation: TransformOperation,
     selection_method: SelectionMethod = "click",
+    displacement_mm: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    rotation_axis: TransformAxis | None = None,
+    rotation_degrees: float = 0.0,
+    scale_factor: float = 1.0,
 ) -> dict[str, object]:
-    """批量移动同类元素及所有同坐标副本，通过实体校验后原子写回工作文件。"""
+    """变换同类元素及所有同坐标副本，通过实体校验后原子写回工作文件。"""
 
     if kind not in ("vertex", "edge", "face"):
         raise ValueError("网格元素类型只能是顶点、边或面")
     if selection_method not in ("click", "box"):
         raise ValueError("网格元素选择方式只能是点击或框选")
-    if not all(math.isfinite(value) for value in displacement_mm):
-        raise ValueError("网格元素位移必须是有限毫米数值")
-    if any(abs(value) > MAX_DISPLACEMENT_MM for value in displacement_mm):
-        raise ValueError("网格元素每个坐标轴的单次位移不能超过 500 毫米")
-    if math.sqrt(sum(value * value for value in displacement_mm)) < 1e-9:
-        raise ValueError("请至少输入一个非零位移")
+    if operation not in ("move", "rotate", "scale"):
+        raise ValueError("网格元素操作只能是位移、旋转或缩放")
+    if operation == "move":
+        if not all(math.isfinite(value) for value in displacement_mm):
+            raise ValueError("网格元素位移必须是有限毫米数值")
+        if any(abs(value) > MAX_DISPLACEMENT_MM for value in displacement_mm):
+            raise ValueError("网格元素每个坐标轴的单次位移不能超过 500 毫米")
+        if math.sqrt(sum(value * value for value in displacement_mm)) < 1e-9:
+            raise ValueError("请至少输入一个非零位移")
+    elif operation == "rotate":
+        if rotation_axis not in ("x", "y", "z"):
+            raise ValueError("旋转轴只能是源模型 X、Y 或 Z 轴")
+        if not math.isfinite(rotation_degrees) or abs(rotation_degrees) > MAX_ROTATION_DEGREES or abs(rotation_degrees) < 1e-9:
+            raise ValueError("旋转角度必须是 -180° 至 180° 之间的非零有限数值")
+    elif not math.isfinite(scale_factor) or not MIN_SCALE_FACTOR <= scale_factor <= MAX_SCALE_FACTOR or abs(scale_factor - 1) < 1e-9:
+        raise ValueError("缩放比例必须在 0.25 至 4 倍之间，且不能等于 1")
     if not input_path.is_file():
         raise ValueError(f"没有找到当前上传模型工作文件：{input_path}")
 
@@ -153,32 +208,40 @@ def edit_mesh_elements(
     if manifest.get("revision") != selection_revision:
         raise ValueError("模型已在选择后发生变化，请重新选择顶点、边或面")
 
+    resolved_rotation_axis: TransformAxis = rotation_axis if rotation_axis in ("x", "y", "z") else "z"
+
     source_model, source_validation = import_stl_as_solid(input_path)
     source_solids = _closed_solids(source_model, "当前上传模型")
     triangles = read_stl(input_path)
     unique_selections, selected_keys = _validate_and_collect_selections(triangles, kind, selections)
+    pivot = _selection_pivot(selected_keys)
 
     moved_occurrence_count = 0
+    changed_coordinate_count = 0
+    transformed_by_key: dict[tuple[float, float, float], tuple[float, float, float]] = {}
+    for key in selected_keys:
+        transformed = _transform_point(key, operation, pivot, displacement_mm, resolved_rotation_axis, rotation_degrees, scale_factor)
+        if not all(math.isfinite(value) and abs(value) <= MAX_COORDINATE_MM for value in transformed):
+            raise ValueError("变换后出现无效或超出安全范围的坐标，已拒绝写回")
+        transformed_by_key[key] = transformed
+        if any(abs(transformed[index] - key[index]) >= 1e-9 for index in range(3)):
+            changed_coordinate_count += 1
+    if changed_coordinate_count == 0:
+        raise ValueError("当前选择围绕几何中心执行该操作不会产生坐标变化")
+
     moved_triangles: list[tuple[tuple[float, float, float], ...]] = []
-    dx, dy, dz = displacement_mm
     for triangle in triangles:
         moved_triangle = []
         for point in triangle:
-            if _coordinate_key(point) in selected_keys:
-                moved_point = (point[0] + dx, point[1] + dy, point[2] + dz)
+            key = _coordinate_key(point)
+            moved_point = transformed_by_key.get(key, tuple(float(value) for value in point))
+            if key in transformed_by_key:
                 moved_occurrence_count += 1
-            else:
-                moved_point = tuple(float(value) for value in point)
-            if not all(math.isfinite(value) for value in moved_point):
-                raise ValueError("位移后出现无穷大或非数字坐标，已拒绝写回")
             moved_triangle.append(moved_point)
         moved = tuple(moved_triangle)
         if _double_area(moved) <= MIN_DOUBLE_AREA:
-            raise ValueError("位移会产生零面积或退化三角面，已保留最后有效模型")
+            raise ValueError("变换会产生零面积或退化三角面，已保留最后有效模型")
         moved_triangles.append(moved)
-
-    if moved_occurrence_count == 0:
-        raise ValueError("没有找到需要同步移动的 STL 顶点，请重新选择")
 
     revision = str(time_ns())
     working_stl = output_dir / "imported-model-working.stl"
@@ -195,16 +258,14 @@ def edit_mesh_elements(
         write_binary_stl(temporary_stl, moved_triangles)
         verified_model, verified = import_stl_as_solid(temporary_stl)
         if verified.repair.repaired:
-            raise ValueError("位移后的网格需要自动修洞或清理才能封闭，已拒绝写回")
-        verified_solids = _closed_solids(verified_model, "网格元素位移结果")
+            raise ValueError("变换后的网格需要自动修洞或清理才能封闭，已拒绝写回")
+        verified_solids = _closed_solids(verified_model, "网格元素变换结果")
         if len(verified_solids) != len(source_solids):
-            raise ValueError(
-                f"位移前后 Solid 数量从 {len(source_solids)} 变为 {len(verified_solids)}，已拒绝写回"
-            )
+            raise ValueError(f"变换前后 Solid 数量从 {len(source_solids)} 变为 {len(verified_solids)}，已拒绝写回")
         volume_before = source_validation.volume_mm3
         volume_after = verified.volume_mm3
         if not math.isfinite(volume_after) or volume_after <= 0:
-            raise ValueError("位移后的实体体积无效，已拒绝写回")
+            raise ValueError("变换后的实体体积无效，已拒绝写回")
         exporters.export(verified_model, str(temporary_step))
 
         existing_outputs = _existing_output_names(manifest, output_dir)
@@ -226,7 +287,7 @@ def edit_mesh_elements(
             "originalSourceFile": manifest.get("originalSourceFile") or "imported-model.stl",
             "sourceKind": "uploaded-stl",
             "units": "mm",
-            "kernel": "OpenCascade 7.8 / CadQuery 2.6 / STL 网格元素批量编辑",
+            "kernel": "OpenCascade 7.8 / CadQuery 2.6 / STL 网格元素集合变换",
             "outputs": output_names,
             "files": files,
             "metrics": {
@@ -247,8 +308,9 @@ def edit_mesh_elements(
             "kind": kind,
             "selectionMethod": selection_method,
             "selectedElementCount": len(unique_selections),
-            "displacementMm": {"x": dx, "y": dy, "z": dz},
-            "movedCoordinateCount": len(selected_keys),
+            "operation": operation,
+            "pivotMm": {"x": pivot[0], "y": pivot[1], "z": pivot[2]},
+            "movedCoordinateCount": changed_coordinate_count,
             "movedVertexOccurrenceCount": moved_occurrence_count,
             "sourceFile": working_stl.name,
             "stepFile": working_step.name,
@@ -268,27 +330,45 @@ def edit_mesh_elements(
             },
             "updatedModel": updated_model,
             "limitations": [
-                f"单次最多批量移动 {MAX_SELECTIONS} 个同类顶点、三角边或三角面",
+                f"单次最多变换 {MAX_SELECTIONS} 个同类顶点、三角边或三角面",
+                "旋转和缩放以选择集合唯一源坐标的几何中心为枢轴",
                 "框选使用当前视角的屏幕投影，可能包含被遮挡区域中的元素",
                 "不支持拓扑增删、焊接、分裂、挤出或未受约束的自由雕刻",
-                "参数化 CAD 继续使用稳定面和稳定边特征，不直接改写 OpenCascade BRep 顶点",
             ],
         }
+        if operation == "move":
+            result["displacementMm"] = {"x": displacement_mm[0], "y": displacement_mm[1], "z": displacement_mm[2]}
+        elif operation == "rotate":
+            result["rotationAxis"] = resolved_rotation_axis
+            result["rotationDegrees"] = rotation_degrees
+        else:
+            result["scaleFactor"] = scale_factor
         temporary_manifest.write_text(json.dumps(updated_model, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary_result.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         _commit_files_with_rollback(
-            [
-                (temporary_stl, working_stl),
-                (temporary_step, working_step),
-                (temporary_manifest, manifest_path),
-                (temporary_result, result_path),
-            ],
+            [(temporary_stl, working_stl), (temporary_step, working_step), (temporary_manifest, manifest_path), (temporary_result, result_path)],
             revision,
         )
         return result
     finally:
         for path in temporary_paths:
             path.unlink(missing_ok=True)
+
+
+def edit_mesh_elements(
+    input_path: Path,
+    output_dir: Path,
+    selection_revision: str,
+    kind: ElementKind,
+    selections: list[dict[str, object]],
+    displacement_mm: tuple[float, float, float],
+    selection_method: SelectionMethod = "click",
+) -> dict[str, object]:
+    """兼容既有批量位移调用。"""
+
+    return transform_mesh_elements(
+        input_path, output_dir, selection_revision, kind, selections, "move", selection_method, displacement_mm
+    )
 
 
 def edit_mesh_element(
@@ -300,7 +380,7 @@ def edit_mesh_element(
     element_index: int,
     displacement_mm: tuple[float, float, float],
 ) -> dict[str, object]:
-    """兼容既有单元素调用，并补齐当前 STL 的源三角面坐标。"""
+    """兼容既有单元素位移调用，并补齐当前 STL 的源三角面坐标。"""
 
     triangles = read_stl(input_path)
     if not isinstance(triangle_index, int) or triangle_index < 0 or triangle_index >= len(triangles):
@@ -318,18 +398,22 @@ def edit_mesh_element(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="FormAI 上传 STL 网格元素批量位移 Worker")
+    parser = argparse.ArgumentParser(description="FormAI 上传 STL 网格元素集合变换 Worker")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--selection-revision", required=True)
     parser.add_argument("--kind", required=True, choices=("vertex", "edge", "face"))
     parser.add_argument("--selection-method", choices=("click", "box"), default="click")
+    parser.add_argument("--operation", required=True, choices=("move", "rotate", "scale"))
     parser.add_argument("--selections-stdin", action="store_true")
     parser.add_argument("--triangle-index", type=int)
     parser.add_argument("--element-index", type=int)
-    parser.add_argument("--delta-x", required=True, type=float)
-    parser.add_argument("--delta-y", required=True, type=float)
-    parser.add_argument("--delta-z", required=True, type=float)
+    parser.add_argument("--delta-x", type=float, default=0.0)
+    parser.add_argument("--delta-y", type=float, default=0.0)
+    parser.add_argument("--delta-z", type=float, default=0.0)
+    parser.add_argument("--rotation-axis", choices=("x", "y", "z"))
+    parser.add_argument("--rotation-degrees", type=float, default=0.0)
+    parser.add_argument("--scale-factor", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -340,16 +424,22 @@ def main() -> int:
             selections = json.loads(sys.stdin.read())
             if not isinstance(selections, list):
                 raise ValueError("网格元素选择集合必须是数组")
-            result = edit_mesh_elements(
+            result = transform_mesh_elements(
                 arguments.input,
                 arguments.output,
                 arguments.selection_revision,
                 arguments.kind,
                 selections,
-                (arguments.delta_x, arguments.delta_y, arguments.delta_z),
+                arguments.operation,
                 arguments.selection_method,
+                (arguments.delta_x, arguments.delta_y, arguments.delta_z),
+                arguments.rotation_axis,
+                arguments.rotation_degrees,
+                arguments.scale_factor,
             )
         else:
+            if arguments.operation != "move":
+                raise ValueError("旋转和缩放必须使用网格元素选择集合")
             if arguments.triangle_index is None or arguments.element_index is None:
                 raise ValueError("缺少网格元素索引，请重新选择")
             result = edit_mesh_element(

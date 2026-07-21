@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
-import { BoxSelect, Move3d, MousePointer2, X } from 'lucide-react';
+import { BoxSelect, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
   type MeshElementEditMode,
   type MeshElementSelectionMethod,
-  type MeshPointMm
+  type MeshElementTransformKind,
+  type MeshElementTransformOperation,
+  type MeshPointMm,
+  type MeshTransformAxis
 } from '../model/meshElementEdit';
 import { useModelStore } from '../store/useModelStore';
 
@@ -24,12 +27,22 @@ const SELECTION_METHODS: Array<{
   { method: 'box', label: '框选多选', icon: BoxSelect }
 ];
 
-function parseDisplacement(value: string) {
+const TRANSFORM_MODES: Array<{
+  kind: MeshElementTransformKind;
+  label: string;
+  icon: typeof Move3d;
+}> = [
+  { kind: 'move', label: '位移', icon: Move3d },
+  { kind: 'rotate', label: '旋转', icon: Rotate3d },
+  { kind: 'scale', label: '缩放', icon: Scaling }
+];
+
+function parseFinite(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** 提供任意上传 STL 的点击或框选批量网格元素精确毫米位移入口。 */
+/** 提供任意上传 STL 选择集合的受限位移、单轴旋转和均匀缩放入口。 */
 export function MeshElementEditPanel() {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
   const importedStlModel = useModelStore((state) => state.importedStlModel);
@@ -42,23 +55,29 @@ export function MeshElementEditPanel() {
   const setMeshElementEditMode = useModelStore((state) => state.setMeshElementEditMode);
   const setMeshElementSelectionMethod = useModelStore((state) => state.setMeshElementSelectionMethod);
   const clearMeshElementSelection = useModelStore((state) => state.clearMeshElementSelection);
-  const applyMeshElementMove = useModelStore((state) => state.applyMeshElementMove);
+  const applyMeshElementTransform = useModelStore((state) => state.applyMeshElementTransform);
   const clearManufacturingSplit = useModelStore((state) => state.clearManufacturingSplit);
+  const [transformKind, setTransformKind] = useState<MeshElementTransformKind>('move');
   const [x, setX] = useState('0');
   const [y, setY] = useState('0');
   const [z, setZ] = useState('0');
+  const [rotationAxis, setRotationAxis] = useState<MeshTransformAxis>('z');
+  const [rotationDegrees, setRotationDegrees] = useState('15');
+  const [scaleFactor, setScaleFactor] = useState('1.1');
 
   const displacement = useMemo<MeshPointMm | null>(() => {
-    const values = [parseDisplacement(x), parseDisplacement(y), parseDisplacement(z)];
+    const values = [parseFinite(x), parseFinite(y), parseFinite(z)];
     if (values.some((value) => value === null)) return null;
     return { x: values[0]!, y: values[1]!, z: values[2]! };
   }, [x, y, z]);
-  const isZero = displacement !== null
-    && displacement.x === 0
-    && displacement.y === 0
-    && displacement.z === 0;
-  const exceedsLimit = displacement !== null
-    && [displacement.x, displacement.y, displacement.z].some((value) => Math.abs(value) > 500);
+  const parsedRotation = parseFinite(rotationDegrees);
+  const parsedScale = parseFinite(scaleFactor);
+  const moveInvalid = !displacement
+    || [displacement.x, displacement.y, displacement.z].every((value) => value === 0)
+    || [displacement.x, displacement.y, displacement.z].some((value) => Math.abs(value) > 500);
+  const rotationInvalid = parsedRotation === null || parsedRotation === 0 || Math.abs(parsedRotation) > 180;
+  const scaleInvalid = parsedScale === null || parsedScale === 1 || parsedScale < 0.25 || parsedScale > 4;
+  const operationInvalid = transformKind === 'move' ? moveInvalid : transformKind === 'rotate' ? rotationInvalid : scaleInvalid;
   const isEditing = meshElementEditStatus === 'editing';
   const selectionCurrent = Boolean(
     meshElementSelection
@@ -73,18 +92,25 @@ export function MeshElementEditPanel() {
     : meshElementEditMode === 'off'
       ? '请选择一种编辑元素'
       : meshElementSelectionMethod === 'box'
-        ? `请按住鼠标拖动框选要移动的${MESH_ELEMENT_LABELS[meshElementEditMode]}`
-        : `请在模型上点击要移动的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
+        ? `请按住鼠标拖动框选要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`
+        : `请在模型上点击要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
 
-  async function submitMove() {
-    if (!displacement || isZero || exceedsLimit || !selectionCurrent || isEditing) return;
-    const result = await applyMeshElementMove(displacement);
-    if (result) {
+  async function submitTransform() {
+    if (operationInvalid || !selectionCurrent || isEditing) return;
+    const operation: MeshElementTransformOperation = transformKind === 'move'
+      ? { kind: 'move', displacementMm: displacement! }
+      : transformKind === 'rotate'
+        ? { kind: 'rotate', axis: rotationAxis, angleDegrees: parsedRotation! }
+        : { kind: 'scale', scaleFactor: parsedScale! };
+    const result = await applyMeshElementTransform(operation);
+    if (result?.operation === 'move') {
       setX('0');
       setY('0');
       setZ('0');
     }
   }
+
+  const actionText = transformKind === 'move' ? '批量应用位移' : transformKind === 'rotate' ? '统一应用旋转' : '统一应用缩放';
 
   return (
     <aside className="mesh-element-edit-panel" aria-label="网格元素编辑">
@@ -110,13 +136,7 @@ export function MeshElementEditPanel() {
         <>
           <div className="mesh-element-mode-row">
             {EDIT_MODES.map(({ mode, label }) => (
-              <button
-                key={mode}
-                type="button"
-                className={meshElementEditMode === mode ? 'is-active' : ''}
-                onClick={() => setMeshElementEditMode(mode)}
-                disabled={isEditing}
-              >
+              <button key={mode} type="button" className={meshElementEditMode === mode ? 'is-active' : ''} onClick={() => setMeshElementEditMode(mode)} disabled={isEditing}>
                 <MousePointer2 size={11} /> {label}
               </button>
             ))}
@@ -124,43 +144,65 @@ export function MeshElementEditPanel() {
 
           <div className="mesh-element-mode-row mesh-element-selection-methods">
             {SELECTION_METHODS.map(({ method, label, icon: Icon }) => (
-              <button
-                key={method}
-                type="button"
-                className={meshElementSelectionMethod === method ? 'is-active' : ''}
-                onClick={() => setMeshElementSelectionMethod(method)}
-                disabled={isEditing || meshElementEditMode === 'off'}
-              >
+              <button key={method} type="button" className={meshElementSelectionMethod === method ? 'is-active' : ''} onClick={() => setMeshElementSelectionMethod(method)} disabled={isEditing || meshElementEditMode === 'off'}>
                 <Icon size={11} /> {label}
               </button>
             ))}
           </div>
 
-          <div className={`mesh-element-selection-summary ${selectionCurrent ? 'has-selection' : ''}`}>
-            {selectionSummary}
-          </div>
+          <div className={`mesh-element-selection-summary ${selectionCurrent ? 'has-selection' : ''}`}>{selectionSummary}</div>
 
-          <div className="mesh-element-displacement-grid">
-            {([['X', x, setX], ['Y', y, setY], ['Z', z, setZ]] as const).map(([axis, value, update]) => (
-              <label key={axis}>
-                <span>{axis} 位移</span>
-                <div><input value={value} onChange={(event) => update(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>毫米</em></div>
-              </label>
+          <div className="mesh-element-mode-row mesh-element-transform-methods">
+            {TRANSFORM_MODES.map(({ kind, label, icon: Icon }) => (
+              <button key={kind} type="button" className={transformKind === kind ? 'is-active' : ''} onClick={() => setTransformKind(kind)} disabled={isEditing}>
+                <Icon size={11} /> {label}
+              </button>
             ))}
           </div>
 
+          {transformKind === 'move' && (
+            <div className="mesh-element-displacement-grid">
+              {([['X', x, setX], ['Y', y, setY], ['Z', z, setZ]] as const).map(([axis, value, update]) => (
+                <label key={axis}>
+                  <span>{axis} 位移</span>
+                  <div><input value={value} onChange={(event) => update(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>毫米</em></div>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {transformKind === 'rotate' && (
+            <div className="mesh-element-transform-grid">
+              <label>
+                <span>源模型旋转轴</span>
+                <select value={rotationAxis} onChange={(event) => setRotationAxis(event.target.value as MeshTransformAxis)} disabled={isEditing}>
+                  <option value="x">X 轴</option><option value="y">Y 轴</option><option value="z">Z 轴</option>
+                </select>
+              </label>
+              <label>
+                <span>旋转角度</span>
+                <div><input value={rotationDegrees} onChange={(event) => setRotationDegrees(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>度</em></div>
+              </label>
+            </div>
+          )}
+
+          {transformKind === 'scale' && (
+            <div className="mesh-element-transform-grid one-column">
+              <label>
+                <span>均匀缩放比例</span>
+                <div><input value={scaleFactor} onChange={(event) => setScaleFactor(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>倍</em></div>
+              </label>
+            </div>
+          )}
+
           {meshElementEditError && <div className="mesh-element-error">{meshElementEditError}</div>}
-          {!displacement && <div className="mesh-element-error">位移必须是有效数字</div>}
-          {exceedsLimit && <div className="mesh-element-error">每个坐标轴的单次位移不能超过 500 毫米</div>}
+          {transformKind === 'move' && moveInvalid && <div className="mesh-element-error">位移必须包含非零有限数值，且每轴不能超过 500 毫米</div>}
+          {transformKind === 'rotate' && rotationInvalid && <div className="mesh-element-error">旋转角度必须是 -180° 至 180° 之间的非零有限数值</div>}
+          {transformKind === 'scale' && scaleInvalid && <div className="mesh-element-error">缩放比例必须在 0.25 至 4 倍之间，且不能等于 1</div>}
 
           <div className="mesh-element-actions">
-            <button
-              type="button"
-              className="mesh-element-apply"
-              onClick={() => void submitMove()}
-              disabled={!selectionCurrent || !displacement || isZero || exceedsLimit || isEditing}
-            >
-              {isEditing ? '正在校验并批量移动…' : '批量应用位移'}
+            <button type="button" className="mesh-element-apply" onClick={() => void submitTransform()} disabled={!selectionCurrent || operationInvalid || isEditing}>
+              {isEditing ? '正在校验并写回模型…' : actionText}
             </button>
             <button type="button" onClick={clearMeshElementSelection} disabled={!meshElementSelection || isEditing}>清除选择</button>
           </div>
@@ -168,8 +210,8 @@ export function MeshElementEditPanel() {
       )}
 
       <footer>
-        <span>单次最多选择 {MAX_MESH_ELEMENT_SELECTIONS} 个同类元素；超出时按网格遍历顺序保留前 {MAX_MESH_ELEMENT_SELECTIONS} 个，顶点和边按源坐标去重。</span>
-        <span>框选使用当前视角的屏幕投影，可能包含被遮挡区域中的元素。</span>
+        <span>旋转和缩放以选择集合唯一源坐标的几何中心为枢轴；旋转使用源模型单轴，缩放比例限制为 0.25 至 4 倍。</span>
+        <span>单次最多选择 {MAX_MESH_ELEMENT_SELECTIONS} 个同类元素；框选可能包含被遮挡区域中的元素。</span>
         <span>修改后仍会重新检查退化面、封闭性、实体有效性、Solid 数量和体积。</span>
       </footer>
     </aside>

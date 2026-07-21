@@ -3,6 +3,8 @@ import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
   meshElementSelectionKey,
+  meshElementSelectionPivot,
+  uniqueMeshElementSelectionPoints,
   nearestMeshElementIndex,
   selectedMeshElementPoints,
   type MeshElementSelection
@@ -55,6 +57,17 @@ describe('网格元素选择', () => {
     ], 'box');
     expect(set?.selectionMethod).toBe('box');
     expect(set?.elements.map((item) => item.triangleIndex)).toEqual([2, 3]);
+  });
+
+
+  it('按唯一源坐标计算统一旋转和缩放的几何中心', () => {
+    const set = createMeshElementSelectionSet([
+      selection('edge', 0, 0),
+      { ...selection('edge', 1, 0), triangleMm: [triangle[1], triangle[0], triangle[2]] }
+    ], 'box');
+    expect(set).not.toBeNull();
+    expect(uniqueMeshElementSelectionPoints(set!).map((point) => point.x).sort((a, b) => a - b)).toEqual([0, 10]);
+    expect(meshElementSelectionPivot(set!)).toEqual({ x: 5, y: 0, z: 0 });
   });
 
   it('拒绝混合修订或混合种类进入同一集合', () => {
