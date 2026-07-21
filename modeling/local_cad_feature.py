@@ -23,6 +23,7 @@ from curved_feature_diagnostics import build_curved_feature_diagnostics
 from face_geometry_signatures import MATCH_METHOD, MATCH_WARNING, match_shape_faces_with_sources
 from face_tessellation_mapping import build_face_tessellation
 from local_cad_feature_core import (
+    CurvedFeatureInterferenceError,
     apply_edge_feature,
     apply_planar_feature,
     describe_surface_geometry_type,
@@ -191,6 +192,82 @@ def _shape_from_step(path: Path, label: str) -> cq.Workplane:
     return model
 
 
+def _write_curved_feature_preflight(
+    output_dir: Path,
+    selection_revision: str,
+    part_id: str,
+    stable_face_id: str,
+    operation: Operation,
+    tool: cq.Workplane,
+    validation: dict[str, Any],
+    *,
+    status: Literal["ok", "blocked"],
+    message: str,
+) -> dict[str, Any]:
+    """导出不写入模型的 OpenCascade 精确工具体，并原子保存结构化预检结果。"""
+    tool_solids = _closed_solids(tool, "曲面局部特征精确预演工具体")
+    if len(tool_solids) != 1 or not tool.val().isValid():
+        raise ValueError("曲面局部特征精确预演工具体不是有效的单一封闭 Solid")
+    tool_bounds = tool.val().BoundingBox()
+    tool_volume = float(tool_solids[0].Volume())
+    if not math.isfinite(tool_volume) or tool_volume <= 1e-8:
+        raise ValueError("曲面局部特征精确预演工具体体积无效")
+
+    preview_file = "local-cad-feature-tool-preview.stl"
+    result_file = "local-cad-feature-preflight-result.json"
+    token = str(time_ns())
+    temporary_preview = output_dir / f".local-cad-feature-tool-preview-{token}.stl"
+    temporary_result = output_dir / f".local-cad-feature-preflight-result-{token}.json"
+    result = {
+        "status": status,
+        "revision": selection_revision,
+        "operation": operation,
+        "partId": part_id,
+        "stableFaceId": stable_face_id,
+        "previewFile": preview_file,
+        "outputs": [preview_file],
+        "units": "mm",
+        "kernel": "CadQuery + OpenCascade",
+        "message": message,
+        "validation": {
+            **validation,
+            "toolValid": True,
+            "toolWatertight": True,
+            "toolSolidCount": 1,
+            "toolVolumeMm3": tool_volume,
+            "toolBoundsMm": {
+                "x": float(tool_bounds.xlen),
+                "y": float(tool_bounds.ylen),
+                "z": float(tool_bounds.zlen),
+            },
+        },
+        "limitations": [
+            "精确预演显示的是 OpenCascade 实际布尔工具体，不是最终布尔结果",
+            "预演绑定当前修订、稳定面、曲面 UV 和真实 U 切向，模型变化后必须重新生成",
+            "曲面矩形与槽孔仍是点击位置切平面的安全近似，不是曲面贴合或测地线轮廓",
+        ],
+    }
+    try:
+        exporters.export(tool, str(temporary_preview), tolerance=0.05)
+        verified_tool, _ = import_stl_as_solid(temporary_preview)
+        verified_solids = _closed_solids(verified_tool, "曲面局部特征精确预演 STL")
+        if len(verified_solids) != 1:
+            raise ValueError("曲面局部特征精确预演 STL 不是单一封闭 Solid")
+        temporary_result.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        _commit_files_with_rollback(
+            [
+                (temporary_preview, output_dir / preview_file),
+                (temporary_result, output_dir / result_file),
+            ],
+            token,
+        )
+    finally:
+        temporary_preview.unlink(missing_ok=True)
+        temporary_result.unlink(missing_ok=True)
+    print(json.dumps(result, ensure_ascii=False))
+    return result
+
+
 def edit_cad_feature(
     output_dir: Path,
     operation: Operation,
@@ -211,6 +288,7 @@ def edit_cad_feature(
     surface_geometry_type: str | None = None,
     surface_uv: tuple[float, float] | None = None,
     surface_tangent_u: tuple[float, float, float] | None = None,
+    preview_only: bool = False,
 ) -> dict[str, Any]:
     if not selection_revision.strip() or not part_id.strip() or not stable_face_id.strip():
         raise ValueError("稳定 CAD 面选择上下文不完整，请重新选择平面")
@@ -291,36 +369,53 @@ def edit_cad_feature(
     assembly_file = _plain_file_name(manifest.get("assemblyFile"), "装配 ")
 
     model = _shape_from_step(output_dir / step_file, "目标 CAD 零件")
-    if edge_operation:
-        application = apply_edge_feature(
-            model,
-            previous_faces,
-            operation,
+    if preview_only and (edge_operation or descriptor_geometry_type == "PLANE"):
+        raise ValueError("OpenCascade 精确工具体预演第一版只用于非平面圆形、矩形和槽孔特征")
+    try:
+        if edge_operation:
+            application = apply_edge_feature(
+                model,
+                previous_faces,
+                operation,
+                stable_face_id,
+                stable_edge_id or "",
+                center,
+                hit_normal,
+                depth_mm,
+                target_face_descriptor=requested_descriptor,
+            )
+        else:
+            application = apply_planar_feature(
+                model,
+                operation,
+                stable_face_id,
+                previous_faces,
+                center,
+                hit_normal,
+                radius_mm=radius_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                length_mm=length_mm,
+                depth_mm=depth_mm,
+                rotation_deg=rotation_deg,
+                target_face_descriptor=requested_descriptor,
+                surface_geometry_type=requested_geometry_type,
+                surface_uv=surface_uv,
+                surface_tangent_u=surface_tangent_u,
+            )
+    except CurvedFeatureInterferenceError as error:
+        if not preview_only:
+            raise
+        return _write_curved_feature_preflight(
+            output_dir,
+            selection_revision,
+            part_id,
             stable_face_id,
-            stable_edge_id or "",
-            center,
-            hit_normal,
-            depth_mm,
-            target_face_descriptor=requested_descriptor,
-        )
-    else:
-        application = apply_planar_feature(
-            model,
             operation,
-            stable_face_id,
-            previous_faces,
-            center,
-            hit_normal,
-            radius_mm=radius_mm,
-            width_mm=width_mm,
-            height_mm=height_mm,
-            length_mm=length_mm,
-            depth_mm=depth_mm,
-            rotation_deg=rotation_deg,
-            target_face_descriptor=requested_descriptor,
-            surface_geometry_type=requested_geometry_type,
-            surface_uv=surface_uv,
-            surface_tangent_u=surface_tangent_u,
+            error.tool,
+            error.diagnostics,
+            status="blocked",
+            message=str(error),
         )
     edited = application["model"]
     new_face_sources = application["faceSources"]
@@ -330,6 +425,18 @@ def edit_cad_feature(
     target_edge_status = application.get("stableEdgeStatus")
     outward = application["outwardNormal"]
     validation = application["validation"]
+    if preview_only:
+        return _write_curved_feature_preflight(
+            output_dir,
+            selection_revision,
+            part_id,
+            stable_face_id,
+            operation,
+            application["tool"],
+            validation,
+            status="ok",
+            message="OpenCascade 精确工具体预演与曲面干涉检查已通过",
+        )
     point_distance = float(validation["pointDistanceMm"])
     normal_dot = float(validation["normalDot"])
     volume_before = float(validation["volumeBeforeMm3"])
@@ -569,6 +676,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--depth", type=float, required=True)
     parser.add_argument("--rotation", type=float, default=0.0)
     parser.add_argument("--command", default="")
+    parser.add_argument("--preview-only", action="store_true")
     return parser.parse_args()
 
 
@@ -604,6 +712,7 @@ def main() -> int:
             depth_mm=arguments.depth,
             rotation_deg=arguments.rotation,
             command=arguments.command,
+            preview_only=arguments.preview_only,
         )
         return 0
     except ValueError as error:

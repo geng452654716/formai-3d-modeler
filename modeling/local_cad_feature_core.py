@@ -35,6 +35,15 @@ Operation = Literal[
     "chamfer-edge",
 ]
 
+
+class CurvedFeatureInterferenceError(ValueError):
+    """携带精确工具体和结构化诊断的曲面干涉预检错误。"""
+
+    def __init__(self, message: str, diagnostics: dict[str, Any], tool: cq.Workplane):
+        super().__init__(message)
+        self.diagnostics = diagnostics
+        self.tool = tool
+
 SURFACE_GEOMETRY_LABELS = {
     "PLANE": "平面",
     "CYLINDER": "圆柱面",
@@ -508,22 +517,35 @@ def _curved_profile_interference_diagnostics(
     self_intersection = bool(self_intersection_distances)
     adjacent_face_interference = bool(adjacent_interference)
     if self_intersection or adjacent_face_interference:
+        stable_ids = list(dict.fromkeys(stable_id for stable_id, _ in adjacent_interference))
+        all_distances = self_intersection_distances + [distance for _, distance in adjacent_interference]
+        blocked_diagnostics = {
+            "interferenceCheckPassed": False,
+            "selfIntersectionDetected": self_intersection,
+            "adjacentFaceInterferenceDetected": adjacent_face_interference,
+            "interferingFaceCount": len(stable_ids),
+            "interferingStableFaceIds": stable_ids,
+            "minimumInterferenceDistanceMm": min(all_distances) if all_distances else None,
+            "contactFaceCount": contact_face_count,
+            "contactSampleCount": contact_sample_count,
+        }
         details: list[str] = []
         if self_intersection:
             nearest = min(self_intersection_distances)
             details.append(f"{profile_label}工具在距离点击位置约 {nearest:.3f} 毫米处再次接触目标曲面")
         if adjacent_face_interference:
             nearest = min(distance for _, distance in adjacent_interference)
-            stable_ids = list(dict.fromkeys(stable_id for stable_id, _ in adjacent_interference))
             preview_ids = "、".join(stable_ids[:3])
             suffix = "等" if len(stable_ids) > 3 else ""
             details.append(
                 f"{profile_label}工具在距离点击位置约 {nearest:.3f} 毫米处碰到 "
                 f"{len(stable_ids)} 个非目标稳定面（{preview_ids}{suffix}）"
             )
-        raise ValueError(
+        raise CurvedFeatureInterferenceError(
             f"曲面作用区域干涉检查未通过：{'；'.join(details)}。"
-            f"已阻止写入模型，请减小{profile_label}尺寸或深度，或更换点击位置"
+            f"已阻止写入模型，请减小{profile_label}尺寸或深度，或更换点击位置",
+            blocked_diagnostics,
+            tool,
         )
 
     return {
@@ -778,21 +800,41 @@ def apply_planar_feature(
         "contactSampleCount": 0,
     }
     if curved_face:
-        interference = _curved_profile_interference_diagnostics(
-            model,
-            target_face,
-            current_faces,
-            tool,
-            point,
-            outward,
-            operation,
-            footprint_radius_mm,
-            profile_label,
-            depth_mm,
-            float(curvature["curvatureRatio"]),
-            local_wall_thickness,
-            through_cut,
-        )
+        try:
+            interference = _curved_profile_interference_diagnostics(
+                model,
+                target_face,
+                current_faces,
+                tool,
+                point,
+                outward,
+                operation,
+                footprint_radius_mm,
+                profile_label,
+                depth_mm,
+                float(curvature["curvatureRatio"]),
+                local_wall_thickness,
+                through_cut,
+            )
+        except CurvedFeatureInterferenceError as error:
+            error.diagnostics = {
+                "pointDistanceMm": point_distance,
+                "normalDot": normal_dot,
+                "maximumPointDistanceMm": maximum_point_distance,
+                "surfaceGeometryType": geometry_type,
+                "surfaceUv": {"u": float(surface_uv[0]), "v": float(surface_uv[1])},
+                "surfaceTangentU": None if exact_surface_tangent_u is None else {
+                    "x": float(exact_surface_tangent_u.x),
+                    "y": float(exact_surface_tangent_u.y),
+                    "z": float(exact_surface_tangent_u.z),
+                },
+                **curvature,
+                "localWallThicknessMm": local_wall_thickness,
+                "remainingWallMm": remaining_wall,
+                "throughCut": through_cut,
+                **error.diagnostics,
+            }
+            raise
     adding = operation in ("add-cylinder", "add-rectangle", "offset-face-outward")
     edited = (model.union(tool, clean=True) if adding else model.cut(tool)).clean()
     operation_label = _operation_label(operation)
@@ -823,6 +865,7 @@ def apply_planar_feature(
     )
     return {
         "model": edited,
+        "tool": tool,
         "faceSources": new_face_sources,
         "faces": new_faces,
         "faceMatching": face_matching,

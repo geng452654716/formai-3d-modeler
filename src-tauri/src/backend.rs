@@ -23,6 +23,7 @@ const GENERATED_FILES: &[&str] = &[
     "imported-model-working.step",
     "local-stl-edit-result.json",
     "local-cad-feature-result.json",
+    "local-cad-feature-preflight-result.json",
     "manufacturing-negative.stl",
     "manufacturing-positive.stl",
     "manufacturing-negative.step",
@@ -461,6 +462,7 @@ fn generated_file_names(artifacts_dir: &Path) -> Vec<String> {
         "wall-thickness-result.json",
         "local-stl-edit-result.json",
         "local-cad-feature-result.json",
+        "local-cad-feature-preflight-result.json",
         "version-difference-result.json",
     ] {
         let result_path = artifacts_dir.join(result_name);
@@ -1290,6 +1292,7 @@ pub async fn run_local_cad_feature(
     depth_mm: f64,
     rotation_deg: f64,
     command: String,
+    preview_only: bool,
     state: tauri::State<'_, BackendState>,
 ) -> Result<Value, String> {
     let state = state.inner().clone();
@@ -1325,6 +1328,9 @@ pub async fn run_local_cad_feature(
         let whole_face = matches!(operation.as_str(), "offset-face-outward" | "offset-face-inward");
         let edge_feature = matches!(operation.as_str(), "fillet-edge" | "chamfer-edge");
         let curved_face = surface_geometry_type != "PLANE";
+        if preview_only && !curved_face {
+            return Err("OpenCascade 精确工具体预演第一版只用于非平面曲面局部特征".into());
+        }
         if curved_face && !cylinder && !rectangle && !slot {
             return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔".into());
         }
@@ -1401,12 +1407,20 @@ pub async fn run_local_cad_feature(
         for (flag, value) in [("--radius", radius_mm), ("--width", width_mm), ("--height", height_mm), ("--length", length_mm)] {
             if let Some(value) = value { arguments.push(flag.into()); arguments.push(value.to_string()); }
         }
+        if preview_only {
+            arguments.push("--preview-only".into());
+        }
         let output = run_process_with_input(&state.paths.python_path, &arguments, &state.paths.project_root, None)?;
         if !output.status.success() {
             let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(if message.is_empty() { format!("稳定 CAD 面局部特征 Worker 退出，状态码：{}", output.status) } else { message });
         }
-        let result_path = state.paths.artifacts_dir.join("local-cad-feature-result.json");
+        let result_name = if preview_only {
+            "local-cad-feature-preflight-result.json"
+        } else {
+            "local-cad-feature-result.json"
+        };
+        let result_path = state.paths.artifacts_dir.join(result_name);
         let contents = fs::read_to_string(&result_path).map_err(|error| format!("无法读取稳定 CAD 面局部特征结果：{error}"))?;
         serde_json::from_str(&contents).map_err(|error| format!("稳定 CAD 面局部特征结果格式错误：{error}"))
     })
@@ -3087,6 +3101,10 @@ mod tests {
     fn rejects_unknown_generated_files() {
         assert!(validate_generated_file("model-body.stl", Path::new(".")).is_ok());
         assert!(validate_generated_file("manufacturing-negative.step", Path::new(".")).is_ok());
+        assert!(
+            validate_generated_file("local-cad-feature-preflight-result.json", Path::new("."))
+                .is_ok()
+        );
         assert!(validate_generated_file("../../etc/passwd", Path::new(".")).is_err());
     }
 

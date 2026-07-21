@@ -49,7 +49,47 @@ export interface LocalCadFeatureRequest {
   command: string;
 }
 
-export type LocalCadFeaturePreviewStatus = 'ready' | 'executing' | 'blocked' | 'failed';
+export type LocalCadFeaturePreviewStatus = 'checking' | 'ready' | 'executing' | 'blocked' | 'failed';
+
+export interface LocalCadFeaturePreflightResult {
+  status: 'ok' | 'blocked';
+  revision: string;
+  operation: LocalCadFeatureOperation;
+  partId: string;
+  stableFaceId: string;
+  previewFile: string;
+  outputs: string[];
+  units: 'mm';
+  kernel: string;
+  message: string;
+  validation: {
+    pointDistanceMm?: number;
+    normalDot?: number;
+    surfaceGeometryType?: string;
+    surfaceUv?: { u: number; v: number };
+    surfaceTangentU?: { x: number; y: number; z: number } | null;
+    maximumAbsCurvaturePerMm?: number | null;
+    minimumCurvatureRadiusMm?: number | null;
+    curvatureRatio?: number | null;
+    localWallThicknessMm?: number | null;
+    remainingWallMm?: number | null;
+    throughCut?: boolean;
+    interferenceCheckPassed: boolean;
+    selfIntersectionDetected: boolean;
+    adjacentFaceInterferenceDetected: boolean;
+    interferingFaceCount: number;
+    interferingStableFaceIds: string[];
+    minimumInterferenceDistanceMm: number | null;
+    contactFaceCount: number;
+    contactSampleCount: number;
+    toolValid: boolean;
+    toolWatertight: boolean;
+    toolSolidCount: number;
+    toolVolumeMm3: number;
+    toolBoundsMm: { x: number; y: number; z: number };
+  };
+  limitations: string[];
+}
 
 /** 曲面受限局部特征的客户端预览；只绑定当前 CAD 修订、零件和稳定面。 */
 export interface LocalCadFeaturePreview {
@@ -57,6 +97,8 @@ export interface LocalCadFeaturePreview {
   kind: 'additive' | 'subtractive';
   status: LocalCadFeaturePreviewStatus;
   errorMessage: string | null;
+  /** OpenCascade 在写入模型前导出的真实布尔工具体和结构化安全诊断。 */
+  preflight: LocalCadFeaturePreflightResult | null;
 }
 
 export interface LocalCadFeatureResult {
@@ -124,26 +166,31 @@ export function createLocalCadFeaturePreview(
     request,
     kind: request.operation === 'add-cylinder' || request.operation === 'add-rectangle'
       ? 'additive' : 'subtractive',
-    status: 'ready',
-    errorMessage: null
+    status: 'checking',
+    errorMessage: null,
+    preflight: null
   };
 }
 
 export function describeLocalCadFeaturePreview(preview: LocalCadFeaturePreview) {
   const request = preview.request;
+  const preflight = preview.preflight;
+  const exactSummary = preflight
+    ? ` OpenCascade 精确工具体 ${preflight.validation.toolVolumeMm3.toFixed(2)} 立方毫米，包围盒 ${preflight.validation.toolBoundsMm.x.toFixed(2)} × ${preflight.validation.toolBoundsMm.y.toFixed(2)} × ${preflight.validation.toolBoundsMm.z.toFixed(2)} 毫米；检查 ${preflight.validation.contactFaceCount} 个接触面、${preflight.validation.contactSampleCount} 个接触采样。`
+    : '';
   if (request.operation === 'cut-slot') {
-    return `曲面槽孔预览：宽 ${request.widthMm!.toFixed(2)} 毫米、长 ${request.lengthMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实内法线显示。`;
+    return `曲面槽孔预览：宽 ${request.widthMm!.toFixed(2)} 毫米、长 ${request.lengthMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实内法线显示。${exactSummary}`;
   }
   if (request.operation === 'add-rectangle' || request.operation === 'cut-rectangle') {
     const direction = request.operation === 'add-rectangle' ? '外法线' : '内法线';
     const label = request.operation === 'add-rectangle' ? '矩形凸台' : '矩形孔';
-    return `曲面${label}预览：宽 ${request.widthMm!.toFixed(2)} 毫米、高 ${request.heightMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实${direction}显示。`;
+    return `曲面${label}预览：宽 ${request.widthMm!.toFixed(2)} 毫米、高 ${request.heightMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实${direction}显示。${exactSummary}`;
   }
   const diameterMm = request.radiusMm === null ? 0 : request.radiusMm * 2;
   if (preview.kind === 'additive') {
-    return `曲面圆形凸台预览：直径 ${diameterMm.toFixed(2)} 毫米，高 ${request.depthMm.toFixed(2)} 毫米；沿真实外法线显示。`;
+    return `曲面圆形凸台预览：直径 ${diameterMm.toFixed(2)} 毫米，高 ${request.depthMm.toFixed(2)} 毫米；沿真实外法线显示。${exactSummary}`;
   }
-  return `曲面圆孔预览：直径 ${diameterMm.toFixed(2)} 毫米，深 ${request.depthMm.toFixed(2)} 毫米；沿真实内法线显示。`;
+  return `曲面圆孔预览：直径 ${diameterMm.toFixed(2)} 毫米，深 ${request.depthMm.toFixed(2)} 毫米；沿真实内法线显示。${exactSummary}`;
 }
 
 const SURFACE_GEOMETRY_LABELS: Record<string, string> = {

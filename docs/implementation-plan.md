@@ -512,3 +512,19 @@ ESP32-S3 N16R8 只作为 `modeling/examples/esp32-s3-n16r8.json` 示例项目保
 2026-07-21 完整回归通过：前端 17 个测试文件 119/119、Rust 28/28、稳定 CAD Worker 9/9、曲面局部特征 23/23、参数化局部特征安全重放 11/11、曲面命中 7/7；TypeScript/Vite 生产构建、`cargo check`、Rust 测试、全部 Modeling Python 语法编译和 `git diff --check` 均通过。仅保留既有 Vite 大分块警告与 CadQuery/Pyparsing 弃用警告。
 
 **下一阶段：**评估非平面局部特征的执行前精确工具体预演和更细粒度干涉反馈；继续保持受限 JSON、保守包络与 OpenCascade 单 Solid 校验，不扩展为任意自由曲面贴合建模。
+
+### 31. OpenCascade 精确工具体预演与结构化曲面干涉反馈（已实现）
+
+- 非平面 `add-cylinder`、`cut-cylinder`、`add-rectangle`、`cut-rectangle` 和 `cut-slot` 在正式修改前新增独立预检阶段。Python Worker 使用与正式布尔相同的当前 STEP、稳定面定位、真实 UV、外法线、真实 U 切向、曲率、壁厚、裁剪边界和干涉算法创建工具体，不接受客户端 Three.js 参数近似替代精确几何。
+- 预检导出 `local-cad-feature-tool-preview.stl` 和 `local-cad-feature-preflight-result.json`。视口显示的是最终布尔实际使用的 OpenCascade 工具体 STL；它只表示加料或切削的作用体，不是修改后的最终模型，也不能替代正式布尔结果校验。
+- 自动执行顺序固定为“生成精确工具体并预检 → 显示一个视图帧 → 保存修改前快照 → 正式执行 Worker”。只有 `status=ok` 才允许进入快照和写入阶段；`status=blocked` 或预检异常均立即停止，不创建版本、不调用正式 Worker、不覆盖当前 STEP/STL/3MF/清单。
+- `blocked` 仍保留精确工具体用于查看，并返回结构化诊断：是否再次接触目标曲面、是否检测到目标曲面自交、是否碰到非目标稳定面、干涉稳定面 ID、最近干涉距离、接触面数、接触采样数，以及工具体有效性、封闭性、Solid 数、体积和毫米包围盒。前端使用全中文状态和错误说明模型未写入。
+- 精确工具体与预检结果严格绑定当前 `revision + partId + stableFaceId + surfaceUv + surfaceTangentU`。模型修订、零件、选择面、UV 或 U 切向任一变化后，旧预演不能继续显示或执行。
+- 平面局部特征和单边圆角/倒角不进入本阶段预检入口；第一版精确工具体预检只面向非平面圆形、矩形和槽孔。Codex 仍只能返回受限 JSON，不允许输出或执行 Python、CadQuery 或 Shell。
+- 自动化覆盖预检成功时工作模型和修订不变、真实工具体有效且封闭、曲面干涉 `blocked` 时仍导出工具体但不修改清单、平面预检明确拒绝、前端工具体摘要、阻止正式 Worker、预检异常停止自动执行，以及预检早于快照和正式 Worker 的调用顺序。
+
+能力边界：曲面矩形和槽孔仍是在真实 UV 点击位置建立的切平面安全近似，不是沿任意曲面贴合或测地线生成的轮廓；工具体预演不等于最终布尔结果。稳定面仍是“几何签名匹配第一版”，不是 OpenCascade 永久拓扑命名；`triangleIndex`、曲面 UV 和真实 U 切向都只对当前修订有效。
+
+2026-07-21 完整回归通过：前端 17 个测试文件 120/120、Rust 28/28、稳定 CAD Worker 12/12、曲面局部特征 23/23、参数化局部特征安全重放 11/11、曲面命中 7/7；TypeScript/Vite 生产构建、`cargo check`、Rust 测试、全部 Modeling Python 语法编译和 `git diff --check` 均通过。仅保留既有 Vite 大分块警告与 CadQuery/Pyparsing 弃用警告。
+
+**下一阶段：**在不改变受限 JSON 和自动安全门的前提下，增加精确工具体的局部测量、干涉面定位与风险参数调整入口，使用户能从 `blocked` 结果直接定位风险面并修改尺寸后重新预检；继续保持 OpenCascade 单 Solid 校验，不扩展为任意自由曲面贴合建模。

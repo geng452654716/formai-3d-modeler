@@ -452,7 +452,7 @@ function LoadedCadMesh({
       || request.selectionRevision !== cadResult?.revision
       || request.partId !== cadPart.id
       || request.stableFaceId !== selectedFace?.stableId
-      || request.partId !== selectedFace.partId
+      || request.partId !== selectedFace?.partId
       || (
         !['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(request.operation)
         && request.radiusMm === null
@@ -463,6 +463,8 @@ function LoadedCadMesh({
       )
       || (request.operation === 'cut-slot' && (request.widthMm === null || request.lengthMm === null))
     ) return null;
+    // OpenCascade 已导出最终布尔使用的真实工具体后，不再叠加客户端参数近似体。
+    if (preview.preflight?.previewFile) return null;
     const direction = new Vector3(request.hitNormal.x, request.hitNormal.y, request.hitNormal.z);
     if (direction.lengthSq() < 1e-12) return null;
     direction.normalize();
@@ -998,6 +1000,8 @@ function ModelScene() {
   const versionGeometryDifferenceResult = useModelStore((state) => state.versionGeometryDifferenceResult);
   const versionGeometryComparisonStatus = useModelStore((state) => state.versionGeometryComparisonStatus);
   const cadFaceSelectionMode = useModelStore((state) => state.cadFaceSelectionMode);
+  const cadFaceSelection = useModelStore((state) => state.cadFaceSelection);
+  const localCadFeaturePreview = useModelStore((state) => state.localCadFeaturePreview);
   const bodyGeometry = useMemo(() => createTrayGeometry(parameters), [parameters]);
   const coverGeometry = useMemo(() => createLidGeometry(parameters), [parameters]);
   const dimensions = getOuterDimensions(parameters);
@@ -1046,6 +1050,34 @@ function ModelScene() {
 
   const partPosition = (role: string): [number, number, number] =>
     role === 'cover' ? [0, coverBottomY, 0] : [0, 0, 0];
+  const exactFeaturePreview = useMemo(() => {
+    const preview = localCadFeaturePreview;
+    const preflight = preview?.preflight;
+    const selectedFace = cadFaceSelection?.faces[0];
+    const targetPart = preview && cadResult
+      ? cadResult.parts.find((part) => part.id === preview.request.partId)
+      : null;
+    if (
+      !preview
+      || !preflight?.previewFile
+      || !cadResult
+      || !targetPart
+      || preview.request.selectionRevision !== cadResult.revision
+      || preflight.revision !== cadResult.revision
+      || preflight.partId !== preview.request.partId
+      || preflight.stableFaceId !== preview.request.stableFaceId
+      || selectedFace?.partId !== preview.request.partId
+      || selectedFace.stableId !== preview.request.stableFaceId
+    ) return null;
+    return {
+      fileName: preflight.previewFile,
+      revision: `${preflight.revision}-工具体预演`,
+      position: partPosition(targetPart.role),
+      color: preview.status === 'blocked'
+        ? '#f59e0b'
+        : preview.kind === 'additive' ? '#34d399' : '#f87171'
+    };
+  }, [cadFaceSelection, cadResult, localCadFeaturePreview, coverBottomY]);
 
   return (
     <>
@@ -1236,6 +1268,21 @@ function ModelScene() {
             />
           </>
         )}
+        {exactFeaturePreview && !(visualComparisonActive || differenceActive) && showCad && (
+          <Suspense fallback={null}>
+            <CadMesh
+              id="精确曲面工具体预演"
+              fileName={exactFeaturePreview.fileName}
+              revision={exactFeaturePreview.revision}
+              color={exactFeaturePreview.color}
+              position={exactFeaturePreview.position}
+              preserveCoordinates
+              interactive={false}
+              opacity={0.34}
+              renderOrder={8}
+            />
+          </Suspense>
+        )}
         {!(visualComparisonActive || differenceActive) && !showUploadedStl && showBoard && <ReferenceComponent parameters={parameters} />}
         {!(visualComparisonActive || differenceActive) && !showUploadedStl && <DimensionLabel parameters={parameters} />}
       </group>
@@ -1389,9 +1436,9 @@ export function ModelViewport() {
           </span>
           {localCadFeaturePreview && (
             <div className={`local-cad-feature-preview-status is-${localCadFeaturePreview.status}`}>
-              <strong>{localCadFeaturePreview.status === 'ready' ? '准备自动执行' : localCadFeaturePreview.status === 'executing' ? '正在自动执行' : localCadFeaturePreview.status === 'blocked' ? '检测到曲面干涉，已阻止执行' : '执行失败，预览已保留'}</strong>
+              <strong>{localCadFeaturePreview.status === 'checking' ? '正在生成 OpenCascade 精确工具体预演' : localCadFeaturePreview.status === 'ready' ? '准备自动执行' : localCadFeaturePreview.status === 'executing' ? '正在自动执行' : localCadFeaturePreview.status === 'blocked' ? '检测到曲面干涉，已阻止执行' : '执行失败，预览已保留'}</strong>
               <span>{describeLocalCadFeaturePreview(localCadFeaturePreview)}</span>
-              <small>预览绑定当前 CAD 修订、零件、稳定面和曲面 UV；模型重建或重新选择后自动失效。</small>
+              <small>精确预演绑定当前 CAD 修订、零件、稳定面、曲面 UV 和真实 U 切向；模型重建或重新选择后自动失效。</small>
               {localCadFeaturePreview.errorMessage && <small>{localCadFeaturePreview.errorMessage}</small>}
               {(localCadFeaturePreview.status === 'blocked' || localCadFeaturePreview.status === 'failed') && (
                 <button type="button" onClick={clearLocalCadFeaturePreview}>清除预览</button>

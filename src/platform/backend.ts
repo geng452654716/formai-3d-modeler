@@ -4,6 +4,7 @@ import type { ImportedStlModel } from '../model/importedModel';
 import type { LocalStlEditRequest, LocalStlEditResult } from '../model/localStlEdit';
 import type {
   CodexLocalCadFeaturePlan,
+  LocalCadFeaturePreflightResult,
   LocalCadFeatureRequest,
   LocalCadFeatureResult
 } from '../model/localCadFeature';
@@ -290,9 +291,8 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
   return result;
 }
 
-/** 对点击选中的稳定 CAD 面执行受限局部特征；曲面允许圆形、矩形或受限槽孔。 */
-export async function runLocalCadFeature(request: LocalCadFeatureRequest) {
-  const payload = {
+function localCadFeaturePayload(request: LocalCadFeatureRequest, previewOnly: boolean) {
+  return {
     selectionRevision: request.selectionRevision,
     partId: request.partId,
     stableFaceId: request.stableFaceId,
@@ -316,8 +316,33 @@ export async function runLocalCadFeature(request: LocalCadFeatureRequest) {
     lengthMm: request.lengthMm,
     depthMm: request.depthMm,
     rotationDeg: request.rotationDeg,
-    command: request.command
+    command: request.command,
+    previewOnly
   };
+}
+
+/** 在写入模型前生成 OpenCascade 精确工具体并执行结构化曲面干涉预检。 */
+export async function preflightLocalCadFeature(request: LocalCadFeatureRequest) {
+  const payload = localCadFeaturePayload(request, true);
+  if (isDesktopRuntime()) {
+    return invoke<LocalCadFeaturePreflightResult>('run_local_cad_feature', payload);
+  }
+
+  const response = await fetch('/api/model/local-cad-feature', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json() as LocalCadFeaturePreflightResult | { message?: string };
+  if (!response.ok || !('status' in result) || !['ok', 'blocked'].includes(result.status)) {
+    throw new Error('message' in result && result.message ? result.message : '稳定 CAD 精确工具体预演失败');
+  }
+  return result as LocalCadFeaturePreflightResult;
+}
+
+/** 对点击选中的稳定 CAD 面执行受限局部特征；曲面允许圆形、矩形或受限槽孔。 */
+export async function runLocalCadFeature(request: LocalCadFeatureRequest) {
+  const payload = localCadFeaturePayload(request, false);
   if (isDesktopRuntime()) {
     return invoke<LocalCadFeatureResult>('run_local_cad_feature', payload);
   }

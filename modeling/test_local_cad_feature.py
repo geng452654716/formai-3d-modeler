@@ -15,6 +15,7 @@ from face_geometry_signatures import match_shape_faces_with_sources
 from face_tessellation_mapping import export_face_tessellation_mapping
 from local_cad_feature import _export_assembly_3mf, edit_cad_feature
 from local_cad_feature_core import describe_surface_geometry_type
+from split_and_cap import _closed_solids, import_stl_as_solid
 
 
 class LocalCadFeatureTests(unittest.TestCase):
@@ -100,9 +101,11 @@ class LocalCadFeatureTests(unittest.TestCase):
         return manifest, target
 
     def _curved_project(
-        self, root: Path
+        self,
+        root: Path,
+        model: cq.Workplane | None = None,
     ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
-        model = cq.Workplane("XY").cylinder(20, 10)
+        model = model or cq.Workplane("XY").cylinder(20, 10)
         sources, matching = match_shape_faces_with_sources(model)
         descriptors = [descriptor for _, descriptor in sources]
         target = next(
@@ -163,6 +166,120 @@ class LocalCadFeatureTests(unittest.TestCase):
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         return manifest, target, hit
+
+    def test_curved_feature_preview_exports_exact_tool_without_modifying_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face, hit = self._curved_project(root)
+            manifest_before = (root / "generation-result.json").read_bytes()
+            step_before = (root / "curved-part.step").read_bytes()
+            stl_before = (root / "curved-part.stl").read_bytes()
+            point = hit["projectedPointMm"]
+            normal = hit["outwardNormal"]
+            surface_uv = hit["surfaceUv"]
+            surface_tangent_u = hit["surfaceTangentU"]
+
+            result = edit_cad_feature(
+                root,
+                "cut-cylinder",
+                manifest["revision"],
+                "curved-part",
+                face["stableId"],
+                (point["x"], point["y"], point["z"]),
+                (normal["x"], normal["y"], normal["z"]),
+                2.0,
+                4.0,
+                "预演曲面圆孔",
+                surface_geometry_type="CYLINDER",
+                surface_uv=(surface_uv["u"], surface_uv["v"]),
+                surface_tangent_u=(
+                    surface_tangent_u["x"],
+                    surface_tangent_u["y"],
+                    surface_tangent_u["z"],
+                ),
+                preview_only=True,
+            )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["revision"], manifest["revision"])
+            self.assertEqual((root / "generation-result.json").read_bytes(), manifest_before)
+            self.assertEqual((root / "curved-part.step").read_bytes(), step_before)
+            self.assertEqual((root / "curved-part.stl").read_bytes(), stl_before)
+            self.assertTrue(result["validation"]["interferenceCheckPassed"])
+            self.assertTrue(result["validation"]["toolValid"])
+            self.assertTrue(result["validation"]["toolWatertight"])
+            self.assertEqual(result["validation"]["toolSolidCount"], 1)
+            self.assertGreater(result["validation"]["toolVolumeMm3"], 0)
+            self.assertGreater(result["validation"]["toolBoundsMm"]["x"], 0)
+            preview_path = root / result["previewFile"]
+            self.assertTrue(preview_path.is_file())
+            preview_model, _ = import_stl_as_solid(preview_path)
+            self.assertEqual(len(_closed_solids(preview_model, "测试精确预演工具体")), 1)
+            persisted = json.loads(
+                (root / "local-cad-feature-preflight-result.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(persisted, result)
+
+    def test_curved_feature_preview_returns_structured_block_without_modifying_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = cq.Workplane("XY").cylinder(20, 10)
+            column = cq.Workplane("XY").box(2, 3, 9).translate((13, 0, 2.5))
+            bridge = cq.Workplane("XY").box(6, 3, 2).translate((11, 0, 6))
+            manifest, face, hit = self._curved_project(root, base.union(column).union(bridge).clean())
+            manifest_before = (root / "generation-result.json").read_bytes()
+            step_before = (root / "curved-part.step").read_bytes()
+            point = hit["projectedPointMm"]
+            normal = hit["outwardNormal"]
+            surface_uv = hit["surfaceUv"]
+
+            result = edit_cad_feature(
+                root,
+                "add-cylinder",
+                manifest["revision"],
+                "curved-part",
+                face["stableId"],
+                (point["x"], point["y"], point["z"]),
+                (normal["x"], normal["y"], normal["z"]),
+                2.0,
+                4.0,
+                "预演曲面凸台干涉",
+                surface_geometry_type="CYLINDER",
+                surface_uv=(surface_uv["u"], surface_uv["v"]),
+                preview_only=True,
+            )
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertFalse(result["validation"]["interferenceCheckPassed"])
+            self.assertTrue(result["validation"]["adjacentFaceInterferenceDetected"])
+            self.assertGreater(result["validation"]["interferingFaceCount"], 0)
+            self.assertTrue(result["validation"]["interferingStableFaceIds"])
+            self.assertIsNotNone(result["validation"]["minimumInterferenceDistanceMm"])
+            self.assertTrue((root / result["previewFile"]).is_file())
+            self.assertEqual((root / "generation-result.json").read_bytes(), manifest_before)
+            self.assertEqual((root / "curved-part.step").read_bytes(), step_before)
+
+    def test_planar_feature_preview_is_explicitly_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face = self._project(root)
+            manifest_before = (root / "generation-result.json").read_bytes()
+            with self.assertRaisesRegex(ValueError, "只用于非平面"):
+                edit_cad_feature(
+                    root,
+                    "cut-cylinder",
+                    manifest["revision"],
+                    "main-part",
+                    face["stableId"],
+                    (0, 0, 5),
+                    (0, 0, 1),
+                    2.0,
+                    4.0,
+                    "不应执行的平面预演",
+                    preview_only=True,
+                )
+            self.assertEqual((root / "generation-result.json").read_bytes(), manifest_before)
+            self.assertFalse((root / "local-cad-feature-tool-preview.stl").exists())
 
     def test_curved_hole_worker_persists_uv_and_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadFaceDescriptor, CadGenerationResult } from '../model/cad';
 import type { CadFaceSelectionContext } from '../model/cadFaceSelection';
-import type { LocalCadFeatureResult } from '../model/localCadFeature';
+import type { LocalCadFeaturePreflightResult, LocalCadFeatureResult } from '../model/localCadFeature';
 
 const backendMocks = vi.hoisted(() => ({
   createVersionSnapshot: vi.fn(),
+  preflightLocalCadFeature: vi.fn(),
   runCodexModelCommand: vi.fn(),
   runLocalCadFeature: vi.fn()
 }));
@@ -14,6 +15,7 @@ vi.mock('../platform/backend', async (importOriginal) => {
   return {
     ...actual,
     createVersionSnapshot: backendMocks.createVersionSnapshot,
+    preflightLocalCadFeature: backendMocks.preflightLocalCadFeature,
     runCodexModelCommand: backendMocks.runCodexModelCommand,
     runLocalCadFeature: backendMocks.runLocalCadFeature
   };
@@ -377,6 +379,57 @@ function curvedFeatureResult(): LocalCadFeatureResult {
 }
 
 
+/** 构造不会写入模型的 OpenCascade 曲面精确工具体预检结果。 */
+function curvedPreflightResult(
+  status: 'ok' | 'blocked' = 'ok',
+  overrides: Partial<LocalCadFeaturePreflightResult['validation']> = {}
+): LocalCadFeaturePreflightResult {
+  const blocked = status === 'blocked';
+  return {
+    status,
+    revision: curvedCadResult.revision,
+    operation: 'cut-cylinder',
+    partId: 'custom-part',
+    stableFaceId: 'face-curved',
+    previewFile: 'local-cad-feature-tool-preview.stl',
+    outputs: ['local-cad-feature-tool-preview.stl'],
+    units: 'mm',
+    kernel: 'CadQuery + OpenCascade',
+    message: blocked
+      ? '曲面作用区域干涉检查未通过，已阻止写入模型'
+      : 'OpenCascade 精确工具体预演与曲面干涉检查已通过',
+    validation: {
+      pointDistanceMm: 0,
+      normalDot: 1,
+      surfaceGeometryType: 'CYLINDER',
+      surfaceUv: { u: 0, v: 10 },
+      surfaceTangentU: { x: 0, y: 1, z: 0 },
+      maximumAbsCurvaturePerMm: 0.1,
+      minimumCurvatureRadiusMm: 10,
+      curvatureRatio: 0.2,
+      localWallThicknessMm: 20,
+      remainingWallMm: 16,
+      throughCut: false,
+      interferenceCheckPassed: !blocked,
+      selfIntersectionDetected: false,
+      adjacentFaceInterferenceDetected: blocked,
+      interferingFaceCount: blocked ? 1 : 0,
+      interferingStableFaceIds: blocked ? ['face-blocking'] : [],
+      minimumInterferenceDistanceMm: blocked ? 2 : null,
+      contactFaceCount: blocked ? 2 : 1,
+      contactSampleCount: blocked ? 8 : 7,
+      toolValid: true,
+      toolWatertight: true,
+      toolSolidCount: 1,
+      toolVolumeMm3: 50.27,
+      toolBoundsMm: { x: 4, y: 4, z: 4 },
+      ...overrides
+    },
+    limitations: ['精确预演显示真实 OpenCascade 布尔工具体，不是最终布尔结果']
+  };
+}
+
+
 const updatedCurvedSlotCadResult = {
   ...curvedCadResult,
   revision: 'curved-slot-after',
@@ -498,6 +551,7 @@ function edgeFeatureResult(): LocalCadFeatureResult {
 describe('稳定 CAD 局部特征命令链', () => {
   beforeEach(() => {
     backendMocks.createVersionSnapshot.mockReset().mockResolvedValue(null);
+    backendMocks.preflightLocalCadFeature.mockReset().mockResolvedValue(curvedPreflightResult());
     backendMocks.runCodexModelCommand.mockReset();
     backendMocks.runLocalCadFeature.mockReset();
     useModelStore.setState({
@@ -578,6 +632,7 @@ describe('稳定 CAD 局部特征命令链', () => {
 
     await useModelStore.getState().executeCommand('在这里开一个直径 4 毫米、深 4 毫米的圆孔');
 
+    expect(backendMocks.preflightLocalCadFeature).toHaveBeenCalledOnce();
     expect(backendMocks.runLocalCadFeature).toHaveBeenCalledWith(expect.objectContaining({
       selectionRevision: 'curved-feature-before',
       partId: 'custom-part',
@@ -590,6 +645,12 @@ describe('稳定 CAD 局部特征命令链', () => {
       radiusMm: 2,
       depthMm: 4
     }));
+    expect(backendMocks.preflightLocalCadFeature.mock.invocationCallOrder[0]).toBeLessThan(
+      backendMocks.createVersionSnapshot.mock.invocationCallOrder[0]
+    );
+    expect(backendMocks.createVersionSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      backendMocks.runLocalCadFeature.mock.invocationCallOrder[0]
+    );
     const state = useModelStore.getState();
     expect(state.cadResult).toBe(updatedCurvedCadResult);
     expect(state.cadFaceSelection).toBeNull();
@@ -722,8 +783,9 @@ describe('稳定 CAD 局部特征命令链', () => {
       cadResult: curvedCadResult,
       cadFaceSelection: curvedSelection
     });
-    const interferenceError = '曲面作用区域干涉检查未通过：圆形工具在距离点击位置约 2.000 毫米处碰到 1 个非目标稳定面（face-blocking）。已阻止写入模型，请减小半径或深度，或更换点击位置';
-    backendMocks.runLocalCadFeature.mockRejectedValue(new Error(interferenceError));
+    const blockedPreflight = curvedPreflightResult('blocked');
+    const interferenceError = blockedPreflight.message;
+    backendMocks.preflightLocalCadFeature.mockResolvedValue(blockedPreflight);
 
     await useModelStore.getState().executeCommand('在这里开一个直径 4 毫米、深 4 毫米的圆孔');
 
@@ -741,8 +803,42 @@ describe('稳定 CAD 局部特征命令链', () => {
         stableFaceId: 'face-curved'
       }
     });
-    expect(state.messages.at(-1)?.content).toContain('已保留修改前模型');
-    expect(state.messages.at(-1)?.content).toContain('三维预览已标记为干涉风险，已阻止写入模型');
+    expect(backendMocks.runLocalCadFeature).not.toHaveBeenCalled();
+    expect(state.localCadFeaturePreview?.preflight?.validation.interferingStableFaceIds).toEqual(['face-blocking']);
+    expect(state.localCadFeaturePreview?.preflight?.validation.minimumInterferenceDistanceMm).toBe(2);
+    expect(state.messages.at(-1)?.content).toContain('精确工具体预演已阻止自动执行');
+    expect(state.messages.at(-1)?.content).toContain('当前模型未写入任何修改');
+  });
+
+  it('曲面精确预检异常时停止自动执行且不创建修改前快照', async () => {
+    useModelStore.setState({
+      cadResult: curvedCadResult,
+      cadFaceSelection: curvedSelection
+    });
+    backendMocks.preflightLocalCadFeature.mockRejectedValue(new Error('精确工具体生成失败'));
+
+    await useModelStore.getState().executeCommand('在这里开一个直径 4 毫米、深 4 毫米的圆孔');
+
+    const state = useModelStore.getState();
+    expect(backendMocks.createVersionSnapshot).not.toHaveBeenCalled();
+    expect(backendMocks.runLocalCadFeature).not.toHaveBeenCalled();
+    expect(state.cadResult).toBe(curvedCadResult);
+    expect(state.cadFaceSelection).toBe(curvedSelection);
+    expect(state.cadFaceSelection?.hit?.surfaceUv).toEqual({ u: 0, v: 10 });
+    expect(state.cadFaceSelectionMode).toBe('click');
+    expect(state.aiError).toBe('精确工具体生成失败');
+    expect(state.localCadFeaturePreview).toMatchObject({
+      kind: 'subtractive',
+      status: 'failed',
+      errorMessage: '精确工具体生成失败',
+      request: {
+        selectionRevision: 'curved-feature-before',
+        partId: 'custom-part',
+        stableFaceId: 'face-curved',
+        surfaceUv: { u: 0, v: 10 }
+      }
+    });
+    expect(state.messages.at(-1)?.content).toContain('已停止自动执行并保留当前模型');
   });
 
   it('曲面 Worker 执行期间保留绑定当前修订的三维预览并在成功后清除', async () => {

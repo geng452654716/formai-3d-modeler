@@ -21,7 +21,8 @@ const resultFileNames = [
   'imported-model-result.json',
   'wall-thickness-result.json',
   'local-stl-edit-result.json',
-  'local-cad-feature-result.json'
+  'local-cad-feature-result.json',
+  'local-cad-feature-preflight-result.json'
 ];
 const importedModelFiles = ['imported-model.stl', 'imported-model-working.stl', 'imported-model-working.step'];
 const manufacturingFiles = [
@@ -204,7 +205,8 @@ function generatedFiles() {
     'imported-model-result.json',
     'manufacturing-result.json',
     'local-stl-edit-result.json',
-    'local-cad-feature-result.json'
+    'local-cad-feature-result.json',
+    'local-cad-feature-preflight-result.json'
   ]) {
     try {
       const manifest = JSON.parse(
@@ -471,6 +473,7 @@ function runLocalCadFeatureWorker(body: {
   depthMm?: number;
   rotationDeg?: number;
   command?: string;
+  previewOnly?: boolean;
 }) {
   const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge'];
   if (!operations.includes(body.operation ?? '')) throw new Error('稳定 CAD 局部特征操作无效');
@@ -497,6 +500,12 @@ function runLocalCadFeatureWorker(body: {
   const wholeFace = body.operation === 'offset-face-outward' || body.operation === 'offset-face-inward';
   const edgeFeature = body.operation === 'fillet-edge' || body.operation === 'chamfer-edge';
   const curvedFace = body.surfaceGeometryType !== 'PLANE';
+  if (body.previewOnly !== undefined && typeof body.previewOnly !== 'boolean') {
+    throw new Error('稳定 CAD 精确工具体预演标记无效');
+  }
+  if (body.previewOnly && !curvedFace) {
+    throw new Error('OpenCascade 精确工具体预演第一版只用于非平面曲面局部特征');
+  }
   const slot = body.operation === 'cut-slot';
   const rectangle = body.operation === 'add-rectangle' || body.operation === 'cut-rectangle';
   if (curvedFace && !cylinder && !rectangle && !slot) {
@@ -564,6 +573,7 @@ function runLocalCadFeatureWorker(body: {
   for (const [flag, value] of [['--radius', body.radiusMm], ['--width', body.widthMm], ['--height', body.heightMm], ['--length', body.lengthMm]] as const) {
     if (value !== null && value !== undefined) arguments_.push(flag, String(value));
   }
+  if (body.previewOnly) arguments_.push('--preview-only');
   return new Promise<void>((resolvePromise, rejectPromise) => {
     const process = spawn(pythonPath, arguments_, { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
@@ -768,8 +778,11 @@ function cadWorkerPlugin(): Plugin {
           try {
             const body = await readJsonBody(request) as Parameters<typeof runLocalCadFeatureWorker>[0];
             await runLocalCadFeatureWorker(body);
+            const resultName = body.previewOnly
+              ? 'local-cad-feature-preflight-result.json'
+              : 'local-cad-feature-result.json';
             const summary = JSON.parse(
-              readFileSync(resolve(artifactsDirectory, 'local-cad-feature-result.json'), 'utf8')
+              readFileSync(resolve(artifactsDirectory, resultName), 'utf8')
             ) as Record<string, unknown>;
             writeJson(response, 200, summary);
           } catch (error) {

@@ -14,6 +14,7 @@ import {
   createVersionSnapshot,
   importStlModel as importStlModelBackend,
   loadBackendStatus,
+  preflightLocalCadFeature,
   runCodexModelCommand,
   runLocalCadFeature,
   runLocalStlEdit,
@@ -1059,15 +1060,56 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       if (preview) {
         set({
           localCadFeaturePreview: preview,
-          aiActivity: `${preview.request.operation === 'cut-slot'
+          aiActivity: `OpenCascade 正在生成${preview.request.operation === 'cut-slot'
             ? '曲面槽孔'
             : preview.request.operation === 'add-rectangle'
               ? '曲面矩形凸台'
               : preview.request.operation === 'cut-rectangle'
                 ? '曲面矩形孔'
-                : preview.kind === 'additive' ? '曲面圆形凸台' : '曲面圆孔'}三维预览已生成，正在自动执行`
+                : preview.kind === 'additive' ? '曲面圆形凸台' : '曲面圆孔'}精确工具体预演并检查干涉`
         });
-        await waitForLocalCadFeaturePreviewFrame();
+        try {
+          const preflight = await preflightLocalCadFeature(request);
+          if (preflight.status === 'blocked') {
+            set((state) => ({
+              aiStatus: backendStatus?.codexAuthenticated ? 'ready' : 'local',
+              aiActivity: null,
+              aiError: preflight.message,
+              localCadFeaturePreview: state.localCadFeaturePreview?.request === request
+                ? { ...state.localCadFeaturePreview, status: 'blocked', errorMessage: preflight.message, preflight }
+                : state.localCadFeaturePreview,
+              messages: state.messages.concat({
+                id: crypto.randomUUID(),
+                role: 'assistant',
+                content: `OpenCascade 精确工具体预演已阻止自动执行：${preflight.message}。已显示真实布尔工具体，并标出 ${preflight.validation.interferingFaceCount} 个非目标稳定面；最近干涉距离 ${preflight.validation.minimumInterferenceDistanceMm?.toFixed(3) ?? '未知'} 毫米。当前模型未写入任何修改。`
+              })
+            }));
+            return;
+          }
+          set((state) => ({
+            aiActivity: 'OpenCascade 精确工具体预演和曲面干涉检查已通过，准备自动执行',
+            localCadFeaturePreview: state.localCadFeaturePreview?.request === request
+              ? { ...state.localCadFeaturePreview, status: 'ready', errorMessage: null, preflight }
+              : state.localCadFeaturePreview
+          }));
+          await waitForLocalCadFeaturePreviewFrame();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'OpenCascade 精确工具体预演失败';
+          set((state) => ({
+            aiStatus: backendStatus?.codexAuthenticated ? 'ready' : 'local',
+            aiActivity: null,
+            aiError: message,
+            localCadFeaturePreview: state.localCadFeaturePreview?.request === request
+              ? { ...state.localCadFeaturePreview, status: 'failed', errorMessage: message }
+              : state.localCadFeaturePreview,
+            messages: state.messages.concat({
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: `OpenCascade 精确工具体预演失败，已停止自动执行并保留当前模型：${message}`
+            })
+          }));
+          return;
+        }
       }
 
       set({ aiActivity: '正在保存稳定 CAD 局部修改前快照' });

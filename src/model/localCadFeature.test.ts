@@ -103,7 +103,7 @@ describe('稳定 CAD 面局部特征请求', () => {
 
     expect(preview).toMatchObject({
       kind: 'subtractive',
-      status: 'ready',
+      status: 'checking',
       errorMessage: null,
       request: {
         selectionRevision: 'revision-1',
@@ -117,6 +117,37 @@ describe('稳定 CAD 面局部特征请求', () => {
     });
     expect(describeLocalCadFeaturePreview(preview!)).toBe(
       '曲面圆孔预览：直径 4.00 毫米，深 6.00 毫米；沿真实内法线显示。'
+    );
+    preview!.preflight = {
+      status: 'ok',
+      revision: 'revision-1',
+      operation: 'cut-cylinder',
+      partId: 'body',
+      stableFaceId: 'face-cylinder',
+      previewFile: 'local-cad-feature-tool-preview.stl',
+      outputs: ['local-cad-feature-tool-preview.stl'],
+      units: 'mm',
+      kernel: 'CadQuery + OpenCascade',
+      message: '精确预检通过',
+      validation: {
+        interferenceCheckPassed: true,
+        selfIntersectionDetected: false,
+        adjacentFaceInterferenceDetected: false,
+        interferingFaceCount: 0,
+        interferingStableFaceIds: [],
+        minimumInterferenceDistanceMm: null,
+        contactFaceCount: 1,
+        contactSampleCount: 7,
+        toolValid: true,
+        toolWatertight: true,
+        toolSolidCount: 1,
+        toolVolumeMm3: 75.4,
+        toolBoundsMm: { x: 4, y: 4, z: 6 }
+      },
+      limitations: []
+    };
+    expect(describeLocalCadFeaturePreview(preview!)).toContain(
+      'OpenCascade 精确工具体 75.40 立方毫米，包围盒 4.00 × 4.00 × 6.00 毫米；检查 1 个接触面、7 个接触采样。'
     );
     expect(createLocalCadFeaturePreview(buildLocalCadFeatureRequest(
       selection,
