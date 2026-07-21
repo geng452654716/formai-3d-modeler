@@ -203,6 +203,17 @@ const updatedEdgeCadResult = {
   }]
 } satisfies CadGenerationResult;
 
+const updatedEdgeLoopCadResult = {
+  ...updatedEdgeCadResult,
+  revision: 'edge-loop-feature-after',
+  localFeatures: [{
+    ...updatedEdgeCadResult.localFeatures![0],
+    revision: 'edge-loop-feature-after',
+    operation: 'fillet-edge-loop' as const,
+    command: '将这圈边做 0.8 毫米圆角'
+  }]
+} satisfies CadGenerationResult;
+
 function featureResult(): LocalCadFeatureResult {
   return {
     status: 'ok',
@@ -540,11 +551,29 @@ function edgeFeatureResult(): LocalCadFeatureResult {
       volumeBeforeMm3: 100,
       volumeAfterMm3: 98,
       volumeDeltaMm3: -2,
-      boundsMm: { x: 10, y: 20, z: 30 }
+      boundsMm: { x: 10, y: 20, z: 30 },
+      affectedEdgeCount: 1,
+      edgeScope: 'single'
     },
     faceMatching: updatedEdgeCadResult.faceMatching!,
     updatedCadResult: updatedEdgeCadResult,
-    limitations: ['只支持单条稳定边，不支持多边链、整圈传播或可变半径圆角']
+    limitations: ['单边操作不传播到边界圈；平面边界整圈需在指令中明确要求']
+  };
+}
+
+function edgeLoopFeatureResult(): LocalCadFeatureResult {
+  return {
+    ...edgeFeatureResult(),
+    revision: updatedEdgeLoopCadResult.revision,
+    operation: 'fillet-edge-loop',
+    command: '将这圈边做 0.8 毫米圆角',
+    validation: {
+      ...edgeFeatureResult().validation,
+      affectedEdgeCount: 4,
+      edgeScope: 'loop'
+    },
+    updatedCadResult: updatedEdgeLoopCadResult,
+    limitations: ['只传播到种子边所属的唯一平面边界，不支持任意多边链、切线链或可变半径']
   };
 }
 
@@ -1067,6 +1096,29 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.messages.at(-1)?.content).toContain('距离 0.030 毫米已通过复核');
     expect(state.messages.at(-1)?.content).toContain('原三角面索引（triangleIndex）和稳定边选择已失效');
     expect(state.messages.at(-1)?.content).toContain('继续修改前请重新选择');
+  });
+
+  it('成功执行平面边界整圈圆角后显示受影响边数并清除过期选择', async () => {
+    useModelStore.setState({
+      cadFaceSelectionMode: 'edge',
+      cadFaceSelection: edgeSelection
+    });
+    backendMocks.runLocalCadFeature.mockResolvedValue(edgeLoopFeatureResult());
+
+    await useModelStore.getState().executeCommand('将这圈边做 0.8 毫米圆角');
+
+    expect(backendMocks.runLocalCadFeature).toHaveBeenCalledWith(expect.objectContaining({
+      stableEdgeId: 'edge-test',
+      operation: 'fillet-edge-loop',
+      depthMm: 0.8
+    }));
+    const state = useModelStore.getState();
+    expect(state.cadResult).toBe(updatedEdgeLoopCadResult);
+    expect(state.cadFaceSelection).toBeNull();
+    expect(state.cadFaceSelectionMode).toBe('off');
+    expect(state.messages.at(-1)?.content).toContain('共对 4 条边执行整圈圆角');
+    expect(state.messages.at(-1)?.content).toContain('只传播到种子边所属的唯一平面边界');
+    expect(state.messages.at(-1)?.content).toContain('不支持任意多边链、切线链或可变半径');
   });
 
   it('Codex 试图切换稳定边时拒绝调用 Worker并保留当前边选择', async () => {

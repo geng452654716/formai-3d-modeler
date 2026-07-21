@@ -92,7 +92,7 @@ export function CommandPanel() {
               {cadFaceSelection.selectionMode === 'click'
                 ? `已选择 ${cadFaceSelection.faces[0]?.partLabel ?? '零件'}的 1 个稳定 CAD 面`
                 : cadFaceSelection.selectionMode === 'edge'
-                  ? `已选择 ${cadFaceSelection.edge?.partLabel ?? '零件'}的 1 条稳定 CAD 边`
+                  ? `已选择 ${cadFaceSelection.edge?.partLabel ?? '零件'}的 1 条种子稳定 CAD 边`
                 : `已框选 ${cadFaceSelection.faces.length} 个稳定 CAD 面，涉及 ${new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件`}
             </strong>
             <span>
@@ -103,7 +103,9 @@ export function CommandPanel() {
                 : `稳定面：${cadFaceSelection.faces.slice(0, 3).map((face) => face.stableId).join('、')}${cadFaceSelection.faces.length > 3 ? '…' : ''}。`}
               {cadHitResolutionText && ` ${cadHitResolutionText}`}
               {cadFaceSelection.selectionMode === 'edge'
-                ? ` 精确解析完成后可对这条边执行固定半径圆角或等距倒角；Worker 会再次用 OpenCascade 重新定位稳定面和稳定边${cadFaceSelection.faces[0]?.geometryType === 'PLANE' ? '并复核点击距离与外法线' : '，并复核真实 UV 点、点击距离与真实外法线'}。当前只支持单条稳定边，不支持多边链、整圈传播或可变半径；修改后需要重新选择。`
+                ? cadFaceSelection.faces[0]?.geometryType === 'PLANE'
+                  ? ' 精确解析完成后可输入“将这条边做 2 毫米圆角”，或输入“将这圈边做 2 毫米圆角”；Worker 会重新定位种子稳定边并复核点击距离与外法线。整圈第一版只传播到种子边所属的唯一平面边界，不支持任意多边链、切线链或可变半径；修改后需要重新选择。'
+                  : ` 精确解析完成后可对这条曲面所属边执行固定半径圆角或等距倒角；Worker 会再次用 OpenCascade 重新定位稳定面和稳定边，并复核真实 UV 点、点击距离与真实外法线。曲面所属边当前只支持单边，不支持整圈、任意多边链、切线链或可变半径；修改后需要重新选择。`
                 : cadFaceSelection.selectionMode === 'click' && cadFaceSelection.faces.length === 1 && cadFaceSelection.faces[0]?.geometryType === 'PLANE'
                 ? ' 精确解析完成后可在此平面执行圆形或矩形凸台、圆孔、矩形孔、槽孔，以及整面向外拉伸或向内偏移；修改后需要重新选择，因为原三角面索引会失效。'
                 : cadFaceSelection.selectionMode === 'click'

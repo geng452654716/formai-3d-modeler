@@ -393,6 +393,32 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
             self.assertEqual(rebuilt["localFeatureReplay"]["replayedCount"], 1)
             self.assertEqual(rebuilt["localFeatures"][0]["replayStatus"], "replayed")
 
+    def test_planar_boundary_loop_chamfer_replays_with_same_volume(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initial = self._export(root)
+            edited = self._edit_edge(root, initial, operation="chamfer-edge-loop", size_mm=0.6)
+            edited_manifest = edited["updatedCadResult"]
+            expected_volume = self._part(edited_manifest)["metrics"]["volumeMm3"]
+            feature = edited_manifest["localFeatures"][0]
+            seed_edge_id = feature["stableEdgeId"]
+            self.assertEqual(feature["operation"], "chamfer-edge-loop")
+            self.assertEqual(feature["targetEdge"]["stableId"], seed_edge_id)
+            self.assertGreaterEqual(edited["validation"]["affectedEdgeCount"], 2)
+            self.assertLessEqual(edited["validation"]["affectedEdgeCount"], 64)
+            self.assertEqual(edited["validation"]["edgeScope"], "loop")
+
+            rebuilt = self._export(root)
+
+            self.assertEqual(self._part(rebuilt)["metrics"]["volumeMm3"], expected_volume)
+            replayed = rebuilt["localFeatures"][0]
+            self.assertEqual(replayed["operation"], "chamfer-edge-loop")
+            self.assertEqual(replayed["stableEdgeId"], seed_edge_id)
+            self.assertEqual(replayed["targetEdge"]["stableId"], seed_edge_id)
+            self.assertEqual(replayed["replayStatus"], "replayed")
+            self.assertEqual(rebuilt["localFeatureReplay"]["requestedCount"], 1)
+            self.assertEqual(rebuilt["localFeatureReplay"]["replayedCount"], 1)
+
     def test_curved_owner_edge_replays_with_real_uv_safety_chain(self) -> None:
         model, faces, record = self._curved_edge_replay_fixture()
         original_volume = model.val().Volume()

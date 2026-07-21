@@ -33,6 +33,8 @@ Operation = Literal[
     "offset-face-inward",
     "fillet-edge",
     "chamfer-edge",
+    "fillet-edge-loop",
+    "chamfer-edge-loop",
 ]
 
 
@@ -164,7 +166,7 @@ def validate_edge_feature_inputs(
     size_mm: float,
 ) -> None:
     """校验稳定边圆角或倒角的受限输入。"""
-    if operation not in ("fillet-edge", "chamfer-edge"):
+    if operation not in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop"):
         raise ValueError("稳定 CAD 边特征操作无效")
     if not stable_face_id.strip() or not stable_edge_id.strip():
         raise ValueError("稳定 CAD 边选择缺少稳定面或稳定边 ID，请重新点击目标边")
@@ -946,7 +948,7 @@ def apply_edge_feature(
     target_edge_descriptor: dict[str, Any] | None = None,
     surface_uv: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    """对点击并复核后的单条稳定 CAD 边执行圆角或等距倒角。"""
+    """对点击并复核后的单条稳定 CAD 边或平面边界整圈执行圆角/倒角。"""
     validate_edge_feature_inputs(
         operation, stable_face_id, stable_edge_id, hit_point, hit_normal, size_mm
     )
@@ -955,6 +957,9 @@ def apply_edge_feature(
     )
     surface_geometry_type = str(face_descriptor.get("geometryType", ""))
     curved_owner_face = surface_geometry_type != "PLANE"
+    loop_operation = operation in ("fillet-edge-loop", "chamfer-edge-loop")
+    if loop_operation and curved_owner_face:
+        raise ValueError("整圈边圆角或倒角第一版只支持平面边界，请重新选择平面所属边")
     if curved_owner_face and (
         surface_uv is None
         or len(surface_uv) != 2
@@ -971,6 +976,19 @@ def apply_edge_feature(
     bounds = model.val().BoundingBox()
     diagonal = math.sqrt(bounds.xlen ** 2 + bounds.ylen ** 2 + bounds.zlen ** 2)
     target_edge = _target_edge(target_face, edge_descriptor, diagonal)
+    target_edges = [target_edge]
+    if loop_operation:
+        matching_wires = [
+            wire for wire in target_face.Wires()
+            if any(candidate.isSame(target_edge) for candidate in wire.Edges())
+        ]
+        if len(matching_wires) != 1:
+            raise ValueError("无法从所选种子边唯一定位平面边界整圈，请重新选择目标边")
+        target_edges = [edge for edge in matching_wires[0].Edges() if float(edge.Length()) > 1e-6]
+        if len(target_edges) < 2:
+            raise ValueError("所选平面边界不足两条有效边，不能执行整圈圆角或倒角")
+        if len(target_edges) > 64:
+            raise ValueError("所选平面边界超过 64 条边，已拒绝整圈圆角或倒角")
     point_distance = float(target_edge.distance(cq.Vertex.makeVertex(*hit_point)))
     maximum_distance = max(0.35, min(3.0, diagonal * 0.025))
     if point_distance > maximum_distance:
@@ -1006,10 +1024,10 @@ def apply_edge_feature(
 
     volume_before = float(model.val().Volume())
     try:
-        stack = cq.Workplane(obj=model.val()).newObject([target_edge])
-        edited = stack.fillet(size_mm) if operation == "fillet-edge" else stack.chamfer(size_mm)
+        stack = cq.Workplane(obj=model.val()).newObject(target_edges)
+        edited = stack.fillet(size_mm) if operation in ("fillet-edge", "fillet-edge-loop") else stack.chamfer(size_mm)
     except Exception as error:
-        label = "圆角" if operation == "fillet-edge" else "倒角"
+        label = "圆角" if operation in ("fillet-edge", "fillet-edge-loop") else "倒角"
         raise ValueError(f"OpenCascade 无法对目标边执行{label}：{error}") from error
     solids = _closed_solids(edited, "稳定 CAD 边特征结果")
     if len(solids) != 1 or not edited.val().isValid():
@@ -1051,6 +1069,8 @@ def apply_edge_feature(
             "solidCount": 1,
             "pointDistanceMm": point_distance,
             "maximumPointDistanceMm": maximum_distance,
+            "affectedEdgeCount": len(target_edges),
+            "edgeScope": "loop" if loop_operation else "single",
             "surfacePointDistanceMm": surface_point_distance,
             "maximumSurfacePointDistanceMm": maximum_surface_point_distance,
             "surfaceGeometryType": surface_geometry_type,

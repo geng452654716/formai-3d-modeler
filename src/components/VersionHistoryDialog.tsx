@@ -60,8 +60,10 @@ function describePreflightOperation(record: LocalCadFeaturePreflightRecord) {
     'cut-slot': '槽孔',
     'offset-face-outward': '整面向外拉伸',
     'offset-face-inward': '整面向内偏移',
-    'fillet-edge': '圆角',
-    'chamfer-edge': '倒角'
+    'fillet-edge': '单边圆角',
+    'chamfer-edge': '单边倒角',
+    'fillet-edge-loop': '平面边界整圈圆角',
+    'chamfer-edge-loop': '平面边界整圈倒角'
   } as const)[record.request.operation];
 }
 

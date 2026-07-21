@@ -33,7 +33,7 @@ from local_cad_feature_core import (
 from local_stl_edit import _commit_files_with_rollback
 from split_and_cap import _closed_solids, import_stl_as_solid
 
-Operation = Literal["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge"]
+Operation = Literal["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop"]
 P1S_BUILD_VOLUME_MM = (256.0, 256.0, 256.0)
 MODEL_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -292,7 +292,7 @@ def edit_cad_feature(
 ) -> dict[str, Any]:
     if not selection_revision.strip() or not part_id.strip() or not stable_face_id.strip():
         raise ValueError("稳定 CAD 面选择上下文不完整，请重新选择平面")
-    edge_operation = operation in ("fillet-edge", "chamfer-edge")
+    edge_operation = operation in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop")
     if edge_operation:
         validate_edge_feature_inputs(
             operation, stable_face_id, stable_edge_id or "", center, hit_normal, depth_mm
@@ -594,6 +594,8 @@ def edit_cad_feature(
                 "solidCount": 1,
                 "pointDistanceMm": point_distance,
                 "normalDot": normal_dot,
+                "affectedEdgeCount": validation.get("affectedEdgeCount"),
+                "edgeScope": validation.get("edgeScope"),
                 "volumeBeforeMm3": volume_before,
                 "volumeAfterMm3": exported_volume,
                 "volumeDeltaMm3": exported_volume - volume_before,
@@ -620,7 +622,7 @@ def edit_cad_feature(
             "faceMatching": target_face_matching,
             "updatedCadResult": manifest,
             "limitations": [
-                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击稳定面所属单条稳定 CAD 边执行圆角或倒角",
+                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击稳定面所属单条边或平面边界整圈执行圆角或倒角",
                 "曲面局部特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；矩形按半对角线、槽孔按长度一半作为保守包络半径，通孔只放行局部壁厚附近的正常出口接触",
                 "曲面矩形和槽孔位于真实 UV 点击位置的切平面，0 度沿当前修订的真实 U 切向，不是沿任意曲面贴合或测地线轮廓",
                 "稳定面和面内稳定边 ID 使用几何签名匹配第一版，不是 OpenCascade 原生永久拓扑命名",
@@ -653,7 +655,7 @@ def edit_cad_feature(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="当前精确 CAD 输出目录")
-    parser.add_argument("--operation", choices=("add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge"), required=True)
+    parser.add_argument("--operation", choices=("add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop"), required=True)
     parser.add_argument("--selection-revision", required=True)
     parser.add_argument("--part-id", required=True)
     parser.add_argument("--stable-face-id", required=True)

@@ -1179,9 +1179,16 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           'offset-face-outward': '将整个平面向外拉伸',
           'offset-face-inward': '将整个平面向内偏移',
           'fillet-edge': '生成单边圆角',
-          'chamfer-edge': '生成单边倒角'
+          'chamfer-edge': '生成单边倒角',
+          'fillet-edge-loop': '生成平面边界整圈圆角',
+          'chamfer-edge-loop': '生成平面边界整圈倒角'
         } as const)[request.operation];
-        const edgeOperation = request.operation === 'fillet-edge' || request.operation === 'chamfer-edge';
+        const edgeOperation = request.operation === 'fillet-edge'
+          || request.operation === 'chamfer-edge'
+          || request.operation === 'fillet-edge-loop'
+          || request.operation === 'chamfer-edge-loop';
+        const edgeLoopOperation = request.operation === 'fillet-edge-loop'
+          || request.operation === 'chamfer-edge-loop';
         const targetSurfaceLabel = edgeOperation
           ? '边'
           : describeCadSurfaceGeometryType(request.surfaceGeometryType);
@@ -1250,7 +1257,10 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           : '目标面因拓扑变化已失效，需重新选择';
         const curvedEdge = edgeOperation && request.surfaceGeometryType !== 'PLANE';
         const curvedEdgeUv = featureResult.validation.surfaceUv;
-        const edgeResultText = edgeOperation
+        const affectedEdgeCount = featureResult.validation.affectedEdgeCount ?? (edgeOperation ? 1 : 0);
+        const edgeResultText = edgeLoopOperation
+          ? `已从种子稳定边 ${request.stableEdgeId} 定位唯一平面边界，共对 ${affectedEdgeCount} 条边执行${request.operation === 'fillet-edge-loop' ? '整圈圆角' : '整圈倒角'}；种子稳定边状态为${featureResult.stableEdgeStatus === 'inherited' ? '已继承' : '已失效'}。`
+          : edgeOperation
           ? `目标稳定边 ${request.stableEdgeId} 状态为${featureResult.stableEdgeStatus === 'inherited' ? '已继承' : '已失效'}；点击点到 OpenCascade 目标边的距离 ${featureResult.validation.pointDistanceMm.toFixed(3)} 毫米已通过复核。${curvedEdge ? `所属${describeCadSurfaceGeometryType(request.surfaceGeometryType)}已按当前修订真实 UV${curvedEdgeUv ? `（${curvedEdgeUv.u.toFixed(4)}，${curvedEdgeUv.v.toFixed(4)}）` : ''}重新求点，点击点到真实 UV 点的距离 ${featureResult.validation.surfacePointDistanceMm?.toFixed(3) ?? '未知'} 毫米，真实外法线点积 ${featureResult.validation.normalDot.toFixed(3)}，均已通过复核。` : ''}`
           : '';
         const curvedValidationText = !edgeOperation && request.surfaceGeometryType !== 'PLANE'
@@ -1265,7 +1275,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           messages: state.messages.concat({
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: `${request.summary}已完成；零件体积 ${featureResult.validation.volumeBeforeMm3.toFixed(2)} → ${featureResult.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过有效性、封闭性、单 Solid、点击坐标和法线一致性检查；${stableFaceText}。${edgeResultText}${curvedValidationText}局部特征已记录，后续参数化整模重建会从基础实体开始按顺序安全重放；修改后选择网格已重新生成，${invalidatedSelectionText}，继续修改前请重新选择。${edgeOperation ? '当前仅支持单条稳定边，不支持多边链、整圈传播或可变半径。' : ''}`
+            content: `${request.summary}已完成；零件体积 ${featureResult.validation.volumeBeforeMm3.toFixed(2)} → ${featureResult.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过有效性、封闭性、单 Solid、点击坐标和法线一致性检查；${stableFaceText}。${edgeResultText}${curvedValidationText}局部特征已记录，后续参数化整模重建会从基础实体开始按顺序安全重放；修改后选择网格已重新生成，${invalidatedSelectionText}，继续修改前请重新选择。${edgeLoopOperation ? '本次只传播到种子边所属的唯一平面边界，不支持任意多边链、切线链或可变半径。' : edgeOperation ? '当前为单条稳定边；如需平面边界整圈，请在指令中明确写“整圈”。仍不支持任意多边链、切线链或可变半径。' : ''}`
           })
         }));
       } catch (error) {

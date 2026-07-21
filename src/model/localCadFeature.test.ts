@@ -359,6 +359,12 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(chamfer).toMatchObject({
       operation: 'chamfer-edge', stableEdgeId: 'edge-top-front', depthMm: 1
     });
+    expect(buildLocalCadFeatureRequest(edgeSelection, '将这圈边做 2 毫米圆角')).toMatchObject({
+      operation: 'fillet-edge-loop', stableEdgeId: 'edge-top-front', depthMm: 2
+    });
+    expect(buildLocalCadFeatureRequest(edgeSelection, '将周边做 1 毫米倒角')).toMatchObject({
+      operation: 'chamfer-edge-loop', stableEdgeId: 'edge-top-front', depthMm: 1
+    });
   });
 
   it('接受绑定当前稳定边的 Codex 计划并拒绝越权边 ID', () => {
@@ -368,6 +374,13 @@ describe('稳定 CAD 面局部特征请求', () => {
       heightMm: null, lengthMm: null, depthMm: 2, rotationDeg: 0, reason: '单边圆角'
     }, '受限单边圆角计划');
     expect(request).toMatchObject({ operation: 'fillet-edge', stableEdgeId: 'edge-top-front', depthMm: 2 });
+
+    const loopRequest = buildLocalCadFeatureRequestFromPlan(edgeSelection, '整圈圆角', {
+      operation: 'fillet-edge-loop', partId: 'body', stableFaceId: 'face-top',
+      stableEdgeId: 'edge-top-front', radiusMm: null, widthMm: null,
+      heightMm: null, lengthMm: null, depthMm: 2, rotationDeg: 0, reason: '平面边界整圈圆角'
+    }, '受限平面边界整圈圆角计划');
+    expect(loopRequest).toMatchObject({ operation: 'fillet-edge-loop', stableEdgeId: 'edge-top-front', depthMm: 2 });
 
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误边', {
       operation: 'chamfer-edge', partId: 'body', stableFaceId: 'face-top',
@@ -385,7 +398,7 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误开孔', {
       operation: 'cut-cylinder', partId: 'body', stableFaceId: 'face-top',
       stableEdgeId: null, radiusMm: 2, depthMm: 3, reason: '错误模式'
-    }, '错误计划')).toThrow('当前选择的是稳定边，只允许执行圆角或倒角');
+    }, '错误计划')).toThrow('当前选择的是种子稳定边，只允许执行单边或平面边界整圈圆角与倒角');
   });
 
   it('接受曲面所属边，并拒绝平面轮廓字段和越界边尺寸', () => {
@@ -396,6 +409,13 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(buildLocalCadFeatureRequest(curvedEdge, '做 2 毫米圆角')).toMatchObject({
       operation: 'fillet-edge', stableEdgeId: 'edge-top-front', surfaceGeometryType: 'CYLINDER', depthMm: 2
     });
+    expect(() => buildLocalCadFeatureRequest(curvedEdge, '将这圈边做 2 毫米圆角'))
+      .toThrow('只支持平面边界');
+    expect(() => buildLocalCadFeatureRequestFromPlan(curvedEdge, '曲面整圈倒角', {
+      operation: 'chamfer-edge-loop', partId: 'body', stableFaceId: 'face-top',
+      stableEdgeId: 'edge-top-front', radiusMm: null, widthMm: null,
+      heightMm: null, lengthMm: null, depthMm: 1, rotationDeg: 0, reason: '错误曲面整圈'
+    }, '错误计划')).toThrow('只支持平面边界');
 
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误尺寸', {
       operation: 'fillet-edge', partId: 'body', stableFaceId: 'face-top',

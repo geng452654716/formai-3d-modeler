@@ -125,7 +125,7 @@ export interface CadPartDescriptor {
 
 export interface CadLocalFeatureRecord {
   revision: string;
-  operation: 'add-cylinder' | 'cut-cylinder' | 'add-rectangle' | 'cut-rectangle' | 'cut-slot' | 'offset-face-outward' | 'offset-face-inward' | 'fillet-edge' | 'chamfer-edge';
+  operation: 'add-cylinder' | 'cut-cylinder' | 'add-rectangle' | 'cut-rectangle' | 'cut-slot' | 'offset-face-outward' | 'offset-face-inward' | 'fillet-edge' | 'chamfer-edge' | 'fillet-edge-loop' | 'chamfer-edge-loop';
   partId: string;
   stableFaceId: string;
   stableEdgeId?: string | null;

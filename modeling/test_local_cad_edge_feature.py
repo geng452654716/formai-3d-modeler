@@ -1,4 +1,4 @@
-"""稳定 CAD 单边圆角与倒角的几何、Worker 和安全协议回归测试。"""
+"""稳定 CAD 单边与平面边界整圈圆角、倒角的几何和安全协议回归测试。"""
 
 from __future__ import annotations
 
@@ -114,6 +114,18 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
         self.assertLess(result["validation"]["volumeDeltaMm3"], 0)
         self.assertEqual(result["validation"]["solidCount"], 1)
 
+    def test_planar_boundary_loop_fillet_and_chamfer_produce_valid_closed_solid(self):
+        for operation in ("fillet-edge-loop", "chamfer-edge-loop"):
+            with self.subTest(operation=operation):
+                result = self._apply(operation, 1.0)
+                validation = result["validation"]
+                self.assertEqual(validation["affectedEdgeCount"], 4)
+                self.assertEqual(validation["edgeScope"], "loop")
+                self.assertLess(validation["volumeDeltaMm3"], 0)
+                self.assertTrue(validation["valid"])
+                self.assertTrue(validation["watertight"])
+                self.assertEqual(validation["solidCount"], 1)
+
     def test_rejects_wrong_edge_id_and_click_far_from_edge(self):
         model, faces, face, edge = self._fixture()
         with self.assertRaisesRegex(ValueError, "稳定边"):
@@ -185,6 +197,19 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
                 point, (1, 0, 0), 1, surface_uv=(3.141592653589793, 10),
             )
 
+    def test_curved_owner_face_rejects_loop_operation(self):
+        model = cq.Workplane("XY").cylinder(10, 5)
+        sources, _ = match_shape_faces_with_sources(model)
+        faces = [descriptor for _, descriptor in sources]
+        face = next(value for value in faces if value.get("geometryType") == "CYLINDER")
+        edge = next(value for value in face["edges"] if value.get("geometryType") == "CIRCLE")
+        point = tuple(float(value) for value in edge["samplePointsMm"][0])
+        with self.assertRaisesRegex(ValueError, "只支持平面边界"):
+            apply_edge_feature(
+                model, faces, "fillet-edge-loop", face["stableId"], edge["stableId"],
+                point, (1, 0, 0), 1, surface_uv=(0, 0),
+            )
+
     def test_worker_exports_step_stl_selection_mapping_and_3mf(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -197,6 +222,28 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
                 )
             self.assertEqual(result["stableEdgeId"], edge["stableId"])
             self.assertEqual(result["updatedCadResult"]["localFeatures"][0]["targetEdge"]["stableId"], edge["stableId"])
+            for name in (
+                "generic-part.stl", "generic-part.step", "generic-part-selection.stl",
+                "generic-part-face-map.json", "generic-model.3mf",
+            ):
+                self.assertTrue((root / name).is_file(), name)
+                self.assertGreater((root / name).stat().st_size, 0, name)
+
+    def test_worker_executes_planar_boundary_loop_and_records_edge_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face, edge = self._project(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = edit_cad_feature(
+                    root, "fillet-edge-loop", manifest["revision"], "generic-part", face["stableId"],
+                    tuple(edge["centerMm"]), (0, 0, 1), None, 1,
+                    "将这圈边做 1 毫米圆角", stable_edge_id=edge["stableId"],
+                )
+            feature = result["updatedCadResult"]["localFeatures"][0]
+            self.assertEqual(feature["operation"], "fillet-edge-loop")
+            self.assertEqual(feature["targetEdge"]["stableId"], edge["stableId"])
+            self.assertEqual(result["validation"]["affectedEdgeCount"], 4)
+            self.assertEqual(result["validation"]["edgeScope"], "loop")
             for name in (
                 "generic-part.stl", "generic-part.step", "generic-part-selection.stl",
                 "generic-part-face-map.json", "generic-model.3mf",

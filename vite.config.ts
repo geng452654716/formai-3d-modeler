@@ -475,7 +475,7 @@ function runLocalCadFeatureWorker(body: {
   command?: string;
   previewOnly?: boolean;
 }) {
-  const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge'];
+  const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'];
   if (!operations.includes(body.operation ?? '')) throw new Error('稳定 CAD 局部特征操作无效');
   const identifiers = [body.selectionRevision, body.partId, body.stableFaceId];
   if (identifiers.some((value) => typeof value !== 'string' || !value.trim() || Array.from(value).length > 200)) {
@@ -498,7 +498,8 @@ function runLocalCadFeatureWorker(body: {
   }
   const cylinder = body.operation === 'add-cylinder' || body.operation === 'cut-cylinder';
   const wholeFace = body.operation === 'offset-face-outward' || body.operation === 'offset-face-inward';
-  const edgeFeature = body.operation === 'fillet-edge' || body.operation === 'chamfer-edge';
+  const edgeFeature = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'].includes(body.operation!);
+  const edgeLoopFeature = body.operation === 'fillet-edge-loop' || body.operation === 'chamfer-edge-loop';
   const curvedFace = body.surfaceGeometryType !== 'PLANE';
   if (body.previewOnly !== undefined && typeof body.previewOnly !== 'boolean') {
     throw new Error('稳定 CAD 精确工具体预演标记无效');
@@ -508,6 +509,9 @@ function runLocalCadFeatureWorker(body: {
   }
   const slot = body.operation === 'cut-slot';
   const rectangle = body.operation === 'add-rectangle' || body.operation === 'cut-rectangle';
+  if (curvedFace && edgeLoopFeature) {
+    throw new Error('整圈边圆角或倒角第一版只支持平面边界，请重新选择平面所属边');
+  }
   if (curvedFace && !cylinder && !rectangle && !slot && !edgeFeature) {
     throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角`);
   }

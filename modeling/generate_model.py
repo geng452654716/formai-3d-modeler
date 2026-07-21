@@ -629,7 +629,7 @@ def _replay_local_features(
             surface_tangent_u = _optional_record_vector(record, "surfaceTangentU", f"{label}曲面 U 切向")
             if surface_geometry_type != "PLANE" and surface_uv is None:
                 raise ValueError("曲面局部特征记录缺少真实 UV")
-            if operation in ("fillet-edge", "chamfer-edge"):
+            if operation in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop"):
                 stable_edge_id = str(record.get("stableEdgeId", "")).strip()
                 validate_edge_feature_inputs(
                     operation, stable_face_id, stable_edge_id, center, normal, depth_mm

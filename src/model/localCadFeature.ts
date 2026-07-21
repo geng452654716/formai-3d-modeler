@@ -11,7 +11,9 @@ export type LocalCadFeatureOperation =
   | 'offset-face-outward'
   | 'offset-face-inward'
   | 'fillet-edge'
-  | 'chamfer-edge';
+  | 'chamfer-edge'
+  | 'fillet-edge-loop'
+  | 'chamfer-edge-loop';
 
 export interface CodexLocalCadFeaturePlan {
   operation: LocalCadFeatureOperation;
@@ -141,6 +143,9 @@ export interface LocalCadFeatureResult {
     /** 点击点到 OpenCascade 按当前修订真实 UV 重新求得曲面点的距离。 */
     surfacePointDistanceMm?: number | null;
     maximumSurfacePointDistanceMm?: number | null;
+    /** OpenCascade 实际参与圆角或倒角的边数量。 */
+    affectedEdgeCount?: number | null;
+    edgeScope?: 'single' | 'loop' | null;
     /** OpenCascade 在当前曲面 UV 点击位置计算的单位 U 切向。 */
     surfaceTangentU?: { x: number; y: number; z: number } | null;
     maximumAbsCurvaturePerMm?: number | null;
@@ -359,10 +364,11 @@ function dimension(value: number | null | undefined) {
 function validatePlanDimensions(plan: CodexLocalCadFeaturePlan) {
   const supported: LocalCadFeatureOperation[] = [
     'add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot',
-    'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge'
+    'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge',
+    'fillet-edge-loop', 'chamfer-edge-loop'
   ];
   if (!supported.includes(plan.operation)) throw new Error('Codex 返回了未知的稳定 CAD 局部特征操作');
-  const edgeOperation = plan.operation === 'fillet-edge' || plan.operation === 'chamfer-edge';
+  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'].includes(plan.operation);
   const maximumDepth = edgeOperation ? 50 : 200;
   if (!Number.isFinite(plan.depthMm) || plan.depthMm < 0.2 || plan.depthMm > maximumDepth) {
     throw new Error(`Codex 返回的${edgeOperation ? '圆角半径或倒角距离' : '局部修改深度'}必须在 0.20 至 ${maximumDepth.toFixed(2)} 毫米之间`);
@@ -410,17 +416,21 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
   if (plan.partId !== face.partId || plan.stableFaceId !== face.stableId) {
     throw new Error('Codex 计划试图修改当前选择之外的零件或稳定面，已拒绝执行');
   }
-  const edgeOperation = plan.operation === 'fillet-edge' || plan.operation === 'chamfer-edge';
+  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'].includes(plan.operation);
   if (edgeOperation && (!edge || plan.stableEdgeId !== edge.stableEdgeId)) {
     throw new Error('Codex 计划试图修改当前选择之外的稳定边，已拒绝执行');
   }
   if (!edgeOperation && selection.selectionMode === 'edge') {
-    throw new Error('当前选择的是稳定边，只允许执行圆角或倒角');
+    throw new Error('当前选择的是种子稳定边，只允许执行单边或平面边界整圈圆角与倒角');
   }
   if (edgeOperation && selection.selectionMode !== 'edge') {
     throw new Error('圆角或倒角必须先使用“点击选边”选择一条稳定 CAD 边');
   }
   const curvedFace = face.geometryType !== 'PLANE';
+  const edgeLoopOperation = plan.operation === 'fillet-edge-loop' || plan.operation === 'chamfer-edge-loop';
+  if (curvedFace && edgeLoopOperation) {
+    throw new Error('整圈边圆角或倒角第一版只支持平面边界，请重新选择平面所属边');
+  }
   if (curvedFace && !edgeOperation && !['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot'].includes(plan.operation)) {
     throw new Error(`当前选中的是${describeCadSurfaceGeometryType(face.geometryType)}；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔`);
   }
@@ -506,10 +516,14 @@ function parseEdgeCommand(command: string, partId: string, stableFaceId: string,
   if (fillet === chamfer) throw new Error('请明确说明要对所选边执行圆角还是倒角');
   const depthMm = numberFor(trimmed, fillet ? ['圆角(?:半径)?', '半径', 'R'] : ['倒角(?:距离)?', '距离', '边长']);
   if (depthMm === null) throw new Error(fillet ? '请提供圆角半径，例如“将这条边做 2 毫米圆角”' : '请提供倒角距离，例如“将这条边做 1 毫米倒角”');
+  const wholeLoop = /这圈|这一圈|整圈|一圈|整周|周边|轮廓边|边界圈/.test(trimmed);
   return {
-    operation: fillet ? 'fillet-edge' : 'chamfer-edge', partId, stableFaceId, stableEdgeId,
+    operation: fillet
+      ? wholeLoop ? 'fillet-edge-loop' : 'fillet-edge'
+      : wholeLoop ? 'chamfer-edge-loop' : 'chamfer-edge',
+    partId, stableFaceId, stableEdgeId,
     radiusMm: null, widthMm: null, heightMm: null, lengthMm: null, depthMm, rotationDeg: 0,
-    reason: `${fillet ? '圆角' : '倒角'} ${depthMm} 毫米`
+    reason: `${wholeLoop ? '平面边界整圈' : '单边'}${fillet ? '圆角' : '倒角'} ${depthMm} 毫米`
   };
 }
 

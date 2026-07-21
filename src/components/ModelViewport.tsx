@@ -1501,9 +1501,13 @@ export function ModelViewport() {
       )}
       {cadFaceSelection && (
         <div className={`cad-face-selection-overlay ${localCadFeaturePreview ? 'has-feature-preview' : ''}`}>
-          <strong>{cadFaceSelection.selectionMode === 'click' ? '已点击选择稳定 CAD 面' : cadFaceSelection.selectionMode === 'edge' ? `已点击选择${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')}所属稳定 CAD 边` : '已框选稳定 CAD 面'}</strong>
+          <strong>{cadFaceSelection.selectionMode === 'click' ? '已点击选择稳定 CAD 面' : cadFaceSelection.selectionMode === 'edge' ? `已点击选择${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')}所属种子稳定 CAD 边` : '已框选稳定 CAD 面'}</strong>
           <span>
-            {cadFaceSelection.selectionMode === 'edge' ? '1 条边；仅支持单边圆角或倒角，不支持多边链、整圈传播或可变半径' : `${cadFaceSelection.faces.length} 个面`} · {new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件 · 下一条指令将附带原始毫米坐标、法线和局部截图
+            {cadFaceSelection.selectionMode === 'edge'
+              ? cadFaceSelection.faces[0]?.geometryType === 'PLANE'
+                ? '1 条种子边；支持单边或所属平面边界整圈圆角/倒角，不支持任意多边链、切线链或可变半径'
+                : '1 条种子边；当前仅支持曲面所属单边圆角/倒角，不支持整圈、任意多边链、切线链或可变半径'
+              : `${cadFaceSelection.faces.length} 个面`} · {new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件 · 下一条指令将附带原始毫米坐标、法线和局部截图
           </span>
           {localCadFeaturePreview && (
             <div className={`local-cad-feature-preview-status is-${localCadFeaturePreview.status}`}>
