@@ -1,0 +1,17 @@
+{
+  "board_length": 58.0,
+  "board_width": 28.0,
+  "board_thickness": 1.6,
+  "board_component_height": 8.5,
+  "clearance_xy": 0.3,
+  "clearance_z": 0.5,
+  "wall_thickness": 2.0,
+  "base_thickness": 2.0,
+  "lid_thickness": 2.0,
+  "corner_radius": 4.0,
+  "edge_chamfer": 0.6,
+  "usb_port_width": 11.0,
+  "usb_port_height": 6.0,
+  "usb_port_bottom": 2.7,
+  "usb_port_offset_y": 0.0
+}

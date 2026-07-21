@@ -1,0 +1,62 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "FormAI",
+  "version": "0.1.0",
+  "identifier": "com.formai.modeler",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeDevCommand": "pnpm run dev",
+    "beforeBuildCommand": "pnpm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "FormAI — AI 三维建模",
+        "width": 1440,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false,
+        "label": "main",
+        "minWidth": 1180,
+        "minHeight": 720,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "AI 三维 CAD 建模软件",
+    "longDescription": "FormAI 将尺寸和自然语言指令转换为可用于三维打印的精确 CAD 模型。",
+    "resources": [
+      "../modeling/generate_model.py",
+      "../modeling/split_and_cap.py",
+      "../modeling/manufacturing_features.py",
+      "../modeling/stl_mesh_repair.py",
+      "../modeling/wall_thickness_analysis.py",
+      "../modeling/local_stl_edit.py",
+      "../modeling/local_cad_feature.py",
+      "../modeling/face_geometry_signatures.py",
+      "../modeling/face_tessellation_mapping.py",
+      "../modeling/version_geometry_difference.py",
+      "../modeling/default-model.json"
+    ]
+  }
+}

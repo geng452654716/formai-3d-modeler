@@ -1,0 +1,58 @@
+{
+  "name": "ai-3d-modeler",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config vite.config.ts",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "desktop:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "desktop:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "build": "tsc -b && vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts",
+    "test": "vitest run",
+    "model:generate": "modeling/.venv/bin/python modeling/generate_model.py",
+    "model:split-test": "modeling/.venv/bin/python modeling/test_split_and_cap.py",
+    "model:wall-test": "modeling/.venv/bin/python modeling/test_wall_thickness_analysis.py",
+    "model:version-difference-test": "modeling/.venv/bin/python modeling/test_version_geometry_difference.py",
+    "model:opening-test": "modeling/.venv/bin/python modeling/test_interface_openings.py",
+    "model:face-signature-test": "modeling/.venv/bin/python modeling/test_face_geometry_signatures.py",
+    "model:face-tessellation-test": "modeling/.venv/bin/python modeling/test_face_tessellation_mapping.py",
+    "model:local-stl-test": "modeling/.venv/bin/python modeling/test_local_stl_edit.py",
+    "model:local-cad-feature-test": "modeling/.venv/bin/python modeling/test_local_cad_feature.py",
+    "model:local-cad-replay-test": "modeling/.venv/bin/python modeling/test_local_cad_feature_replay.py",
+    "model:local-cad-planar-test": "modeling/.venv/bin/python modeling/test_local_cad_planar_feature.py",
+    "model:local-cad-curved-test": "modeling/.venv/bin/python modeling/test_local_cad_curved_feature.py",
+    "model:local-cad-edge-test": "modeling/.venv/bin/python modeling/test_local_cad_edge_feature.py",
+    "model:surface-hit-test": "modeling/.venv/bin/python modeling/test_cad_surface_hit.py"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "@tauri-apps/api": "^2.11.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.181.0",
+    "three-bvh-csg": "^0.0.17",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.181.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vitest": "^4.0.8"
+  },
+  "packageManager": "pnpm@11.1.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
