@@ -944,6 +944,7 @@ def apply_edge_feature(
     *,
     target_face_descriptor: dict[str, Any] | None = None,
     target_edge_descriptor: dict[str, Any] | None = None,
+    surface_uv: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """对点击并复核后的单条稳定 CAD 边执行圆角或等距倒角。"""
     validate_edge_feature_inputs(
@@ -952,8 +953,14 @@ def apply_edge_feature(
     target_face, face_descriptor = _target_pair(
         model, current_faces, stable_face_id, target_face_descriptor
     )
-    if face_descriptor.get("geometryType") != "PLANE":
-        raise ValueError("稳定 CAD 边圆角和倒角第一版只支持平面所属边，请重新选择平面边界")
+    surface_geometry_type = str(face_descriptor.get("geometryType", ""))
+    curved_owner_face = surface_geometry_type != "PLANE"
+    if curved_owner_face and (
+        surface_uv is None
+        or len(surface_uv) != 2
+        or not all(math.isfinite(value) for value in surface_uv)
+    ):
+        raise ValueError("曲面所属稳定边缺少真实 UV，请重新点击目标边")
     if target_edge_descriptor is not None:
         if target_edge_descriptor.get("stableId") != stable_edge_id:
             raise ValueError("局部特征记录中的稳定边 ID 与边签名快照不一致")
@@ -964,7 +971,6 @@ def apply_edge_feature(
     bounds = model.val().BoundingBox()
     diagonal = math.sqrt(bounds.xlen ** 2 + bounds.ylen ** 2 + bounds.zlen ** 2)
     target_edge = _target_edge(target_face, edge_descriptor, diagonal)
-    point = cq.Vector(*hit_point)
     point_distance = float(target_edge.distance(cq.Vertex.makeVertex(*hit_point)))
     maximum_distance = max(0.35, min(3.0, diagonal * 0.025))
     if point_distance > maximum_distance:
@@ -972,13 +978,27 @@ def apply_edge_feature(
             f"点击位置距离目标边 {point_distance:.3f} 毫米，超过允许的 {maximum_distance:.3f} 毫米，请放大后重新点击边线"
         )
 
-    normal_values = face_descriptor.get("normal")
-    if not isinstance(normal_values, list) or len(normal_values) != 3:
+    surface_point_distance = 0.0
+    maximum_surface_point_distance = max(0.2, min(0.75, diagonal * 0.005))
+    if curved_owner_face:
         try:
-            normal_values = list(target_face.normalAt().toTuple())
+            surface_point, outward, _ = _surface_frame(target_face, surface_uv)  # type: ignore[arg-type]
         except Exception as error:
-            raise ValueError(f"目标边所属面缺少可校验的外法线：{error}") from error
-    outward = _unit_vector(tuple(float(value) for value in normal_values), "目标面外法线")
+            raise ValueError(f"无法在真实 UV 位置复核目标边所属曲面：{error}") from error
+        surface_point_distance = float(surface_point.sub(cq.Vector(*hit_point)).Length)
+        if surface_point_distance > maximum_surface_point_distance:
+            raise ValueError(
+                f"记录点击点距离目标边所属曲面的真实 UV 点 {surface_point_distance:.3f} 毫米，"
+                f"超过安全阈值 {maximum_surface_point_distance:.3f} 毫米，请重新选择目标边"
+            )
+    else:
+        normal_values = face_descriptor.get("normal")
+        if not isinstance(normal_values, list) or len(normal_values) != 3:
+            try:
+                normal_values = list(target_face.normalAt().toTuple())
+            except Exception as error:
+                raise ValueError(f"目标边所属面缺少可校验的外法线：{error}") from error
+        outward = _unit_vector(tuple(float(value) for value in normal_values), "目标面外法线")
     supplied = _unit_vector(hit_normal, "CAD 边点击命中法线")
     normal_dot = float(outward.dot(supplied))
     if normal_dot < 0.75:
@@ -1031,6 +1051,10 @@ def apply_edge_feature(
             "solidCount": 1,
             "pointDistanceMm": point_distance,
             "maximumPointDistanceMm": maximum_distance,
+            "surfacePointDistanceMm": surface_point_distance,
+            "maximumSurfacePointDistanceMm": maximum_surface_point_distance,
+            "surfaceGeometryType": surface_geometry_type,
+            "surfaceUv": None if surface_uv is None else {"u": surface_uv[0], "v": surface_uv[1]},
             "normalDot": normal_dot,
             "volumeBeforeMm3": volume_before,
             "volumeAfterMm3": volume_after,

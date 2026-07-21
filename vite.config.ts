@@ -508,8 +508,8 @@ function runLocalCadFeatureWorker(body: {
   }
   const slot = body.operation === 'cut-slot';
   const rectangle = body.operation === 'add-rectangle' || body.operation === 'cut-rectangle';
-  if (curvedFace && !cylinder && !rectangle && !slot) {
-    throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔`);
+  if (curvedFace && !cylinder && !rectangle && !slot && !edgeFeature) {
+    throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角`);
   }
   const surfaceTangentValues = [body.surfaceTangentUx, body.surfaceTangentUy, body.surfaceTangentUz];
   const tangentValueCount = surfaceTangentValues.filter((value) => value !== null && value !== undefined).length;

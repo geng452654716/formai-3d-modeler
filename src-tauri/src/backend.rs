@@ -1331,8 +1331,8 @@ pub async fn run_local_cad_feature(
         if preview_only && !curved_face {
             return Err("OpenCascade 精确工具体预演第一版只用于非平面曲面局部特征".into());
         }
-        if curved_face && !cylinder && !rectangle && !slot {
-            return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔".into());
+        if curved_face && !cylinder && !rectangle && !slot && !edge_feature {
+            return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角".into());
         }
         if curved_face && (rectangle || slot) {
             let (x, y, z) = surface_tangent_u.ok_or_else(|| {
@@ -1897,10 +1897,10 @@ fn codex_prompt(command: &str, parameters: &Value, selection_context: Option<&Va
                 "\n已验证的 CAD 局部选择上下文：{}\n\
 该上下文来自本次生成的稳定面选择网格，稳定面与稳定边都只是几何签名匹配第一版，不是永久拓扑命名。\
 当 selectionMode=click 且 faces[0].geometryType=PLANE 时，允许生成圆形/矩形凸台、圆孔/矩形孔/槽孔，或执行整面向外拉伸/向内偏移；stableEdgeId 必须为 null。\
-当 selectionMode=click 且 faces[0] 是非 PLANE 曲面时，只允许使用 add-cylinder、cut-cylinder、add-rectangle、cut-rectangle 或 cut-slot；矩形和槽孔是在真实 UV 点击位置的切平面安全近似，不是沿任意曲面贴合轮廓；不得生成整面偏移或曲面边特征。\
+当 selectionMode=click 且 faces[0] 是非 PLANE 曲面时，只允许使用 add-cylinder、cut-cylinder、add-rectangle、cut-rectangle 或 cut-slot；矩形和槽孔是在真实 UV 点击位置的切平面安全近似，不是沿任意曲面贴合轮廓；不得生成整面偏移。\
 曲面操作必须使用上下文中 resolutionStatus=resolved、precision=opencascade 的真实点击点、外法线和 surfaceUv，不得改写 UV、切换目标或伪造曲面参数。\
 曲面矩形和槽孔的 rotationDeg=0 表示沿上下文中的真实 U 切向，正角度围绕真实外法线旋转；真实 U 切向由 OpenCascade 命中结果提供，Codex 不得改写，也不得在 localFeature 中增加切向字段。\
-当 selectionMode=edge 时，只允许对 edge 指定、且所属 faces[0] 为 PLANE 的单条稳定边执行 fillet-edge 或 chamfer-edge；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，\
+当 selectionMode=edge 时，只允许对 edge 指定的单条稳定边执行 fillet-edge 或 chamfer-edge；所属面可以是平面或非平面；非平面所属边必须使用当前 OpenCascade 精确点击点、真实 UV 和外法线；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，\
 四个轮廓尺寸必须全部为 null，rotationDeg 必须为 0，depthMm 表示圆角半径或倒角距离，范围为 0.20 至 50.00 毫米。\
 所有 localFeature 都必须让 changes 为空，不得自行切换到其他零件、面或边。点击平面操作中：圆形凸台/圆孔使用 add-cylinder/cut-cylinder；矩形凸台/孔使用 add-rectangle/cut-rectangle；\
 槽孔使用 cut-slot；整面向外拉伸/向内偏移使用 offset-face-outward/offset-face-inward。radiusMm 只用于圆柱，widthMm+heightMm 只用于矩形，widthMm+lengthMm 只用于槽孔；\
@@ -1971,9 +1971,6 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Codex 局部特征缺少目标面几何类型".to_string())?;
-    if mode == LocalSelectionMode::Edge && geometry_type != "PLANE" {
-        return Err("Codex 稳定边圆角和倒角第一版只支持平面所属边".into());
-    }
     let part_id = face
         .get("partId")
         .and_then(Value::as_str)
@@ -1993,7 +1990,7 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
     if hit.get("partId").and_then(Value::as_str) != Some(part_id)
         || hit.get("stableId").and_then(Value::as_str) != Some(stable_face_id)
     {
-        return Err("CAD 稳定面描述与点击命中不一致，请重新点击目标平面".into());
+        return Err("CAD 稳定面描述与点击命中不一致，请重新点击目标面或目标边".into());
     }
     let surface_uv = hit.get("surfaceUv").and_then(Value::as_object);
     let precise_hit = hit.get("resolutionStatus").and_then(Value::as_str) == Some("resolved")
@@ -2124,10 +2121,16 @@ fn validate_codex_model_result(
     if target.geometry_type != "PLANE"
         && !matches!(
             feature.operation.as_str(),
-            "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot"
+            "add-cylinder"
+                | "cut-cylinder"
+                | "add-rectangle"
+                | "cut-rectangle"
+                | "cut-slot"
+                | "fillet-edge"
+                | "chamfer-edge"
         )
     {
-        return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔".into());
+        return Err("当前选中的是非平面曲面；当前只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角".into());
     }
     let directional_profile = matches!(
         feature.operation.as_str(),
@@ -2762,13 +2765,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_curved_owner_face_or_inconsistent_edge_context() {
+    fn accepts_curved_owner_face_and_rejects_inconsistent_edge_context() {
         let result = edge_feature_result("fillet-edge");
         let mut curved = valid_local_edge_selection();
         curved["faces"][0]["geometryType"] = json!("CYLINDER");
-        assert!(validate_codex_model_result(&result, Some(&curved))
-            .expect_err("曲面所属边第一版必须被拒绝")
-            .contains("只支持平面所属边"));
+        validate_codex_model_result(&result, Some(&curved))
+            .expect("曲面所属单条稳定边圆角计划应通过受限 JSON 校验");
 
         let mut mismatch = valid_local_edge_selection();
         mismatch["hit"]["stableEdgeId"] = json!("edge-other");
@@ -2871,7 +2873,7 @@ mod tests {
                 Some(&curved_face)
             )
             .expect_err("曲面不受支持的操作必须被拒绝")
-            .contains("只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔"));
+            .contains("只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角"));
         }
 
         let mut missing_tangent = curved_face.clone();

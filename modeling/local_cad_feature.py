@@ -318,7 +318,7 @@ def edit_cad_feature(
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path, manifest = _load_manifest(output_dir)
     if str(manifest.get("revision", "")) != selection_revision:
-        raise ValueError("当前 CAD 已在选择后发生变化，triangleIndex 已失效，请重新点击目标平面")
+        raise ValueError("当前 CAD 已在选择后发生变化，triangleIndex 已失效，请重新点击目标面或目标边")
 
     matching_parts = [part for part in manifest["parts"] if isinstance(part, dict) and part.get("id") == part_id]
     if len(matching_parts) != 1:
@@ -332,7 +332,7 @@ def edit_cad_feature(
         None,
     )
     if requested_descriptor is None:
-        raise ValueError("所选稳定面已不存在或已重新编号，请重新点击目标平面")
+        raise ValueError("所选稳定面已不存在或已重新编号，请重新点击目标面或目标边")
     descriptor_geometry_type = str(requested_descriptor.get("geometryType", ""))
     requested_geometry_type = (surface_geometry_type or descriptor_geometry_type).strip()
     if requested_geometry_type != descriptor_geometry_type:
@@ -340,10 +340,8 @@ def edit_cad_feature(
             f"请求曲面类型{describe_surface_geometry_type(requested_geometry_type)}与稳定面类型"
             f"{describe_surface_geometry_type(descriptor_geometry_type)}不一致，请重新点击目标面"
         )
-    if edge_operation and descriptor_geometry_type != "PLANE":
-        raise ValueError("稳定 CAD 边圆角和倒角第一版只支持平面所属边")
-    if not edge_operation and descriptor_geometry_type != "PLANE":
-        if operation not in (
+    if descriptor_geometry_type != "PLANE":
+        if not edge_operation and operation not in (
             "add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot"
         ):
             raise ValueError(
@@ -383,6 +381,7 @@ def edit_cad_feature(
                 hit_normal,
                 depth_mm,
                 target_face_descriptor=requested_descriptor,
+                surface_uv=surface_uv,
             )
         else:
             application = apply_planar_feature(
@@ -601,6 +600,8 @@ def edit_cad_feature(
                 "boundsMm": _part_metrics(edited)["boundsMm"],
                 "surfaceGeometryType": validation.get("surfaceGeometryType", requested_geometry_type),
                 "surfaceUv": validation.get("surfaceUv"),
+                "surfacePointDistanceMm": validation.get("surfacePointDistanceMm"),
+                "maximumSurfacePointDistanceMm": validation.get("maximumSurfacePointDistanceMm"),
                 "maximumAbsCurvaturePerMm": validation.get("maximumAbsCurvaturePerMm"),
                 "minimumCurvatureRadiusMm": validation.get("minimumCurvatureRadiusMm"),
                 "curvatureRatio": validation.get("curvatureRatio"),
@@ -619,7 +620,7 @@ def edit_cad_feature(
             "faceMatching": target_face_matching,
             "updatedCadResult": manifest,
             "limitations": [
-                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击单条稳定 CAD 边执行圆角或倒角",
+                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击稳定面所属单条稳定 CAD 边执行圆角或倒角",
                 "曲面局部特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；矩形按半对角线、槽孔按长度一半作为保守包络半径，通孔只放行局部壁厚附近的正常出口接触",
                 "曲面矩形和槽孔位于真实 UV 点击位置的切平面，0 度沿当前修订的真实 U 切向，不是沿任意曲面贴合或测地线轮廓",
                 "稳定面和面内稳定边 ID 使用几何签名匹配第一版，不是 OpenCascade 原生永久拓扑命名",

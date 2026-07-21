@@ -646,6 +646,7 @@ def _replay_local_features(
                     stable_face_id, stable_edge_id, center, normal, depth_mm,
                     target_face_descriptor=target_face,
                     target_edge_descriptor=target_edge,
+                    surface_uv=surface_uv,
                 )
             else:
                 validate_planar_feature_inputs(
@@ -686,6 +687,7 @@ def _replay_local_features(
                 "stableEdgeStatus": application.get("stableEdgeStatus"),
                 "targetFace": record.get("targetFace") or application["targetFace"],
                 "targetEdge": record.get("targetEdge") or application.get("targetEdge"),
+                "surfaceUv": application["validation"].get("surfaceUv"),
                 "surfaceTangentU": application["validation"].get("surfaceTangentU"),
                 "replayStatus": "replayed",
                 "replayedRevision": replay_revision,

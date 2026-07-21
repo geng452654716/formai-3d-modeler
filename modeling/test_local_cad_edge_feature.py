@@ -38,8 +38,26 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
             point, (0, 0, 1), size_mm,
         )
 
-    def _project(self, root: Path):
-        model, sources_faces, face, edge = self._fixture()
+    def _project(
+        self,
+        root: Path,
+        model: cq.Workplane | None = None,
+        face_geometry_type: str = "PLANE",
+        edge_geometry_type: str = "LINE",
+    ):
+        if model is None:
+            model, sources_faces, face, edge = self._fixture()
+        else:
+            initial_sources, _ = match_shape_faces_with_sources(model)
+            sources_faces = [descriptor for _, descriptor in initial_sources]
+            face = next(
+                value for value in sources_faces
+                if value.get("geometryType") == face_geometry_type
+            )
+            edge = next(
+                value for value in face.get("edges", [])
+                if value.get("geometryType") == edge_geometry_type
+            )
         sources, matching = match_shape_faces_with_sources(model, sources_faces)
         stl_name = "generic-part.stl"
         step_name = "generic-part.step"
@@ -131,16 +149,40 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
         inherited_face = next(value for value in new_faces if value["stableId"] == old_face["stableId"])
         self.assertTrue(any(value["stableId"] == old_edge["stableId"] for value in inherited_face["edges"]))
 
-    def test_curved_owner_face_is_rejected_in_first_version(self):
+    def test_curved_owner_face_supports_single_circular_edge_fillet_and_chamfer(self):
+        for operation in ("fillet-edge", "chamfer-edge"):
+            with self.subTest(operation=operation):
+                model = cq.Workplane("XY").cylinder(10, 5)
+                sources, _ = match_shape_faces_with_sources(model)
+                faces = [descriptor for _, descriptor in sources]
+                face = next(value for value in faces if value.get("geometryType") == "CYLINDER")
+                edge = next(value for value in face["edges"] if value.get("geometryType") == "CIRCLE")
+                point = tuple(float(value) for value in edge["samplePointsMm"][0])
+                result = apply_edge_feature(
+                    model, faces, operation, face["stableId"], edge["stableId"],
+                    point, (1, 0, 0), 1, surface_uv=(0, 0),
+                )
+                self.assertTrue(result["validation"]["valid"])
+                self.assertEqual(result["validation"]["surfaceGeometryType"], "CYLINDER")
+                self.assertEqual(result["validation"]["surfaceUv"], {"u": 0, "v": 0})
+                self.assertLess(result["validation"]["volumeDeltaMm3"], 0)
+
+    def test_curved_owner_face_rejects_missing_or_stale_surface_uv(self):
         model = cq.Workplane("XY").cylinder(10, 5)
         sources, _ = match_shape_faces_with_sources(model)
         faces = [descriptor for _, descriptor in sources]
         face = next(value for value in faces if value.get("geometryType") == "CYLINDER")
-        edge = face["edges"][0]
-        with self.assertRaisesRegex(ValueError, "只支持平面所属边"):
+        edge = next(value for value in face["edges"] if value.get("geometryType") == "CIRCLE")
+        point = tuple(float(value) for value in edge["samplePointsMm"][0])
+        with self.assertRaisesRegex(ValueError, "缺少真实 UV"):
             apply_edge_feature(
                 model, faces, "fillet-edge", face["stableId"], edge["stableId"],
-                tuple(edge["centerMm"]), (1, 0, 0), 1,
+                point, (1, 0, 0), 1,
+            )
+        with self.assertRaisesRegex(ValueError, "真实 UV 点"):
+            apply_edge_feature(
+                model, faces, "fillet-edge", face["stableId"], edge["stableId"],
+                point, (1, 0, 0), 1, surface_uv=(3.141592653589793, 10),
             )
 
     def test_worker_exports_step_stl_selection_mapping_and_3mf(self):
@@ -161,6 +203,27 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
             ):
                 self.assertTrue((root / name).is_file(), name)
                 self.assertGreater((root / name).stat().st_size, 0, name)
+
+
+    def test_worker_executes_curved_owner_edge_and_records_real_uv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face, edge = self._project(
+                root, cq.Workplane("XY").cylinder(10, 5), "CYLINDER", "CIRCLE"
+            )
+            point = tuple(float(value) for value in edge["samplePointsMm"][0])
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = edit_cad_feature(
+                    root, "chamfer-edge", manifest["revision"], "generic-part", face["stableId"],
+                    point, (1, 0, 0), None, 1, "将这条曲面边做 1 毫米倒角",
+                    stable_edge_id=edge["stableId"], surface_geometry_type="CYLINDER",
+                    surface_uv=(0, 0),
+                )
+            feature = result["updatedCadResult"]["localFeatures"][0]
+            self.assertEqual(feature["surfaceGeometryType"], "CYLINDER")
+            self.assertEqual(feature["surfaceUv"], {"u": 0, "v": 0})
+            self.assertTrue(result["validation"]["valid"])
+            self.assertEqual(result["validation"]["surfaceGeometryType"], "CYLINDER")
 
     def test_worker_rejects_profile_dimensions_and_nonzero_rotation(self):
         with tempfile.TemporaryDirectory() as directory:

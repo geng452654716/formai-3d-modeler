@@ -138,6 +138,9 @@ export interface LocalCadFeatureResult {
     boundsMm: { x: number; y: number; z: number };
     surfaceGeometryType?: string;
     surfaceUv?: { u: number; v: number };
+    /** 点击点到 OpenCascade 按当前修订真实 UV 重新求得曲面点的距离。 */
+    surfacePointDistanceMm?: number | null;
+    maximumSurfacePointDistanceMm?: number | null;
     /** OpenCascade 在当前曲面 UV 点击位置计算的单位 U 切向。 */
     surfaceTangentU?: { x: number; y: number; z: number } | null;
     maximumAbsCurvaturePerMm?: number | null;
@@ -325,17 +328,14 @@ function validatedSelection(selection: CadFaceSelectionContext) {
   }
   const face = selection.faces[0];
   const hit = selection.hit;
-  if (selection.selectionMode === 'edge' && face.geometryType !== 'PLANE') {
-    throw new Error(`当前边所属面是${describeCadSurfaceGeometryType(face.geometryType)}；第一版圆角和倒角只支持平面所属边`);
-  }
   if (face.partId !== hit.partId || face.stableId !== hit.stableId) {
-    throw new Error('稳定面描述与点击命中不一致，请重新点击目标平面');
+    throw new Error('稳定面描述与点击命中不一致，请重新点击目标面或目标边');
   }
   if (!selection.revision.trim()) {
     throw new Error('当前稳定 CAD 局部选择缺少 CAD 修订号，请重新生成并选择目标');
   }
   if (!finiteVector(hit.pointMm) || !finiteVector(hit.normal)) {
-    throw new Error('点击坐标或法线无效，请重新点击目标平面');
+    throw new Error('点击坐标或法线无效，请重新点击目标面或目标边');
   }
   if (hit.resolutionStatus !== 'resolved' || hit.precision !== 'opencascade' || !hit.surfaceUv
     || !Number.isFinite(hit.surfaceUv.u) || !Number.isFinite(hit.surfaceUv.v)) {
@@ -421,7 +421,7 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
     throw new Error('圆角或倒角必须先使用“点击选边”选择一条稳定 CAD 边');
   }
   const curvedFace = face.geometryType !== 'PLANE';
-  if (curvedFace && !['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot'].includes(plan.operation)) {
+  if (curvedFace && !edgeOperation && !['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot'].includes(plan.operation)) {
     throw new Error(`当前选中的是${describeCadSurfaceGeometryType(face.geometryType)}；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔`);
   }
   const directionalProfile = ['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(plan.operation);

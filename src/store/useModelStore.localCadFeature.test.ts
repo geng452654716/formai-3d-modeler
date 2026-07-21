@@ -544,7 +544,7 @@ function edgeFeatureResult(): LocalCadFeatureResult {
     },
     faceMatching: updatedEdgeCadResult.faceMatching!,
     updatedCadResult: updatedEdgeCadResult,
-    limitations: ['第一版只支持平面所属单条稳定边']
+    limitations: ['只支持单条稳定边，不支持多边链、整圈传播或可变半径圆角']
   };
 }
 

@@ -112,6 +112,40 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
                 stable_edge_id=str(edge["stableId"]),
             )
 
+    def _curved_edge_replay_fixture(
+        self,
+    ) -> tuple[cq.Workplane, list[dict[str, Any]], dict[str, Any]]:
+        """创建不依赖示例外壳的圆柱曲面稳定边重放记录。"""
+        model = cq.Workplane("XY").cylinder(10, 5)
+        sources, _ = match_shape_faces_with_sources(model)
+        faces = [descriptor for _, descriptor in sources]
+        face = next(value for value in faces if value.get("geometryType") == "CYLINDER")
+        edge = next(
+            value for value in face.get("edges", [])
+            if value.get("geometryType") == "CIRCLE"
+        )
+        point = [float(value) for value in edge["samplePointsMm"][0]]
+        record = {
+            "operation": "chamfer-edge",
+            "partId": "generic-part",
+            "stableFaceId": face["stableId"],
+            "stableEdgeId": edge["stableId"],
+            "surfaceGeometryType": "CYLINDER",
+            "surfaceUv": {"u": 0.0, "v": 0.0},
+            "centerMm": {"x": point[0], "y": point[1], "z": point[2]},
+            "outwardNormal": {"x": 1.0, "y": 0.0, "z": 0.0},
+            "targetFace": face,
+            "targetEdge": edge,
+            "radiusMm": None,
+            "widthMm": None,
+            "heightMm": None,
+            "lengthMm": None,
+            "depthMm": 1.0,
+            "rotationDeg": 0.0,
+            "command": "将这条圆柱面边做 1 毫米倒角",
+        }
+        return model, faces, record
+
     def _file_digests(self, root: Path, manifest: dict[str, Any]) -> dict[str, str]:
         names = [
             name
@@ -358,6 +392,51 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
             self.assertEqual(rebuilt["localFeatureReplay"]["requestedCount"], 1)
             self.assertEqual(rebuilt["localFeatureReplay"]["replayedCount"], 1)
             self.assertEqual(rebuilt["localFeatures"][0]["replayStatus"], "replayed")
+
+    def test_curved_owner_edge_replays_with_real_uv_safety_chain(self) -> None:
+        model, faces, record = self._curved_edge_replay_fixture()
+        original_volume = model.val().Volume()
+
+        models, replayed = _replay_local_features(
+            {"generic-part": model},
+            {"generic-part": faces},
+            [record],
+            "curved-edge-replay",
+        )
+
+        rebuilt = models["generic-part"]
+        self.assertTrue(rebuilt.val().isValid())
+        self.assertEqual(len(rebuilt.solids().vals()), 1)
+        self.assertLess(rebuilt.val().Volume(), original_volume)
+        self.assertEqual(replayed[0]["replayStatus"], "replayed")
+        self.assertEqual(replayed[0]["replayedRevision"], "curved-edge-replay")
+        self.assertEqual(replayed[0]["surfaceUv"], {"u": 0.0, "v": 0.0})
+        self.assertEqual(replayed[0]["targetEdge"]["stableId"], record["stableEdgeId"])
+
+    def test_curved_owner_edge_replay_rejects_missing_or_stale_uv_without_replacing_model(self) -> None:
+        for mutation, expected in (
+            (lambda value: value.pop("surfaceUv"), "曲面局部特征记录缺少真实 UV"),
+            (
+                lambda value: value.__setitem__("surfaceUv", {"u": 3.141592653589793, "v": 10.0}),
+                "真实 UV 点",
+            ),
+        ):
+            with self.subTest(expected=expected):
+                model, faces, record = self._curved_edge_replay_fixture()
+                original_volume = model.val().Volume()
+                mutation(record)
+                models = {"generic-part": model}
+
+                with self.assertRaisesRegex(ValueError, expected):
+                    _replay_local_features(
+                        models,
+                        {"generic-part": faces},
+                        [record],
+                        "curved-edge-replay-invalid",
+                    )
+
+                self.assertIs(models["generic-part"], model)
+                self.assertAlmostEqual(models["generic-part"].val().Volume(), original_volume)
 
     def test_invalid_edge_id_replay_rejects_without_overwriting_last_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

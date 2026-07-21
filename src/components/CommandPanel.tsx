@@ -98,20 +98,20 @@ export function CommandPanel() {
             <span>
               {cadFaceSelection.hit
                 ? cadFaceSelection.edge
-                  ? `${cadFaceSelection.edge.stableEdgeId} · ${describeCadEdgeGeometryType(cadFaceSelection.edge.geometryType)} · 长度 ${cadFaceSelection.edge.lengthMm.toFixed(2)} 毫米 · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
+                  ? `${cadFaceSelection.edge.stableEdgeId} · ${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')}所属${describeCadEdgeGeometryType(cadFaceSelection.edge.geometryType)} · 长度 ${cadFaceSelection.edge.lengthMm.toFixed(2)} 毫米 · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
                   : `${cadFaceSelection.hit.stableId} · ${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')} · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
                 : `稳定面：${cadFaceSelection.faces.slice(0, 3).map((face) => face.stableId).join('、')}${cadFaceSelection.faces.length > 3 ? '…' : ''}。`}
               {cadHitResolutionText && ` ${cadHitResolutionText}`}
               {cadFaceSelection.selectionMode === 'edge'
-                ? ' 精确解析完成后可对这条边执行圆角或等距倒角；Worker 会再次用 OpenCascade 重新定位并复核点击距离。修改后需要重新选择。'
+                ? ` 精确解析完成后可对这条边执行固定半径圆角或等距倒角；Worker 会再次用 OpenCascade 重新定位稳定面和稳定边${cadFaceSelection.faces[0]?.geometryType === 'PLANE' ? '并复核点击距离与外法线' : '，并复核真实 UV 点、点击距离与真实外法线'}。当前只支持单条稳定边，不支持多边链、整圈传播或可变半径；修改后需要重新选择。`
                 : cadFaceSelection.selectionMode === 'click' && cadFaceSelection.faces.length === 1 && cadFaceSelection.faces[0]?.geometryType === 'PLANE'
                 ? ' 精确解析完成后可在此平面执行圆形或矩形凸台、圆孔、矩形孔、槽孔，以及整面向外拉伸或向内偏移；修改后需要重新选择，因为原三角面索引会失效。'
                 : cadFaceSelection.selectionMode === 'click'
-                  ? ' 精确解析完成后可沿真实法线生成受限圆形、矩形或槽孔特征；矩形和槽孔是在真实 UV 点击位置建立的切平面安全近似，不是任意曲面贴合或测地线轮廓。整面偏移和曲面边特征仍未实现，修改后需要重新选择。'
+                  ? ' 精确解析完成后可沿真实法线生成受限圆形、矩形或槽孔特征；矩形和槽孔是在真实 UV 点击位置建立的切平面安全近似，不是任意曲面贴合或测地线轮廓。整面偏移仍未实现；如需圆角或倒角，请切换“点击选边”并点击目标边界。修改后需要重新选择。'
                   : ' 框选多面作为 AI 局部范围上下文，不执行局部布尔；下一条指令仍会附带局部截图、零件尺寸与摄像机上下文。'}
             </span>
           </div>
-          <button onClick={clearCadFaceSelection} title="清除稳定 CAD 面选择"><X size={12} /></button>
+          <button onClick={clearCadFaceSelection} title={cadFaceSelection.selectionMode === 'edge' ? '清除稳定 CAD 边选择' : '清除稳定 CAD 面选择'}><X size={12} /></button>
         </div>
       )}
       {wallThicknessSelection && (

@@ -1074,7 +1074,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           messages: state.messages.concat({
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: `${message}。已保留当前模型和稳定 CAD 局部选择；支持点击稳定平面后生成局部轮廓或整面拉伸/偏移、点击曲面后生成受限圆形、矩形或槽孔特征，也支持点击平面所属单条稳定边后执行圆角或倒角。`
+            content: `${message}。已保留当前模型和稳定 CAD 局部选择；支持点击稳定平面后生成局部轮廓或整面拉伸/偏移、点击曲面后生成受限圆形、矩形或槽孔特征，也支持点击稳定面所属单条稳定边后执行圆角或倒角。`
           })
         }));
         return;
@@ -1248,19 +1248,24 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         const stableFaceText = featureResult.stableFaceStatus === 'inherited'
           ? '目标稳定面 ID 已继承'
           : '目标面因拓扑变化已失效，需重新选择';
+        const curvedEdge = edgeOperation && request.surfaceGeometryType !== 'PLANE';
+        const curvedEdgeUv = featureResult.validation.surfaceUv;
         const edgeResultText = edgeOperation
-          ? `目标稳定边 ${request.stableEdgeId} 状态为${featureResult.stableEdgeStatus === 'inherited' ? '已继承' : '已失效'}；点击点到 OpenCascade 目标边的距离 ${featureResult.validation.pointDistanceMm.toFixed(3)} 毫米已通过复核。`
+          ? `目标稳定边 ${request.stableEdgeId} 状态为${featureResult.stableEdgeStatus === 'inherited' ? '已继承' : '已失效'}；点击点到 OpenCascade 目标边的距离 ${featureResult.validation.pointDistanceMm.toFixed(3)} 毫米已通过复核。${curvedEdge ? `所属${describeCadSurfaceGeometryType(request.surfaceGeometryType)}已按当前修订真实 UV${curvedEdgeUv ? `（${curvedEdgeUv.u.toFixed(4)}，${curvedEdgeUv.v.toFixed(4)}）` : ''}重新求点，点击点到真实 UV 点的距离 ${featureResult.validation.surfacePointDistanceMm?.toFixed(3) ?? '未知'} 毫米，真实外法线点积 ${featureResult.validation.normalDot.toFixed(3)}，均已通过复核。` : ''}`
           : '';
-        const curvedValidationText = request.surfaceGeometryType !== 'PLANE'
+        const curvedValidationText = !edgeOperation && request.surfaceGeometryType !== 'PLANE'
           ? `曲率比 ${featureResult.validation.curvatureRatio?.toFixed(3) ?? '未知'}；局部壁厚约 ${featureResult.validation.localWallThicknessMm?.toFixed(3) ?? '未知'} 毫米${featureResult.validation.throughCut ? '，本次为通孔' : featureResult.validation.remainingWallMm != null ? `，剩余壁厚约 ${featureResult.validation.remainingWallMm.toFixed(3)} 毫米` : ''}。${featureResult.validation.interferenceCheckPassed ? `曲面干涉检查通过，检查 ${featureResult.validation.contactFaceCount ?? 0} 个接触面和 ${featureResult.validation.contactSampleCount ?? 0} 个接触采样，未发现目标曲面自交或非目标面干涉。` : ''}`
           : '';
+        const invalidatedSelectionText = curvedEdge
+          ? '原三角面索引（triangleIndex）、曲面 UV 和稳定边选择全部失效'
+          : `原三角面索引（triangleIndex）${edgeOperation ? '和稳定边选择' : ''}已失效`;
         set((state) => ({
           aiStatus: backendStatus?.codexAuthenticated ? 'ready' : 'local',
           aiActivity: null,
           messages: state.messages.concat({
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: `${request.summary}已完成；零件体积 ${featureResult.validation.volumeBeforeMm3.toFixed(2)} → ${featureResult.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过有效性、封闭性、单 Solid、点击坐标和法线一致性检查；${stableFaceText}。${edgeResultText}${curvedValidationText}局部特征已记录，后续参数化整模重建会从基础实体开始按顺序安全重放；修改后选择网格已重新生成，原三角面索引（triangleIndex）${edgeOperation ? '和稳定边选择' : ''}已失效，继续修改前请重新选择。`
+            content: `${request.summary}已完成；零件体积 ${featureResult.validation.volumeBeforeMm3.toFixed(2)} → ${featureResult.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过有效性、封闭性、单 Solid、点击坐标和法线一致性检查；${stableFaceText}。${edgeResultText}${curvedValidationText}局部特征已记录，后续参数化整模重建会从基础实体开始按顺序安全重放；修改后选择网格已重新生成，${invalidatedSelectionText}，继续修改前请重新选择。${edgeOperation ? '当前仅支持单条稳定边，不支持多边链、整圈传播或可变半径。' : ''}`
           })
         }));
       } catch (error) {

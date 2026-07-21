@@ -244,7 +244,7 @@ describe('稳定 CAD 面局部特征请求', () => {
     });
   });
 
-  it('拒绝曲面整面偏移和曲面边特征', () => {
+  it('拒绝曲面整面偏移并接受曲面所属稳定边', () => {
     const curved: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }]
@@ -255,8 +255,10 @@ describe('稳定 CAD 面局部特征请求', () => {
       ...edgeSelection,
       faces: [{ ...edgeSelection.faces[0], geometryType: 'CYLINDER' }]
     };
-    expect(() => buildLocalCadFeatureRequest(curvedEdge, '将这条边做 2 毫米圆角'))
-      .toThrow('只支持平面所属边');
+    expect(buildLocalCadFeatureRequest(curvedEdge, '将这条边做 2 毫米圆角')).toMatchObject({
+      operation: 'fillet-edge', stableEdgeId: 'edge-top-front', surfaceGeometryType: 'CYLINDER',
+      surfaceUv: edgeSelection.hit?.surfaceUv, depthMm: 2
+    });
   });
 
   it('接受绑定当前稳定面的 Codex 圆形凸台计划', () => {
@@ -386,13 +388,14 @@ describe('稳定 CAD 面局部特征请求', () => {
     }, '错误计划')).toThrow('当前选择的是稳定边，只允许执行圆角或倒角');
   });
 
-  it('拒绝曲面所属边、平面轮廓字段和越界边尺寸', () => {
+  it('接受曲面所属边，并拒绝平面轮廓字段和越界边尺寸', () => {
     const curvedEdge = {
       ...edgeSelection,
       faces: [{ ...edgeSelection.faces[0], geometryType: 'CYLINDER' }]
     };
-    expect(() => buildLocalCadFeatureRequest(curvedEdge, '做 2 毫米圆角'))
-      .toThrow('只支持平面所属边');
+    expect(buildLocalCadFeatureRequest(curvedEdge, '做 2 毫米圆角')).toMatchObject({
+      operation: 'fillet-edge', stableEdgeId: 'edge-top-front', surfaceGeometryType: 'CYLINDER', depthMm: 2
+    });
 
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误尺寸', {
       operation: 'fillet-edge', partId: 'body', stableFaceId: 'face-top',

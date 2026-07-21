@@ -575,10 +575,6 @@ function LoadedCadMesh({
                 : new Vector3(0, 0, 1);
             const screenshot = captureClickScreenshot(gl.domElement, event.clientX, event.clientY);
             const faceDescriptor = cadPart.faces?.find((face) => face.stableId === faceRange.stableId);
-            if (cadFaceSelectionMode === 'edge' && faceRange.geometryType !== 'PLANE') {
-              addAssistantMessage(`当前点击边所属面是${describeCadSurfaceGeometryType(faceRange.geometryType)}；第一版圆角和倒角只支持平面所属边，请选择平面边界。`);
-              return;
-            }
             const nearestEdge = cadFaceSelectionMode === 'edge'
               ? findNearestCadEdge(faceDescriptor?.edges, { x: pointCad.x, y: pointCad.y, z: pointCad.z })
               : null;
@@ -1505,9 +1501,9 @@ export function ModelViewport() {
       )}
       {cadFaceSelection && (
         <div className={`cad-face-selection-overlay ${localCadFeaturePreview ? 'has-feature-preview' : ''}`}>
-          <strong>{cadFaceSelection.selectionMode === 'click' ? '已点击选择稳定 CAD 面' : cadFaceSelection.selectionMode === 'edge' ? '已点击选择稳定 CAD 边' : '已框选稳定 CAD 面'}</strong>
+          <strong>{cadFaceSelection.selectionMode === 'click' ? '已点击选择稳定 CAD 面' : cadFaceSelection.selectionMode === 'edge' ? `已点击选择${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')}所属稳定 CAD 边` : '已框选稳定 CAD 面'}</strong>
           <span>
-            {cadFaceSelection.selectionMode === 'edge' ? '1 条边' : `${cadFaceSelection.faces.length} 个面`} · {new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件 · 下一条指令将附带原始毫米坐标、法线和局部截图
+            {cadFaceSelection.selectionMode === 'edge' ? '1 条边；仅支持单边圆角或倒角，不支持多边链、整圈传播或可变半径' : `${cadFaceSelection.faces.length} 个面`} · {new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件 · 下一条指令将附带原始毫米坐标、法线和局部截图
           </span>
           {localCadFeaturePreview && (
             <div className={`local-cad-feature-preview-status is-${localCadFeaturePreview.status}`}>
