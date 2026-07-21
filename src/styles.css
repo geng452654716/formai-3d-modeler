@@ -1178,6 +1178,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-element-exit { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid #3a3d42; border-radius: 5px; color: #858a91; background: #202226; cursor: pointer; }
 .mesh-element-exit:hover { color: #f3bc56; border-color: rgba(229, 157, 30, .6); }
 .mesh-element-mode-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 10px 10px 8px; }
+.mesh-element-selection-methods { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-top: 0; }
 .mesh-element-mode-row button, .mesh-element-actions button, .mesh-element-blocked button { min-height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #3a3d42; border-radius: 5px; color: #92969c; background: #202226; font-family: inherit; font-size: 8px; cursor: pointer; }
 .mesh-element-mode-row button:hover, .mesh-element-mode-row button.is-active { color: #f3bc56; border-color: rgba(229, 157, 30, .65); background: rgba(132, 83, 14, .22); }
 .mesh-element-mode-row button:disabled, .mesh-element-actions button:disabled { cursor: not-allowed; opacity: .42; }

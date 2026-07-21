@@ -1446,13 +1446,78 @@ pub async fn run_local_stl_edit(
     .map_err(|error| format!("局部 STL 修改后台任务失败：{error}"))?
 }
 
+fn validate_mesh_element_selections(
+    element_kind: &str,
+    selection_method: &str,
+    selections: &[Value],
+) -> Result<String, String> {
+    if !matches!(element_kind, "vertex" | "edge" | "face") {
+        return Err("网格元素类型只能是顶点、边或面".into());
+    }
+    if !matches!(selection_method, "click" | "box") {
+        return Err("网格元素选择方式只能是点击或框选".into());
+    }
+    if selections.is_empty() || selections.len() > 512 {
+        return Err("单次必须选择 1 至 512 个同类网格元素".into());
+    }
+    for selection in selections {
+        let object = selection
+            .as_object()
+            .ok_or_else(|| "网格元素选择格式无效".to_string())?;
+        if object.len() != 3
+            || !["triangleIndex", "elementIndex", "triangleMm"]
+                .iter()
+                .all(|field| object.contains_key(*field))
+        {
+            return Err("网格元素选择包含缺失或不允许的字段".into());
+        }
+        let triangle_index = object
+            .get("triangleIndex")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "三角面索引无效，请重新选择".to_string())?;
+        if triangle_index > 5_000_000 {
+            return Err("三角面索引超过安全上限".into());
+        }
+        let element_index = object
+            .get("elementIndex")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "网格元素索引无效，请重新选择".to_string())?;
+        if element_index > 2 || (element_kind == "face" && element_index != 0) {
+            return Err("网格元素索引与编辑类型不匹配".into());
+        }
+        let triangle = object
+            .get("triangleMm")
+            .and_then(Value::as_array)
+            .filter(|triangle| triangle.len() == 3)
+            .ok_or_else(|| "网格元素源三角面坐标无效".to_string())?;
+        for point in triangle {
+            let coordinates = point
+                .as_object()
+                .filter(|point| {
+                    point.len() == 3 && ["x", "y", "z"].iter().all(|axis| point.contains_key(*axis))
+                })
+                .ok_or_else(|| "网格元素源坐标格式无效".to_string())?;
+            for axis in ["x", "y", "z"] {
+                let coordinate = coordinates
+                    .get(axis)
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| "网格元素源坐标必须是有限毫米数值".to_string())?;
+                if !coordinate.is_finite() || coordinate.abs() > 1_000_000.0 {
+                    return Err("网格元素源坐标超出安全范围".into());
+                }
+            }
+        }
+    }
+    serde_json::to_string(selections).map_err(|error| format!("无法序列化网格元素选择：{error}"))
+}
+
 #[tauri::command]
 pub async fn run_mesh_element_edit(
     source_part_id: String,
     selection_revision: String,
     element_kind: String,
-    triangle_index: usize,
-    element_index: usize,
+    selection_method: String,
+    selections: Vec<Value>,
     delta_xmm: f64,
     delta_ymm: f64,
     delta_zmm: f64,
@@ -1470,15 +1535,8 @@ pub async fn run_mesh_element_edit(
         if selection_revision.trim().is_empty() || selection_revision.chars().count() > 200 {
             return Err("网格元素选择修订号无效，请重新选择".to_string());
         }
-        if !matches!(element_kind.as_str(), "vertex" | "edge" | "face") {
-            return Err("网格元素类型只能是顶点、边或面".to_string());
-        }
-        if triangle_index > 5_000_000 {
-            return Err("三角面索引超过安全上限".to_string());
-        }
-        if element_index > 2 || (element_kind == "face" && element_index != 0) {
-            return Err("网格元素索引与编辑类型不匹配".to_string());
-        }
+        let selections_json =
+            validate_mesh_element_selections(&element_kind, &selection_method, &selections)?;
         let displacement = [delta_xmm, delta_ymm, delta_zmm];
         if !displacement
             .iter()
@@ -1513,10 +1571,9 @@ pub async fn run_mesh_element_edit(
             selection_revision,
             "--kind".into(),
             element_kind,
-            "--triangle-index".into(),
-            triangle_index.to_string(),
-            "--element-index".into(),
-            element_index.to_string(),
+            "--selection-method".into(),
+            selection_method,
+            "--selections-stdin".into(),
             "--delta-x".into(),
             delta_xmm.to_string(),
             "--delta-y".into(),
@@ -1528,7 +1585,7 @@ pub async fn run_mesh_element_edit(
             &state.paths.python_path,
             &arguments,
             &state.paths.project_root,
-            None,
+            Some(&selections_json),
         )?;
         if !output.status.success() {
             let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -3301,6 +3358,96 @@ mod tests {
                 .expect("system time")
                 .as_nanos()
         ))
+    }
+
+    fn mesh_element_selection(triangle_index: u64, element_index: u64) -> Value {
+        serde_json::json!({
+            "triangleIndex": triangle_index,
+            "elementIndex": element_index,
+            "triangleMm": [
+                { "x": 0.0, "y": 0.0, "z": 0.0 },
+                { "x": 10.0, "y": 0.0, "z": 0.0 },
+                { "x": 0.0, "y": 10.0, "z": 0.0 }
+            ]
+        })
+    }
+
+    #[test]
+    fn validates_mesh_element_selection_collection() {
+        let selections = vec![mesh_element_selection(1, 0), mesh_element_selection(2, 2)];
+        let serialized = validate_mesh_element_selections("vertex", "box", &selections)
+            .expect("合法多元素集合应通过");
+        assert!(serialized.contains("triangleIndex"));
+    }
+
+    #[test]
+    fn rejects_empty_and_oversized_mesh_element_collections() {
+        assert!(validate_mesh_element_selections("vertex", "click", &[])
+            .expect_err("空集合必须被拒绝")
+            .contains("1 至 512"));
+        let selections = vec![mesh_element_selection(1, 0); 513];
+        assert!(
+            validate_mesh_element_selections("vertex", "box", &selections)
+                .expect_err("超过上限必须被拒绝")
+                .contains("1 至 512")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_mesh_element_method_and_face_index() {
+        let selections = vec![mesh_element_selection(1, 0)];
+        assert!(
+            validate_mesh_element_selections("vertex", "lasso", &selections)
+                .expect_err("非法选择方式必须被拒绝")
+                .contains("点击或框选")
+        );
+        let face = vec![mesh_element_selection(1, 1)];
+        assert!(validate_mesh_element_selections("face", "box", &face)
+            .expect_err("面的元素索引必须为零")
+            .contains("不匹配"));
+    }
+
+    #[test]
+    fn rejects_mesh_element_missing_or_extra_fields() {
+        let missing = vec![serde_json::json!({
+            "triangleIndex": 1,
+            "elementIndex": 0
+        })];
+        assert!(
+            validate_mesh_element_selections("vertex", "click", &missing)
+                .expect_err("缺字段必须被拒绝")
+                .contains("缺失或不允许")
+        );
+        let extra = vec![serde_json::json!({
+            "triangleIndex": 1,
+            "elementIndex": 0,
+            "triangleMm": [
+                { "x": 0.0, "y": 0.0, "z": 0.0 },
+                { "x": 10.0, "y": 0.0, "z": 0.0 },
+                { "x": 0.0, "y": 10.0, "z": 0.0 }
+            ],
+            "command": "不允许"
+        })];
+        assert!(validate_mesh_element_selections("vertex", "click", &extra)
+            .expect_err("额外字段必须被拒绝")
+            .contains("缺失或不允许"));
+    }
+
+    #[test]
+    fn rejects_mesh_element_coordinate_and_triangle_index_out_of_range() {
+        let mut coordinate = mesh_element_selection(1, 0);
+        coordinate["triangleMm"][0]["x"] = serde_json::json!(1_000_000.1);
+        assert!(
+            validate_mesh_element_selections("vertex", "click", &[coordinate])
+                .expect_err("超范围坐标必须被拒绝")
+                .contains("安全范围")
+        );
+        let triangle = vec![mesh_element_selection(5_000_001, 0)];
+        assert!(
+            validate_mesh_element_selections("vertex", "click", &triangle)
+                .expect_err("超范围三角面索引必须被拒绝")
+                .contains("三角面索引超过")
+        );
     }
 
     #[test]

@@ -9,7 +9,8 @@ from pathlib import Path
 import cadquery as cq
 from cadquery import exporters
 
-from edit_mesh_element import edit_mesh_element
+from edit_mesh_element import edit_mesh_element, edit_mesh_elements
+from export_transformed_model import read_stl
 from split_and_cap import inspect_stl_file
 
 
@@ -20,6 +21,14 @@ class MeshElementEditTests(unittest.TestCase):
         manifest = inspect_stl_file(source, root, original_file_name="任意模型.stl")
         working = root / str(manifest["sourceFile"])
         return working, manifest
+
+    def _selection(self, source: Path, triangle_index: int, element_index: int) -> dict[str, object]:
+        triangle = read_stl(source)[triangle_index]
+        return {
+            "triangleIndex": triangle_index,
+            "elementIndex": element_index,
+            "triangleMm": [{"x": point[0], "y": point[1], "z": point[2]} for point in triangle],
+        }
 
     def test_moves_shared_vertex_and_updates_manifest_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -60,6 +69,88 @@ class MeshElementEditTests(unittest.TestCase):
                 edit_mesh_element(source, root, revision, "vertex", 0, 0, (0, 0, 0))
             with self.assertRaisesRegex(ValueError, "索引与编辑类型不匹配"):
                 edit_mesh_element(source, root, revision, "face", 0, 1, (0.1, 0, 0))
+
+    def test_box_moves_multiple_distinct_vertices_and_reports_deduplicated_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            selections: list[dict[str, object]] = []
+            seen: set[tuple[float, float, float]] = set()
+            for triangle_index, triangle in enumerate(read_stl(source)):
+                for element_index, point in enumerate(triangle):
+                    key = tuple(round(value, 6) for value in point)
+                    if round(point[2], 6) != 10 or key in seen:
+                        continue
+                    seen.add(key)
+                    selections.append(self._selection(source, triangle_index, element_index))
+            self.assertEqual(len(selections), 4)
+            result = edit_mesh_elements(
+                source,
+                root,
+                str(manifest["revision"]),
+                "vertex",
+                selections,
+                (0, 0, 0.2),
+                "box",
+            )
+            self.assertEqual(result["selectionMethod"], "box")
+            self.assertEqual(result["selectedElementCount"], 4)
+            self.assertEqual(result["movedCoordinateCount"], 4)
+            self.assertTrue(result["validation"]["watertight"])
+
+    def test_deduplicates_same_source_vertex_across_triangles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            triangles = read_stl(source)
+            first_key = tuple(round(value, 6) for value in triangles[0][0])
+            occurrences: list[tuple[int, int]] = []
+            for triangle_index, triangle in enumerate(triangles):
+                for element_index, point in enumerate(triangle):
+                    if tuple(round(value, 6) for value in point) == first_key:
+                        occurrences.append((triangle_index, element_index))
+            self.assertGreater(len(occurrences), 1)
+            result = edit_mesh_elements(
+                source,
+                root,
+                str(manifest["revision"]),
+                "vertex",
+                [self._selection(source, *occurrences[0]), self._selection(source, *occurrences[1])],
+                (0.1, 0, 0),
+                "box",
+            )
+            self.assertEqual(result["selectedElementCount"], 1)
+            self.assertEqual(result["movedCoordinateCount"], 1)
+
+    def test_rejects_selection_limit_and_tampered_source_coordinates_without_writeback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            original = (root / "imported-model-result.json").read_text(encoding="utf-8")
+            valid = self._selection(source, 0, 0)
+            with self.assertRaisesRegex(ValueError, "最多选择 512"):
+                edit_mesh_elements(
+                    source,
+                    root,
+                    str(manifest["revision"]),
+                    "vertex",
+                    [valid] * 513,
+                    (0.1, 0, 0),
+                    "box",
+                )
+            tampered = json.loads(json.dumps(valid))
+            tampered["triangleMm"][0]["x"] += 1
+            with self.assertRaisesRegex(ValueError, "源坐标与当前模型不一致"):
+                edit_mesh_elements(
+                    source,
+                    root,
+                    str(manifest["revision"]),
+                    "vertex",
+                    [tampered],
+                    (0.1, 0, 0),
+                    "click",
+                )
+            self.assertEqual((root / "imported-model-result.json").read_text(encoding="utf-8"), original)
 
 
 if __name__ == "__main__":

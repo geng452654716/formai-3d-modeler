@@ -380,25 +380,30 @@ CAD 制造拆件复用源 CAD 零件的稳定对象 ID，上传 STL 拆件使用
 ## 上传 STL 网格元素位移协议
 
 ```text
-Three.js 命中当前三角面
-  → worldToLocal 消除对象显示变换
-  → 逆坐标矩阵恢复 STL 源毫米坐标
-  → 选择最近顶点、最近边或当前面
-  → 绑定 imported-model revision
-  → Vite/Tauri 双层请求校验
-  → Python 同步移动全部同坐标 STL 顶点副本
+Three.js 点击命中或当前摄像机屏幕投影框选
+  → worldToLocal 消除对象显示变换并恢复 STL 源毫米坐标
+  → 顶点 / 无向边 / 面去重，按网格遍历顺序限制为 512 个
+  → 每个元素绑定 imported-model revision、triangleIndex 与 triangleMm
+  → Vite、Tauri/Rust、Python 三层独立请求校验
+  → Rust 通过 stdin 向 Python 传递选择集合
+  → Python 逐三角面复核并同步移动全部同坐标 STL 顶点副本
   → 退化面检查
-  → OpenCascade 重新导入与封闭实体检查
+  → OpenCascade 封闭性、有效性、Solid 数量和体积检查
   → 临时文件 + 批量原子替换 + 失败回滚
-  → 新 revision 刷新视口并清除旧分析
+  → 新 revision 刷新视口、使旧选择失效并保存上传快照
 ```
 
-- 前端协议位于 `src/model/meshElementEdit.ts`，只接受 `uploaded-model`、`vertex / edge / face`、有限毫米位移和当前三角面上下文。三角边索引固定为 `0: 0-1`、`1: 1-2`、`2: 2-0`，面的元素索引固定为 0。
+- 前端协议位于 `src/model/meshElementEdit.ts`，只接受 `uploaded-model`、`vertex / edge / face`、`click / box`、1–512 个同类元素、有限毫米位移和当前三角面上下文。三角边索引固定为 `0: 0-1`、`1: 1-2`、`2: 2-0`，面的元素索引固定为 0。
 - Three.js 中源 STL/OpenCascade 坐标 `(x, y, z)` 显示为 `(x, z, -y)`；选择时通过逆矩阵恢复源坐标。外层 `TransformableObject` 的用户位移、旋转和均匀缩放先由 `event.object.worldToLocal` 消除，不能进入局部网格坐标。
-- Worker `modeling/edit_mesh_element.py` 使用六位小数坐标键收集选中元素涉及的源坐标，并同步更新所有 STL 顶点副本。这样可维持分面 STL 的共享几何顶点一致性，但不等同于通用拓扑编辑器。
+- `collectMeshElementBoxSelection` 使用生成器遍历当前上传模型三角面：顶点按顶点投影、边按三维中点投影、面按三维重心投影，且投影深度必须位于 `[-1, 1]`。顶点按六位小数源毫米坐标、边按排序后的无向源端点、面按当前修订 `triangleIndex` 去重；第 513 个不同候选只设置截断状态，不改变已按网格遍历顺序保留的前 512 个。
+- 框选第一版不执行射线遮挡过滤，因此是屏幕投影穿透框选，可能包含被遮挡区域中的元素。与稳定 CAD 面框选“只选择第一命中可见面”的语义不同，界面和产品规格必须保持这一区别。
+- `MeshElementSelection` 保存选择方式和元素数组，每个元素都包含 `triangleIndex + elementIndex + triangleMm`，外层统一保存 `kind + selectionRevision`。点击单选同样转为长度为 1 的集合，使后端只维护一套批量协议。
+- Rust 对集合长度、同类元素、索引、有限坐标、坐标绝对值上限、选择方式和未知字段进行严格反序列化校验，并把 JSON 选择集合写入 Python 子进程标准输入；Vite 开发路由执行等价校验并调用同一 Worker，避免 Web 验收绕过生产协议。
+- Worker `modeling/edit_mesh_element.py` 使用 `triangleMm` 与当前工作 STL 对应三角面逐点复核，再以六位小数坐标键收集整个选择集合涉及的唯一源坐标，并同步更新所有 STL 顶点副本。这样可维持分面 STL 的共享几何顶点一致性，但不等同于通用拓扑编辑器或未受约束自由雕刻。
 - 修改结果不得包含 NaN、Infinity 或退化三角面。重新导入后的 Shape 必须有效、封闭，修改前后 Solid 数量一致；如果导入流程报告进行了自动修洞或网格清理，Worker 拒绝提交，避免自动修复掩盖编辑产生的破坏。
 - `imported-model-working.stl`、`imported-model-working.step`、`imported-model-result.json` 和 `mesh-element-edit-result.json` 使用既有受管 artifacts 目录、临时输出、批量原子替换和回滚机制。Web 开发路由与 Tauri 命令调用同一 Python Worker。
-- 成功后 Zustand 更新上传模型修订，清除制造拆件、壁厚热力图和过期选择，并创建绑定对应修订号的中文版本与前后上传模型快照。`restoreVersion`、撤销和重做通过受管恢复命令恢复真实工作 STL、STEP 与清单，只有 Worker 成功后才移动历史索引。
+- 视口按元素类型生成合并 `Points`、`LineSegments` 或面 `BufferGeometry`，而不是为每个元素创建独立 React/Three 对象；黄色点、粗线和半透明面高亮集合都绑定当前模型修订。
+- 成功后 Zustand 更新上传模型修订，清除制造拆件、壁厚热力图、框选请求和过期选择，并创建绑定对应修订号的中文版本与前后上传模型快照。`restoreVersion`、撤销和重做通过受管恢复命令恢复真实工作 STL、STEP 与清单，只有 Worker 成功后才移动历史索引。
 
 ## 上传模型精确快照恢复协议
 

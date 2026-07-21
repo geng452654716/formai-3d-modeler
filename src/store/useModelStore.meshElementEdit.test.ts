@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PARAMETERS } from '../model/defaults';
 import type { ImportedStlModel } from '../model/importedModel';
-import type { MeshElementEditResult, MeshElementSelection } from '../model/meshElementEdit';
+import {
+  createMeshElementSelectionSet,
+  type MeshElementEditResult,
+  type MeshElementSelection
+} from '../model/meshElementEdit';
 import type { ModelVersion } from '../model/types';
 
 const backendMocks = vi.hoisted(() => ({
@@ -90,15 +94,15 @@ const selection: MeshElementSelection = {
   ]
 };
 
-function result(): MeshElementEditResult {
+function result(overrides: Partial<MeshElementEditResult> = {}): MeshElementEditResult {
   return {
     status: 'ok',
     revision: 'mesh-after',
     selectionRevision: 'mesh-before',
     sourcePartId: 'uploaded-model',
     kind: 'vertex',
-    triangleIndex: 4,
-    elementIndex: 1,
+    selectionMethod: 'click',
+    selectedElementCount: 1,
     displacementMm: { x: 1, y: 0, z: 0 },
     movedCoordinateCount: 1,
     movedVertexOccurrenceCount: 3,
@@ -119,11 +123,12 @@ function result(): MeshElementEditResult {
       boundsAfterMm: { ...bounds, maxX: 11, x: 11 }
     },
     updatedModel: model('mesh-after'),
-    limitations: ['第一版不改变拓扑连接关系']
+    limitations: ['第一版不改变拓扑连接关系'],
+    ...overrides
   };
 }
 
-describe('上传 STL 网格元素手工编辑', () => {
+describe('上传 STL 网格元素批量编辑', () => {
   beforeEach(() => {
     backendMocks.createVersionSnapshot.mockReset().mockResolvedValue(null);
     backendMocks.runMeshElementEdit.mockReset().mockResolvedValue(result());
@@ -135,7 +140,9 @@ describe('上传 STL 网格元素手工编辑', () => {
       importedStlStatus: 'ready',
       viewportModelSource: 'uploaded-stl',
       meshElementEditMode: 'off',
+      meshElementSelectionMethod: 'click',
       meshElementSelection: null,
+      meshElementBoxRequest: null,
       meshElementEditStatus: 'idle',
       meshElementEditError: null,
       meshElementEditResult: null,
@@ -154,11 +161,16 @@ describe('上传 STL 网格元素手工编辑', () => {
     useModelStore.setState(originalState, true);
   });
 
-  it('切换顶点、边、面模式时清除不兼容选择，并退出对象变换', () => {
+  it('切换元素种类或选择方式时清除不兼容集合，并退出对象变换', () => {
     useModelStore.getState().selectMeshElement(selection);
     useModelStore.getState().setMeshElementEditMode('vertex');
-    expect(useModelStore.getState().meshElementSelection).toEqual(selection);
+    expect(useModelStore.getState().meshElementSelection?.elements).toEqual([selection]);
 
+    useModelStore.getState().setMeshElementSelectionMethod('box');
+    expect(useModelStore.getState().meshElementSelection).toBeNull();
+    expect(useModelStore.getState().meshElementSelectionMethod).toBe('box');
+
+    useModelStore.getState().selectMeshElement(selection);
     useModelStore.getState().setMeshElementEditMode('edge');
     expect(useModelStore.getState().meshElementSelection).toBeNull();
     expect(useModelStore.getState().objectTransformMode).toBe('select');
@@ -168,7 +180,27 @@ describe('上传 STL 网格元素手工编辑', () => {
     expect(useModelStore.getState().meshElementSelection).toBeNull();
   });
 
-  it('调用真实协议并在成功后刷新模型、清除过期分析和创建中文版本', async () => {
+
+  it('切换 CAD 或上传模型视图时清除过期框选状态', () => {
+    const selectionSet = createMeshElementSelectionSet([selection], 'box');
+    useModelStore.getState().setMeshElementEditMode('vertex');
+    useModelStore.getState().setMeshElementSelectionMethod('box');
+    useModelStore.getState().selectMeshElements(selectionSet!);
+    useModelStore.getState().requestMeshElementBoxSelection({
+      id: 1,
+      rectangle: { left: 0.1, top: 0.1, right: 0.5, bottom: 0.5 }
+    });
+
+    useModelStore.getState().setViewportModelSource('cad');
+
+    const state = useModelStore.getState();
+    expect(state.meshElementEditMode).toBe('off');
+    expect(state.meshElementSelectionMethod).toBe('click');
+    expect(state.meshElementSelection).toBeNull();
+    expect(state.meshElementBoxRequest).toBeNull();
+  });
+
+  it('点击单选调用集合协议并在成功后刷新模型和创建中文版本', async () => {
     useModelStore.getState().setMeshElementEditMode('vertex');
     useModelStore.getState().selectMeshElement(selection);
 
@@ -176,7 +208,13 @@ describe('上传 STL 网格元素手工编辑', () => {
 
     expect(editResult?.revision).toBe('mesh-after');
     expect(backendMocks.runMeshElementEdit).toHaveBeenCalledWith({
-      selection,
+      selection: {
+        revision: 'mesh-before',
+        sourcePartId: 'uploaded-model',
+        kind: 'vertex',
+        selectionMethod: 'click',
+        elements: [selection]
+      },
       displacementMm: { x: 1, y: 0, z: 0 }
     });
     const state = useModelStore.getState();
@@ -185,11 +223,34 @@ describe('上传 STL 网格元素手工编辑', () => {
     expect(state.manufacturingResult).toBeNull();
     expect(state.wallThicknessResult).toBeNull();
     expect(state.wallThicknessVisible).toBe(false);
-    expect(state.versions.at(-1)?.label).toBe('移动上传模型顶点');
+    expect(state.versions.at(-1)?.label).toBe('批量移动上传模型顶点');
+    expect(state.messages.at(-1)?.content).toContain('批量移动 1 个顶点');
     expect(state.messages.at(-1)?.content).toContain('同步更新 1 个源坐标、3 个 STL 顶点副本');
   });
 
-  it('Worker 失败时保留最后有效模型并显示中文错误', async () => {
+  it('框选集合一次调用 Worker，并保留选择方式和元素数量', async () => {
+    const second = { ...selection, triangleIndex: 5, elementIndex: 2 };
+    const selectionSet = createMeshElementSelectionSet([selection, second], 'box');
+    expect(selectionSet).not.toBeNull();
+    backendMocks.runMeshElementEdit.mockResolvedValueOnce(result({
+      selectionMethod: 'box',
+      selectedElementCount: 2,
+      movedCoordinateCount: 2,
+      movedVertexOccurrenceCount: 6
+    }));
+    useModelStore.getState().setMeshElementEditMode('vertex');
+    useModelStore.getState().selectMeshElements(selectionSet!);
+
+    await useModelStore.getState().applyMeshElementMove({ x: 0.2, y: 0, z: 0 });
+
+    expect(backendMocks.runMeshElementEdit).toHaveBeenCalledWith({
+      selection: selectionSet,
+      displacementMm: { x: 0.2, y: 0, z: 0 }
+    });
+    expect(useModelStore.getState().messages.at(-1)?.content).toContain('批量移动 2 个顶点');
+  });
+
+  it('Worker 失败时保留最后有效模型和整个集合并显示中文错误', async () => {
     backendMocks.runMeshElementEdit.mockRejectedValueOnce(new Error('移动后网格不再封闭'));
     useModelStore.getState().setMeshElementEditMode('face');
     useModelStore.getState().selectMeshElement({ ...selection, kind: 'face', elementIndex: 0 });
@@ -199,6 +260,7 @@ describe('上传 STL 网格元素手工编辑', () => {
     expect(editResult).toBeNull();
     const state = useModelStore.getState();
     expect(state.importedStlModel?.revision).toBe('mesh-before');
+    expect(state.meshElementSelection?.elements).toHaveLength(1);
     expect(state.meshElementEditStatus).toBe('error');
     expect(state.meshElementEditError).toBe('移动后网格不再封闭');
     expect(state.messages.at(-1)?.content).toContain('最后有效模型未被覆盖');

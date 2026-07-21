@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对任意上传 STL 的顶点、边或三角面执行可回滚的精确毫米位移。"""
+"""对任意上传 STL 的同类顶点、边或三角面集合执行可回滚的精确毫米位移。"""
 from __future__ import annotations
 
 import argparse
@@ -17,8 +17,12 @@ from local_stl_edit import _commit_files_with_rollback, _existing_output_names, 
 from split_and_cap import _bounds_json, _closed_solids, import_stl_as_solid
 
 ElementKind = Literal["vertex", "edge", "face"]
+SelectionMethod = Literal["click", "box"]
 EDGE_VERTEX_INDEXES = ((0, 1), (1, 2), (2, 0))
 MAX_DISPLACEMENT_MM = 500.0
+MAX_SELECTIONS = 512
+MAX_TRIANGLE_INDEX = 5_000_000
+MAX_COORDINATE_MM = 1_000_000.0
 COORDINATE_DIGITS = 6
 MIN_DOUBLE_AREA = 1e-9
 
@@ -51,22 +55,90 @@ def _selected_vertex_indexes(kind: ElementKind, element_index: int) -> tuple[int
     raise ValueError("网格元素索引与编辑类型不匹配，请重新选择")
 
 
-def edit_mesh_element(
+def _parse_triangle_mm(value: object) -> tuple[tuple[float, float, float], ...]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("网格元素源三角面坐标无效，请重新选择")
+    triangle: list[tuple[float, float, float]] = []
+    for point in value:
+        if not isinstance(point, dict) or set(point) != {"x", "y", "z"}:
+            raise ValueError("网格元素源坐标格式无效，请重新选择")
+        coordinates = (point["x"], point["y"], point["z"])
+        if any(not isinstance(item, (int, float)) or isinstance(item, bool) for item in coordinates):
+            raise ValueError("网格元素源坐标必须是有限毫米数值")
+        parsed = tuple(float(item) for item in coordinates)
+        if any(not math.isfinite(item) or abs(item) > MAX_COORDINATE_MM for item in parsed):
+            raise ValueError("网格元素源坐标超出安全范围")
+        triangle.append(parsed)  # type: ignore[arg-type]
+    return tuple(triangle)
+
+
+def _selection_key(
+    kind: ElementKind,
+    triangle_index: int,
+    element_index: int,
+    triangle: tuple[tuple[float, float, float], ...],
+) -> tuple[object, ...]:
+    if kind == "vertex":
+        return (kind, _coordinate_key(triangle[element_index]))
+    if kind == "edge":
+        start, end = EDGE_VERTEX_INDEXES[element_index]
+        return (kind, *sorted((_coordinate_key(triangle[start]), _coordinate_key(triangle[end]))))
+    return (kind, triangle_index)
+
+
+def _validate_and_collect_selections(
+    triangles: list[tuple[tuple[float, float, float], ...]],
+    kind: ElementKind,
+    selections: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], set[tuple[float, float, float]]]:
+    if not selections:
+        raise ValueError("请至少选择一个要移动的网格元素")
+    if len(selections) > MAX_SELECTIONS:
+        raise ValueError(f"单次最多选择 {MAX_SELECTIONS} 个同类网格元素")
+
+    unique: dict[tuple[object, ...], dict[str, object]] = {}
+    selected_keys: set[tuple[float, float, float]] = set()
+    for selection in selections:
+        if not isinstance(selection, dict) or set(selection) != {"triangleIndex", "elementIndex", "triangleMm"}:
+            raise ValueError("网格元素选择数据包含不允许的字段")
+        triangle_index = selection.get("triangleIndex")
+        element_index = selection.get("elementIndex")
+        if not isinstance(triangle_index, int) or isinstance(triangle_index, bool) or not 0 <= triangle_index <= MAX_TRIANGLE_INDEX:
+            raise ValueError("三角面索引无效，请重新选择")
+        if triangle_index >= len(triangles):
+            raise ValueError("选中的三角面已不存在，请重新选择")
+        if not isinstance(element_index, int) or isinstance(element_index, bool):
+            raise ValueError("网格元素索引无效，请重新选择")
+        selected_indexes = _selected_vertex_indexes(kind, element_index)
+        supplied_triangle = _parse_triangle_mm(selection.get("triangleMm"))
+        current_triangle = triangles[triangle_index]
+        if tuple(_coordinate_key(point) for point in supplied_triangle) != tuple(
+            _coordinate_key(point) for point in current_triangle
+        ):
+            raise ValueError("网格元素源坐标与当前模型不一致，请重新选择")
+        key = _selection_key(kind, triangle_index, element_index, current_triangle)
+        if key in unique:
+            continue
+        unique[key] = selection
+        selected_keys.update(_coordinate_key(current_triangle[index]) for index in selected_indexes)
+    return list(unique.values()), selected_keys
+
+
+def edit_mesh_elements(
     input_path: Path,
     output_dir: Path,
     selection_revision: str,
     kind: ElementKind,
-    triangle_index: int,
-    element_index: int,
+    selections: list[dict[str, object]],
     displacement_mm: tuple[float, float, float],
+    selection_method: SelectionMethod = "click",
 ) -> dict[str, object]:
-    """移动选中元素及所有同坐标重复顶点，通过实体校验后原子写回工作文件。"""
+    """批量移动同类元素及所有同坐标副本，通过实体校验后原子写回工作文件。"""
 
     if kind not in ("vertex", "edge", "face"):
         raise ValueError("网格元素类型只能是顶点、边或面")
-    selected_indexes = _selected_vertex_indexes(kind, element_index)
-    if not isinstance(triangle_index, int) or triangle_index < 0:
-        raise ValueError("三角面索引无效，请重新选择")
+    if selection_method not in ("click", "box"):
+        raise ValueError("网格元素选择方式只能是点击或框选")
     if not all(math.isfinite(value) for value in displacement_mm):
         raise ValueError("网格元素位移必须是有限毫米数值")
     if any(abs(value) > MAX_DISPLACEMENT_MM for value in displacement_mm):
@@ -84,11 +156,8 @@ def edit_mesh_element(
     source_model, source_validation = import_stl_as_solid(input_path)
     source_solids = _closed_solids(source_model, "当前上传模型")
     triangles = read_stl(input_path)
-    if triangle_index >= len(triangles):
-        raise ValueError("选中的三角面已不存在，请重新选择")
+    unique_selections, selected_keys = _validate_and_collect_selections(triangles, kind, selections)
 
-    selected_triangle = triangles[triangle_index]
-    selected_keys = {_coordinate_key(selected_triangle[index]) for index in selected_indexes}
     moved_occurrence_count = 0
     moved_triangles: list[tuple[tuple[float, float, float], ...]] = []
     dx, dy, dz = displacement_mm
@@ -157,7 +226,7 @@ def edit_mesh_element(
             "originalSourceFile": manifest.get("originalSourceFile") or "imported-model.stl",
             "sourceKind": "uploaded-stl",
             "units": "mm",
-            "kernel": "OpenCascade 7.8 / CadQuery 2.6 / STL 网格元素编辑",
+            "kernel": "OpenCascade 7.8 / CadQuery 2.6 / STL 网格元素批量编辑",
             "outputs": output_names,
             "files": files,
             "metrics": {
@@ -176,8 +245,8 @@ def edit_mesh_element(
             "selectionRevision": selection_revision,
             "sourcePartId": "uploaded-model",
             "kind": kind,
-            "triangleIndex": triangle_index,
-            "elementIndex": element_index,
+            "selectionMethod": selection_method,
+            "selectedElementCount": len(unique_selections),
             "displacementMm": {"x": dx, "y": dy, "z": dz},
             "movedCoordinateCount": len(selected_keys),
             "movedVertexOccurrenceCount": moved_occurrence_count,
@@ -199,8 +268,9 @@ def edit_mesh_element(
             },
             "updatedModel": updated_model,
             "limitations": [
-                "第一版只支持单个顶点、单条三角边或单个三角面的整体位移",
-                "不支持拓扑增删、焊接、分裂、挤出、框选多元素或自由雕刻",
+                f"单次最多批量移动 {MAX_SELECTIONS} 个同类顶点、三角边或三角面",
+                "框选使用当前视角的屏幕投影，可能包含被遮挡区域中的元素",
+                "不支持拓扑增删、焊接、分裂、挤出或未受约束的自由雕刻",
                 "参数化 CAD 继续使用稳定面和稳定边特征，不直接改写 OpenCascade BRep 顶点",
             ],
         }
@@ -221,14 +291,42 @@ def edit_mesh_element(
             path.unlink(missing_ok=True)
 
 
+def edit_mesh_element(
+    input_path: Path,
+    output_dir: Path,
+    selection_revision: str,
+    kind: ElementKind,
+    triangle_index: int,
+    element_index: int,
+    displacement_mm: tuple[float, float, float],
+) -> dict[str, object]:
+    """兼容既有单元素调用，并补齐当前 STL 的源三角面坐标。"""
+
+    triangles = read_stl(input_path)
+    if not isinstance(triangle_index, int) or triangle_index < 0 or triangle_index >= len(triangles):
+        raise ValueError("选中的三角面已不存在，请重新选择")
+    triangle_mm = [{"x": point[0], "y": point[1], "z": point[2]} for point in triangles[triangle_index]]
+    return edit_mesh_elements(
+        input_path,
+        output_dir,
+        selection_revision,
+        kind,
+        [{"triangleIndex": triangle_index, "elementIndex": element_index, "triangleMm": triangle_mm}],
+        displacement_mm,
+        "click",
+    )
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="FormAI 上传 STL 网格元素位移 Worker")
+    parser = argparse.ArgumentParser(description="FormAI 上传 STL 网格元素批量位移 Worker")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--selection-revision", required=True)
     parser.add_argument("--kind", required=True, choices=("vertex", "edge", "face"))
-    parser.add_argument("--triangle-index", required=True, type=int)
-    parser.add_argument("--element-index", required=True, type=int)
+    parser.add_argument("--selection-method", choices=("click", "box"), default="click")
+    parser.add_argument("--selections-stdin", action="store_true")
+    parser.add_argument("--triangle-index", type=int)
+    parser.add_argument("--element-index", type=int)
     parser.add_argument("--delta-x", required=True, type=float)
     parser.add_argument("--delta-y", required=True, type=float)
     parser.add_argument("--delta-z", required=True, type=float)
@@ -238,15 +336,31 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_args()
     try:
-        result = edit_mesh_element(
-            arguments.input,
-            arguments.output,
-            arguments.selection_revision,
-            arguments.kind,
-            arguments.triangle_index,
-            arguments.element_index,
-            (arguments.delta_x, arguments.delta_y, arguments.delta_z),
-        )
+        if arguments.selections_stdin:
+            selections = json.loads(sys.stdin.read())
+            if not isinstance(selections, list):
+                raise ValueError("网格元素选择集合必须是数组")
+            result = edit_mesh_elements(
+                arguments.input,
+                arguments.output,
+                arguments.selection_revision,
+                arguments.kind,
+                selections,
+                (arguments.delta_x, arguments.delta_y, arguments.delta_z),
+                arguments.selection_method,
+            )
+        else:
+            if arguments.triangle_index is None or arguments.element_index is None:
+                raise ValueError("缺少网格元素索引，请重新选择")
+            result = edit_mesh_element(
+                arguments.input,
+                arguments.output,
+                arguments.selection_revision,
+                arguments.kind,
+                arguments.triangle_index,
+                arguments.element_index,
+                (arguments.delta_x, arguments.delta_y, arguments.delta_z),
+            )
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as error:  # noqa: BLE001 - CLI 边界需要统一中文错误。

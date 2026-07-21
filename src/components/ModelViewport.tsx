@@ -35,9 +35,13 @@ import { getOuterDimensions } from '../model/defaults';
 import { degreesToRadians, describeObjectTransformChange, normalizeObjectPresentation } from '../model/objectTransform';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
 import {
+  collectMeshElementBoxSelection,
+  createMeshElementSelectionSet,
+  MAX_MESH_ELEMENT_SELECTIONS,
   nearestMeshElementIndex,
   selectedMeshElementPoints,
-  type MeshElementSelection
+  type MeshElementSelection,
+  type MeshElementSelectionSet
 } from '../model/meshElementEdit';
 import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
@@ -364,6 +368,7 @@ interface SelectableMeshProps {
   renderOrder?: number;
   meshRef?: React.RefObject<Mesh | null>;
   cadSelectionData?: { part: CadPartDescriptor; coordinateTransform: Matrix4 };
+  meshElementSelectionData?: { revision: string; inverseCoordinateTransform: Matrix4 };
 }
 
 function SelectableMesh({
@@ -377,7 +382,8 @@ function SelectableMesh({
   opacity = 1,
   renderOrder = 0,
   meshRef,
-  cadSelectionData
+  cadSelectionData,
+  meshElementSelectionData
 }: SelectableMeshProps) {
   const selectedObject = useModelStore((state) => state.selectedObject);
   const selectObject = useModelStore((state) => state.selectObject);
@@ -389,7 +395,10 @@ function SelectableMesh({
     <mesh
       ref={meshRef}
       geometry={geometry}
-      userData={cadSelectionData ? { cadFaceSelection: cadSelectionData } : undefined}
+      userData={{
+        ...(cadSelectionData ? { cadFaceSelection: cadSelectionData } : {}),
+        ...(meshElementSelectionData ? { meshElementSelection: meshElementSelectionData } : {})
+      }}
       position={position}
       castShadow
       receiveShadow
@@ -461,6 +470,7 @@ function LoadedCadMesh({
   const importedStlModel = useModelStore((state) => state.importedStlModel);
   const manufacturingResult = useModelStore((state) => state.manufacturingResult);
   const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
+  const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
   const meshElementSelection = useModelStore((state) => state.meshElementSelection);
   const selectMeshElement = useModelStore((state) => state.selectMeshElement);
   const prepared = useMemo(() => {
@@ -504,33 +514,37 @@ function LoadedCadMesh({
     && importedStlModel
     && !manufacturingResult
     && meshElementEditMode !== 'off'
+    && meshElementSelectionMethod === 'click'
   );
-  const currentMeshElementSelection = useMemo<MeshElementSelection | null>(() => (
+  const currentMeshElementSelection = useMemo<MeshElementSelectionSet | null>(() => (
     id === 'uploaded-model'
     && importedStlModel
     && meshElementSelection?.revision === importedStlModel.revision
       ? meshElementSelection
       : null
   ), [id, importedStlModel, meshElementSelection]);
-  const selectedMeshPoints = useMemo(
-    () => currentMeshElementSelection
-      ? selectedMeshElementPoints(currentMeshElementSelection).map((point) => (
-          new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
-        ))
-      : [],
-    [coordinateTransform, currentMeshElementSelection]
-  );
-  const selectedMeshFaceGeometry = useMemo(() => {
-    if (currentMeshElementSelection?.kind !== 'face' || selectedMeshPoints.length !== 3) return null;
-    const faceGeometry = new BufferGeometry();
-    faceGeometry.setAttribute('position', new Float32BufferAttribute(
-      selectedMeshPoints.flatMap((point) => [point.x, point.y, point.z]),
-      3
+  const selectedMeshElementGeometries = useMemo(() => {
+    if (!currentMeshElementSelection) return { vertices: null, edges: null, faces: null };
+    const transformed = currentMeshElementSelection.elements.map((selection) => (
+      selectedMeshElementPoints(selection).map((point) => (
+        new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
+      ))
     ));
-    faceGeometry.computeVertexNormals();
-    return faceGeometry;
-  }, [currentMeshElementSelection?.kind, selectedMeshPoints]);
-  useEffect(() => () => selectedMeshFaceGeometry?.dispose(), [selectedMeshFaceGeometry]);
+    const positions = transformed.flatMap((points) => points.flatMap((point) => [point.x, point.y, point.z]));
+    const selectedGeometry = new BufferGeometry();
+    selectedGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+    if (currentMeshElementSelection.kind === 'face') selectedGeometry.computeVertexNormals();
+    return {
+      vertices: currentMeshElementSelection.kind === 'vertex' ? selectedGeometry : null,
+      edges: currentMeshElementSelection.kind === 'edge' ? selectedGeometry : null,
+      faces: currentMeshElementSelection.kind === 'face' ? selectedGeometry : null
+    };
+  }, [coordinateTransform, currentMeshElementSelection]);
+  useEffect(() => () => {
+    selectedMeshElementGeometries.vertices?.dispose();
+    selectedMeshElementGeometries.edges?.dispose();
+    selectedMeshElementGeometries.faces?.dispose();
+  }, [selectedMeshElementGeometries]);
 
   const selectedMarker = useMemo(() => {
     if (
@@ -705,6 +719,9 @@ function LoadedCadMesh({
         renderOrder={renderOrder}
         meshRef={meshRef}
         cadSelectionData={cadPart?.faceTessellation ? { part: cadPart, coordinateTransform } : undefined}
+        meshElementSelectionData={id === 'uploaded-model' && importedStlModel
+          ? { revision: importedStlModel.revision, inverseCoordinateTransform }
+          : undefined}
         onSurfacePick={(point, event) => {
           if (meshElementPickingEnabled && importedStlModel && meshElementEditMode !== 'off') {
             const triangleIndex = event.faceIndex;
@@ -867,29 +884,24 @@ function LoadedCadMesh({
           }
         }}
       />
-      {currentMeshElementSelection?.kind === 'vertex' && selectedMeshPoints[0] && (
-        <mesh position={selectedMeshPoints[0]} renderOrder={12}>
-          <sphereGeometry args={[0.9, 20, 14]} />
-          <meshStandardMaterial
-            color="#fff4b0"
-            emissive="#f6b819"
-            emissiveIntensity={1.8}
+      {selectedMeshElementGeometries.vertices && (
+        <points geometry={selectedMeshElementGeometries.vertices} renderOrder={12}>
+          <pointsMaterial
+            color="#ffd447"
+            size={7}
+            sizeAttenuation={false}
             depthTest={false}
             depthWrite={false}
           />
-        </mesh>
+        </points>
       )}
-      {currentMeshElementSelection?.kind === 'edge' && selectedMeshPoints.length === 2 && (
-        <Line
-          points={selectedMeshPoints}
-          color="#ffd447"
-          lineWidth={5}
-          depthTest={false}
-          renderOrder={12}
-        />
+      {selectedMeshElementGeometries.edges && (
+        <lineSegments geometry={selectedMeshElementGeometries.edges} renderOrder={12}>
+          <lineBasicMaterial color="#ffd447" depthTest={false} depthWrite={false} />
+        </lineSegments>
       )}
-      {selectedMeshFaceGeometry && (
-        <mesh geometry={selectedMeshFaceGeometry} renderOrder={12}>
+      {selectedMeshElementGeometries.faces && (
+        <mesh geometry={selectedMeshElementGeometries.faces} renderOrder={12}>
           <meshBasicMaterial
             color="#ffd447"
             transparent
@@ -900,6 +912,7 @@ function LoadedCadMesh({
           />
         </mesh>
       )}
+
       {highlightGeometry && (
         <mesh geometry={highlightGeometry} renderOrder={5}>
           <meshStandardMaterial
@@ -1307,6 +1320,92 @@ function CadFaceBoxSelectionController() {
   return null;
 }
 
+
+/** 将当前视角框内的上传 STL 同类元素按屏幕投影收集为受限选择集合。 */
+function MeshElementBoxSelectionController() {
+  const { camera, scene } = useThree();
+  const request = useModelStore((state) => state.meshElementBoxRequest);
+  const importedStlModel = useModelStore((state) => state.importedStlModel);
+  const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
+  const selectMeshElements = useModelStore((state) => state.selectMeshElements);
+  const clearMeshElementSelection = useModelStore((state) => state.clearMeshElementSelection);
+  const addAssistantMessage = useModelStore((state) => state.addAssistantMessage);
+
+  useEffect(() => {
+    if (!request || !importedStlModel || meshElementEditMode === 'off') return;
+    const selectionRevision = importedStlModel.revision;
+    camera.updateMatrixWorld();
+    scene.updateMatrixWorld(true);
+    const meshes: Array<Mesh & { userData: { meshElementSelection?: { revision: string; inverseCoordinateTransform: Matrix4 } } }> = [];
+    scene.traverse((object) => {
+      if (object instanceof Mesh && object.userData.meshElementSelection) meshes.push(object as typeof meshes[number]);
+    });
+
+    function* triangles() {
+      const localVertices = [new Vector3(), new Vector3(), new Vector3()];
+      for (const object of meshes) {
+        const selectionData = object.userData.meshElementSelection;
+        if (!selectionData || selectionData.revision !== selectionRevision) continue;
+        const positions = object.geometry.getAttribute('position');
+        if (!positions) continue;
+        const index = object.geometry.getIndex();
+        const triangleCount = index ? Math.floor(index.count / 3) : Math.floor(positions.count / 3);
+        for (let triangleIndex = 0; triangleIndex < triangleCount; triangleIndex += 1) {
+          const vertexIndexes = [0, 1, 2].map((corner) => (
+            index ? index.getX(triangleIndex * 3 + corner) : triangleIndex * 3 + corner
+          ));
+          if (vertexIndexes.some((vertexIndex) => vertexIndex < 0 || vertexIndex >= positions.count)) continue;
+          vertexIndexes.forEach((vertexIndex, corner) => {
+            localVertices[corner].set(
+              positions.getX(vertexIndex),
+              positions.getY(vertexIndex),
+              positions.getZ(vertexIndex)
+            );
+          });
+          yield {
+            triangleIndex,
+            triangleMm: localVertices.map((vertex) => {
+              const source = vertex.clone().applyMatrix4(selectionData.inverseCoordinateTransform);
+              return { x: source.x, y: source.y, z: source.z };
+            }) as MeshElementSelection['triangleMm'],
+            triangleWorld: localVertices.map((vertex) => {
+              const world = vertex.clone().applyMatrix4(object.matrixWorld);
+              return { x: world.x, y: world.y, z: world.z };
+            }) as MeshElementSelection['triangleMm']
+          };
+        }
+      }
+    }
+
+    const projected = new Vector3();
+    const { selectionSet, limitReached } = collectMeshElementBoxSelection(
+      selectionRevision,
+      meshElementEditMode,
+      request.rectangle,
+      triangles(),
+      (point) => {
+        projected.set(point.x, point.y, point.z).project(camera);
+        return {
+          x: (projected.x + 1) / 2,
+          y: (1 - projected.y) / 2,
+          depth: projected.z
+        };
+      }
+    );
+    if (!selectionSet) {
+      clearMeshElementSelection();
+      addAssistantMessage(`框选区域内没有找到${meshElementEditMode === 'vertex' ? '顶点' : meshElementEditMode === 'edge' ? '边' : '三角面'}，请扩大范围或旋转视角后重试。`);
+      return;
+    }
+    selectMeshElements(selectionSet);
+    addAssistantMessage(
+      `已按当前视角的屏幕投影框选 ${selectionSet.elements.length} 个${meshElementEditMode === 'vertex' ? '顶点' : meshElementEditMode === 'edge' ? '边' : '三角面'}。${limitReached ? ` 候选超过安全上限，本次按网格遍历顺序只保留前 ${MAX_MESH_ELEMENT_SELECTIONS} 个。` : ''}`
+    );
+  }, [addAssistantMessage, camera, clearMeshElementSelection, importedStlModel, meshElementEditMode, request, scene, selectMeshElements]);
+
+  return null;
+}
+
 function ModelScene() {
   const parameters = useModelStore((state) => state.parameters);
   const exploded = useModelStore((state) => state.exploded);
@@ -1325,6 +1424,8 @@ function ModelScene() {
   const versionGeometryDifferenceResult = useModelStore((state) => state.versionGeometryDifferenceResult);
   const versionGeometryComparisonStatus = useModelStore((state) => state.versionGeometryComparisonStatus);
   const cadFaceSelectionMode = useModelStore((state) => state.cadFaceSelectionMode);
+  const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
+  const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
   const cadFaceSelection = useModelStore((state) => state.cadFaceSelection);
   const localCadFeaturePreview = useModelStore((state) => state.localCadFeaturePreview);
   const bodyGeometry = useMemo(() => createTrayGeometry(parameters), [parameters]);
@@ -1410,8 +1511,15 @@ function ModelScene() {
       <ambientLight intensity={0.7} />
       <directionalLight position={[60, 90, 40]} intensity={2.5} castShadow />
       <PerspectiveCamera makeDefault position={[92, 70, 92]} fov={34} />
-      <OrbitControls makeDefault enabled={cadFaceSelectionMode !== 'box'} target={[0, 11, 0]} minDistance={55} maxDistance={260} />
+      <OrbitControls
+        makeDefault
+        enabled={cadFaceSelectionMode !== 'box' && !(showUploadedStl && meshElementEditMode !== 'off' && meshElementSelectionMethod === 'box')}
+        target={[0, 11, 0]}
+        minDistance={55}
+        maxDistance={260}
+      />
       <CadFaceBoxSelectionController />
+      <MeshElementBoxSelectionController />
       <group onPointerMissed={() => selectObject(showUploadedStl ? 'uploaded-model' : cadResult?.parts[0]?.id ?? 'body')}>
         {differenceActive && versionGeometryComparisonSnapshot && versionGeometryDifferenceResult && cadResult ? (
           <Suspense fallback={null}>
@@ -1676,10 +1784,13 @@ export function ModelViewport() {
   const wallThicknessPicking = useModelStore((state) => state.wallThicknessPicking);
   const wallThicknessSelection = useModelStore((state) => state.wallThicknessSelection);
   const cadFaceSelectionMode = useModelStore((state) => state.cadFaceSelectionMode);
+  const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
+  const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
   const cadFaceSelection = useModelStore((state) => state.cadFaceSelection);
   const localCadFeaturePreview = useModelStore((state) => state.localCadFeaturePreview);
   const clearLocalCadFeaturePreview = useModelStore((state) => state.clearLocalCadFeaturePreview);
   const requestCadFaceBoxSelection = useModelStore((state) => state.requestCadFaceBoxSelection);
+  const requestMeshElementBoxSelection = useModelStore((state) => state.requestMeshElementBoxSelection);
   const selectThinnestWallThicknessSample = useModelStore((state) => state.selectThinnestWallThicknessSample);
   const clearWallThicknessSelection = useModelStore((state) => state.clearWallThicknessSelection);
   const versions = useModelStore((state) => state.versions);
@@ -1698,6 +1809,14 @@ export function ModelViewport() {
     () => compareCadStableFaceIds(versionGeometryComparisonSnapshot, cadResult),
     [cadResult, versionGeometryComparisonSnapshot]
   );
+  const meshBoxSelecting = Boolean(
+    viewportModelSource === 'uploaded-stl'
+    && importedStlModel
+    && !manufacturingResult
+    && meshElementEditMode !== 'off'
+    && meshElementSelectionMethod === 'box'
+  );
+  const boxSelecting = cadFaceSelectionMode === 'box' || meshBoxSelecting;
 
   const statusText = {
     loading: '读取精确模型',
@@ -1734,15 +1853,20 @@ export function ModelViewport() {
     const right = Math.min(bounds.width, Math.max(boxDragStart.x, current.x));
     const bottom = Math.min(bounds.height, Math.max(boxDragStart.y, current.y));
     if (right - left < 6 || bottom - top < 6) return;
+    const rectangle = {
+      left: left / bounds.width,
+      top: top / bounds.height,
+      right: right / bounds.width,
+      bottom: bottom / bounds.height
+    };
+    if (meshBoxSelecting) {
+      requestMeshElementBoxSelection({ id: ++dragSerial.current, rectangle });
+      return;
+    }
     const padding = 18;
     requestCadFaceBoxSelection({
       id: ++dragSerial.current,
-      rectangle: {
-        left: left / bounds.width,
-        top: top / bounds.height,
-        right: right / bounds.width,
-        bottom: bottom / bounds.height
-      },
+      rectangle,
       screenshot: captureCanvasRegion(canvas, {
         x: left - padding,
         y: top - padding,
@@ -1753,11 +1877,11 @@ export function ModelViewport() {
   };
 
   return (
-    <div className={`viewport-canvas ${cadFaceSelectionMode === 'box' ? 'is-cad-box-selecting' : ''}`} ref={containerRef}>
+    <div className={`viewport-canvas ${boxSelecting ? 'is-cad-box-selecting' : ''}`} ref={containerRef}>
       <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, preserveDrawingBuffer: true }}>
         <ModelScene />
       </Canvas>
-      {cadFaceSelectionMode === 'box' && (
+      {boxSelecting && (
         <div
           className="cad-face-box-capture"
           onPointerDown={(event) => {
@@ -1775,12 +1899,14 @@ export function ModelViewport() {
             setBoxDragStart(null);
             setBoxDragCurrent(null);
           }}
-          aria-label="框选稳定 CAD 面"
+          aria-label={meshBoxSelecting ? '框选上传模型网格元素' : '框选稳定 CAD 面'}
         >
           {boxRectangle && (
             <div className="cad-face-box-rectangle" style={boxRectangle} />
           )}
-          {!boxRectangle && <span>按住鼠标拖动，框选需要交给 AI 修改的 CAD 面</span>}
+          {!boxRectangle && <span>{meshBoxSelecting
+            ? `按住鼠标拖动，框选要移动的${meshElementEditMode === 'vertex' ? '顶点' : meshElementEditMode === 'edge' ? '边' : '三角面'}`
+            : '按住鼠标拖动，框选需要交给 AI 修改的 CAD 面'}</span>}
         </div>
       )}
       {cadFaceSelection && (

@@ -335,14 +335,18 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
 }
 
 
-/** 对任意上传 STL 的单个顶点、边或三角面执行安全位移。 */
+/** 对任意上传 STL 的同类顶点、边或三角面集合执行安全批量位移。 */
 export async function runMeshElementEdit(request: MeshElementMoveRequest) {
   const payload = {
     sourcePartId: request.selection.sourcePartId,
     selectionRevision: request.selection.revision,
     elementKind: request.selection.kind,
-    triangleIndex: request.selection.triangleIndex,
-    elementIndex: request.selection.elementIndex,
+    selectionMethod: request.selection.selectionMethod,
+    selections: request.selection.elements.map(({ triangleIndex, elementIndex, triangleMm }) => ({
+      triangleIndex,
+      elementIndex,
+      triangleMm
+    })),
     deltaXmm: request.displacementMm.x,
     deltaYmm: request.displacementMm.y,
     deltaZmm: request.displacementMm.z

@@ -455,8 +455,8 @@ function runMeshElementEditWorker(body: {
   sourcePartId?: string;
   selectionRevision?: string;
   elementKind?: string;
-  triangleIndex?: number;
-  elementIndex?: number;
+  selectionMethod?: string;
+  selections?: unknown;
   deltaXmm?: number;
   deltaYmm?: number;
   deltaZmm?: number;
@@ -466,13 +466,34 @@ function runMeshElementEditWorker(body: {
     throw new Error('网格元素选择修订号无效，请重新选择');
   }
   if (!['vertex', 'edge', 'face'].includes(body.elementKind ?? '')) throw new Error('网格元素类型无效');
-  if (!Number.isInteger(body.triangleIndex) || body.triangleIndex! < 0 || body.triangleIndex! > 5_000_000) {
-    throw new Error('三角面索引无效，请重新选择');
+  if (!['click', 'box'].includes(body.selectionMethod ?? '')) throw new Error('网格元素选择方式无效');
+  if (!Array.isArray(body.selections) || body.selections.length < 1 || body.selections.length > 512) {
+    throw new Error('单次必须选择 1 至 512 个同类网格元素');
   }
-  if (!Number.isInteger(body.elementIndex) || body.elementIndex! < 0 || body.elementIndex! > 2) {
-    throw new Error('网格元素索引无效，请重新选择');
+  for (const candidate of body.selections) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('网格元素选择格式无效');
+    const selection = candidate as Record<string, unknown>;
+    if (Object.keys(selection).some((key) => !['triangleIndex', 'elementIndex', 'triangleMm'].includes(key))) {
+      throw new Error('网格元素选择包含不允许的字段');
+    }
+    if (!Number.isInteger(selection.triangleIndex) || Number(selection.triangleIndex) < 0 || Number(selection.triangleIndex) > 5_000_000) {
+      throw new Error('三角面索引无效，请重新选择');
+    }
+    if (!Number.isInteger(selection.elementIndex) || Number(selection.elementIndex) < 0 || Number(selection.elementIndex) > 2) {
+      throw new Error('网格元素索引无效，请重新选择');
+    }
+    if (body.elementKind === 'face' && selection.elementIndex !== 0) throw new Error('三角面元素索引无效');
+    if (!Array.isArray(selection.triangleMm) || selection.triangleMm.length !== 3) throw new Error('网格元素源三角面坐标无效');
+    for (const point of selection.triangleMm) {
+      if (!point || typeof point !== 'object' || Array.isArray(point)) throw new Error('网格元素源坐标格式无效');
+      const coordinates = point as Record<string, unknown>;
+      if (Object.keys(coordinates).length !== 3 || !['x', 'y', 'z'].every((axis) => (
+        typeof coordinates[axis] === 'number'
+        && Number.isFinite(coordinates[axis])
+        && Math.abs(Number(coordinates[axis])) <= 1_000_000
+      ))) throw new Error('网格元素源坐标必须是安全范围内的有限毫米数值');
+    }
   }
-  if (body.elementKind === 'face' && body.elementIndex !== 0) throw new Error('三角面元素索引无效');
   const displacement = [body.deltaXmm, body.deltaYmm, body.deltaZmm];
   if (displacement.some((value) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 500)) {
     throw new Error('网格元素每轴位移必须是 -500 至 500 毫米的有限数值');
@@ -488,18 +509,19 @@ function runMeshElementEditWorker(body: {
       '--output', artifactsDirectory,
       '--selection-revision', body.selectionRevision!.trim(),
       '--kind', body.elementKind!,
-      '--triangle-index', String(body.triangleIndex),
-      '--element-index', String(body.elementIndex),
+      '--selection-method', body.selectionMethod!,
+      '--selections-stdin',
       '--delta-x', String(body.deltaXmm),
       '--delta-y', String(body.deltaYmm),
       '--delta-z', String(body.deltaZmm)
-    ], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     process.on('error', rejectPromise);
     process.on('close', (code) => code === 0
       ? resolvePromise()
       : rejectPromise(new Error(stderr.trim() || `网格元素编辑 Worker 退出，状态码：${code}`)));
+    process.stdin.end(JSON.stringify(body.selections));
   });
 }
 

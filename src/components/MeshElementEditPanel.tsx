@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react';
-import { Move3d, MousePointer2, X } from 'lucide-react';
-import { MESH_ELEMENT_LABELS, type MeshElementEditMode, type MeshPointMm } from '../model/meshElementEdit';
+import { BoxSelect, Move3d, MousePointer2, X } from 'lucide-react';
+import {
+  MAX_MESH_ELEMENT_SELECTIONS,
+  MESH_ELEMENT_LABELS,
+  type MeshElementEditMode,
+  type MeshElementSelectionMethod,
+  type MeshPointMm
+} from '../model/meshElementEdit';
 import { useModelStore } from '../store/useModelStore';
 
 const EDIT_MODES: Array<{ mode: Exclude<MeshElementEditMode, 'off'>; label: string }> = [
@@ -9,21 +15,32 @@ const EDIT_MODES: Array<{ mode: Exclude<MeshElementEditMode, 'off'>; label: stri
   { mode: 'face', label: '选择面' }
 ];
 
+const SELECTION_METHODS: Array<{
+  method: MeshElementSelectionMethod;
+  label: string;
+  icon: typeof MousePointer2;
+}> = [
+  { method: 'click', label: '点击单选', icon: MousePointer2 },
+  { method: 'box', label: '框选多选', icon: BoxSelect }
+];
+
 function parseDisplacement(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** 提供任意上传 STL 的单个顶点、边或三角面精确毫米位移入口。 */
+/** 提供任意上传 STL 的点击或框选批量网格元素精确毫米位移入口。 */
 export function MeshElementEditPanel() {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
   const importedStlModel = useModelStore((state) => state.importedStlModel);
   const manufacturingResult = useModelStore((state) => state.manufacturingResult);
   const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
+  const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
   const meshElementSelection = useModelStore((state) => state.meshElementSelection);
   const meshElementEditStatus = useModelStore((state) => state.meshElementEditStatus);
   const meshElementEditError = useModelStore((state) => state.meshElementEditError);
   const setMeshElementEditMode = useModelStore((state) => state.setMeshElementEditMode);
+  const setMeshElementSelectionMethod = useModelStore((state) => state.setMeshElementSelectionMethod);
   const clearMeshElementSelection = useModelStore((state) => state.clearMeshElementSelection);
   const applyMeshElementMove = useModelStore((state) => state.applyMeshElementMove);
   const clearManufacturingSplit = useModelStore((state) => state.clearManufacturingSplit);
@@ -52,12 +69,12 @@ export function MeshElementEditPanel() {
   if (viewportModelSource !== 'uploaded-stl' || !importedStlModel) return null;
 
   const selectionSummary = selectionCurrent && meshElementSelection
-    ? meshElementSelection.kind === 'face'
-      ? `已选择第 ${meshElementSelection.triangleIndex + 1} 个三角面`
-      : `已选择第 ${meshElementSelection.triangleIndex + 1} 个三角面的第 ${meshElementSelection.elementIndex + 1} 个${MESH_ELEMENT_LABELS[meshElementSelection.kind]}`
+    ? `已${meshElementSelection.selectionMethod === 'box' ? '框选' : '点击选择'} ${meshElementSelection.elements.length} 个${MESH_ELEMENT_LABELS[meshElementSelection.kind]}`
     : meshElementEditMode === 'off'
       ? '请选择一种编辑元素'
-      : `请在模型上点击要移动的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
+      : meshElementSelectionMethod === 'box'
+        ? `请按住鼠标拖动框选要移动的${MESH_ELEMENT_LABELS[meshElementEditMode]}`
+        : `请在模型上点击要移动的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
 
   async function submitMove() {
     if (!displacement || isZero || exceedsLimit || !selectionCurrent || isEditing) return;
@@ -105,22 +122,36 @@ export function MeshElementEditPanel() {
             ))}
           </div>
 
+          <div className="mesh-element-mode-row mesh-element-selection-methods">
+            {SELECTION_METHODS.map(({ method, label, icon: Icon }) => (
+              <button
+                key={method}
+                type="button"
+                className={meshElementSelectionMethod === method ? 'is-active' : ''}
+                onClick={() => setMeshElementSelectionMethod(method)}
+                disabled={isEditing || meshElementEditMode === 'off'}
+              >
+                <Icon size={11} /> {label}
+              </button>
+            ))}
+          </div>
+
           <div className={`mesh-element-selection-summary ${selectionCurrent ? 'has-selection' : ''}`}>
             {selectionSummary}
           </div>
 
           <div className="mesh-element-displacement-grid">
-            {([
-              ['X', x, setX],
-              ['Y', y, setY],
-              ['Z', z, setZ]
-            ] as const).map(([axis, value, setter]) => (
+            {([['X', x, setX], ['Y', y, setY], ['Z', z, setZ]] as const).map(([axis, value, update]) => (
               <label key={axis}>
                 <span>{axis} 位移</span>
-                <div><input type="number" min={-500} max={500} step={0.1} value={value} onChange={(event) => setter(event.target.value)} disabled={isEditing} /><small>毫米</small></div>
+                <div><input value={value} onChange={(event) => update(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>毫米</em></div>
               </label>
             ))}
           </div>
+
+          {meshElementEditError && <div className="mesh-element-error">{meshElementEditError}</div>}
+          {!displacement && <div className="mesh-element-error">位移必须是有效数字</div>}
+          {exceedsLimit && <div className="mesh-element-error">每个坐标轴的单次位移不能超过 500 毫米</div>}
 
           <div className="mesh-element-actions">
             <button
@@ -129,22 +160,17 @@ export function MeshElementEditPanel() {
               onClick={() => void submitMove()}
               disabled={!selectionCurrent || !displacement || isZero || exceedsLimit || isEditing}
             >
-              {isEditing ? '正在校验并应用…' : '应用位移'}
+              {isEditing ? '正在校验并批量移动…' : '批量应用位移'}
             </button>
-            <button type="button" onClick={clearMeshElementSelection} disabled={!meshElementSelection || isEditing}>取消选择</button>
+            <button type="button" onClick={clearMeshElementSelection} disabled={!meshElementSelection || isEditing}>清除选择</button>
           </div>
-
-          {!displacement && <p className="mesh-element-validation">请输入有效的数字位移。</p>}
-          {isZero && <p className="mesh-element-validation">至少一个方向的位移不能为零。</p>}
-          {exceedsLimit && <p className="mesh-element-validation">每个方向的位移范围是 -500 至 500 毫米。</p>}
-          {meshElementEditError && <p className="mesh-element-error">{meshElementEditError}</p>}
         </>
       )}
 
       <footer>
-        <span>位移使用源模型 XYZ 毫米坐标。</span>
-        <span>修改后会重新执行封闭性和实体有效性检查。</span>
-        <span>失败不会覆盖最后有效模型。</span>
+        <span>单次最多选择 {MAX_MESH_ELEMENT_SELECTIONS} 个同类元素；超出时按网格遍历顺序保留前 {MAX_MESH_ELEMENT_SELECTIONS} 个，顶点和边按源坐标去重。</span>
+        <span>框选使用当前视角的屏幕投影，可能包含被遮挡区域中的元素。</span>
+        <span>修改后仍会重新检查退化面、封闭性、实体有效性、Solid 数量和体积。</span>
       </footer>
     </aside>
   );
