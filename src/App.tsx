@@ -295,7 +295,7 @@ function App() {
             </button>
             <button
               className={`cad-face-tool-button ${cadFaceSelectionMode === 'edge' ? 'active' : ''}`}
-              title="点击选择一条种子稳定 CAD 边，用于单边或平面边界整圈圆角与倒角"
+              title="点击选择一条种子稳定 CAD 边，用于单边、切线连续边链或平面边界整圈圆角与倒角"
               disabled={!canSelectCadFaces}
               onClick={() => setCadFaceSelectionMode(cadFaceSelectionMode === 'edge' ? 'off' : 'edge')}
             >

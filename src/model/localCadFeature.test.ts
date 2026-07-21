@@ -365,6 +365,14 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(buildLocalCadFeatureRequest(edgeSelection, '将周边做 1 毫米倒角')).toMatchObject({
       operation: 'chamfer-edge-loop', stableEdgeId: 'edge-top-front', depthMm: 1
     });
+    expect(buildLocalCadFeatureRequest(edgeSelection, '沿切线链做 1.5 毫米圆角')).toMatchObject({
+      operation: 'fillet-edge-chain', stableEdgeId: 'edge-top-front', depthMm: 1.5
+    });
+    expect(buildLocalCadFeatureRequest(edgeSelection, '将相切边做 0.8 毫米倒角')).toMatchObject({
+      operation: 'chamfer-edge-chain', stableEdgeId: 'edge-top-front', depthMm: 0.8
+    });
+    expect(() => buildLocalCadFeatureRequest(edgeSelection, '将整圈切线链做 1 毫米圆角'))
+      .toThrow('不能同时要求两种传播范围');
   });
 
   it('接受绑定当前稳定边的 Codex 计划并拒绝越权边 ID', () => {
@@ -382,6 +390,13 @@ describe('稳定 CAD 面局部特征请求', () => {
     }, '受限平面边界整圈圆角计划');
     expect(loopRequest).toMatchObject({ operation: 'fillet-edge-loop', stableEdgeId: 'edge-top-front', depthMm: 2 });
 
+    const chainRequest = buildLocalCadFeatureRequestFromPlan(edgeSelection, '切线链圆角', {
+      operation: 'fillet-edge-chain', partId: 'body', stableFaceId: 'face-top',
+      stableEdgeId: 'edge-top-front', radiusMm: null, widthMm: null,
+      heightMm: null, lengthMm: null, depthMm: 1.5, rotationDeg: 0, reason: '切线连续边链圆角'
+    }, '受限切线连续边链圆角计划');
+    expect(chainRequest).toMatchObject({ operation: 'fillet-edge-chain', stableEdgeId: 'edge-top-front', depthMm: 1.5 });
+
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误边', {
       operation: 'chamfer-edge', partId: 'body', stableFaceId: 'face-top',
       stableEdgeId: 'edge-other', radiusMm: null, widthMm: null,
@@ -398,7 +413,7 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(() => buildLocalCadFeatureRequestFromPlan(edgeSelection, '错误开孔', {
       operation: 'cut-cylinder', partId: 'body', stableFaceId: 'face-top',
       stableEdgeId: null, radiusMm: 2, depthMm: 3, reason: '错误模式'
-    }, '错误计划')).toThrow('当前选择的是种子稳定边，只允许执行单边或平面边界整圈圆角与倒角');
+    }, '错误计划')).toThrow('当前选择的是种子稳定边，只允许执行单边、切线连续边链或平面边界整圈圆角与倒角');
   });
 
   it('接受曲面所属边，并拒绝平面轮廓字段和越界边尺寸', () => {
@@ -408,6 +423,9 @@ describe('稳定 CAD 面局部特征请求', () => {
     };
     expect(buildLocalCadFeatureRequest(curvedEdge, '做 2 毫米圆角')).toMatchObject({
       operation: 'fillet-edge', stableEdgeId: 'edge-top-front', surfaceGeometryType: 'CYLINDER', depthMm: 2
+    });
+    expect(buildLocalCadFeatureRequest(curvedEdge, '沿切线链做 2 毫米圆角')).toMatchObject({
+      operation: 'fillet-edge-chain', stableEdgeId: 'edge-top-front', surfaceGeometryType: 'CYLINDER', depthMm: 2
     });
     expect(() => buildLocalCadFeatureRequest(curvedEdge, '将这圈边做 2 毫米圆角'))
       .toThrow('只支持平面边界');

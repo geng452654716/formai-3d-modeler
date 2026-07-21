@@ -104,8 +104,8 @@ export function CommandPanel() {
               {cadHitResolutionText && ` ${cadHitResolutionText}`}
               {cadFaceSelection.selectionMode === 'edge'
                 ? cadFaceSelection.faces[0]?.geometryType === 'PLANE'
-                  ? ' 精确解析完成后可输入“将这条边做 2 毫米圆角”，或输入“将这圈边做 2 毫米圆角”；Worker 会重新定位种子稳定边并复核点击距离与外法线。整圈第一版只传播到种子边所属的唯一平面边界，不支持任意多边链、切线链或可变半径；修改后需要重新选择。'
-                  : ` 精确解析完成后可对这条曲面所属边执行固定半径圆角或等距倒角；Worker 会再次用 OpenCascade 重新定位稳定面和稳定边，并复核真实 UV 点、点击距离与真实外法线。曲面所属边当前只支持单边，不支持整圈、任意多边链、切线链或可变半径；修改后需要重新选择。`
+                  ? ' 精确解析完成后可输入“将这条边做 2 毫米圆角”“沿切线链做 2 毫米圆角”或“将这圈边做 2 毫米圆角”；Worker 会重新定位种子稳定边并复核点击距离与外法线。切线链第一版只传播到两端唯一且夹角不超过 5 度的连续边，整圈第一版只传播到种子边所属的唯一平面边界；修改后需要重新选择。'
+                  : ` 精确解析完成后可对这条曲面所属边执行固定半径单边或切线连续边链圆角/倒角；Worker 会再次用 OpenCascade 重新定位稳定面和种子边，并复核真实 UV 点、点击距离与真实外法线。曲面所属边不支持整圈，切线链只传播到两端唯一且夹角不超过 5 度的连续边；修改后需要重新选择。`
                 : cadFaceSelection.selectionMode === 'click' && cadFaceSelection.faces.length === 1 && cadFaceSelection.faces[0]?.geometryType === 'PLANE'
                 ? ' 精确解析完成后可在此平面执行圆形或矩形凸台、圆孔、矩形孔、槽孔，以及整面向外拉伸或向内偏移；修改后需要重新选择，因为原三角面索引会失效。'
                 : cadFaceSelection.selectionMode === 'click'

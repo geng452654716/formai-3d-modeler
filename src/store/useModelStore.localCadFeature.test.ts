@@ -214,6 +214,17 @@ const updatedEdgeLoopCadResult = {
   }]
 } satisfies CadGenerationResult;
 
+const updatedEdgeChainCadResult = {
+  ...updatedEdgeCadResult,
+  revision: 'edge-chain-feature-after',
+  localFeatures: [{
+    ...updatedEdgeCadResult.localFeatures![0],
+    revision: 'edge-chain-feature-after',
+    operation: 'fillet-edge-chain' as const,
+    command: '沿切线链做 0.8 毫米圆角'
+  }]
+} satisfies CadGenerationResult;
+
 function featureResult(): LocalCadFeatureResult {
   return {
     status: 'ok',
@@ -574,6 +585,22 @@ function edgeLoopFeatureResult(): LocalCadFeatureResult {
     },
     updatedCadResult: updatedEdgeLoopCadResult,
     limitations: ['只传播到种子边所属的唯一平面边界，不支持任意多边链、切线链或可变半径']
+  };
+}
+
+function edgeChainFeatureResult(): LocalCadFeatureResult {
+  return {
+    ...edgeFeatureResult(),
+    revision: updatedEdgeChainCadResult.revision,
+    operation: 'fillet-edge-chain',
+    command: '沿切线链做 0.8 毫米圆角',
+    validation: {
+      ...edgeFeatureResult().validation,
+      affectedEdgeCount: 3,
+      edgeScope: 'tangent-chain'
+    },
+    updatedCadResult: updatedEdgeChainCadResult,
+    limitations: ['只传播到两端唯一且夹角不超过 5 度的切线连续边']
   };
 }
 
@@ -1118,7 +1145,29 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.cadFaceSelectionMode).toBe('off');
     expect(state.messages.at(-1)?.content).toContain('共对 4 条边执行整圈圆角');
     expect(state.messages.at(-1)?.content).toContain('只传播到种子边所属的唯一平面边界');
-    expect(state.messages.at(-1)?.content).toContain('不支持任意多边链、切线链或可变半径');
+    expect(state.messages.at(-1)?.content).toContain('不支持手工多选边链或可变半径');
+  });
+
+  it('成功执行切线连续边链圆角后显示传播边数和安全边界', async () => {
+    useModelStore.setState({
+      cadFaceSelectionMode: 'edge',
+      cadFaceSelection: edgeSelection
+    });
+    backendMocks.runLocalCadFeature.mockResolvedValue(edgeChainFeatureResult());
+
+    await useModelStore.getState().executeCommand('沿切线链做 0.8 毫米圆角');
+
+    expect(backendMocks.runLocalCadFeature).toHaveBeenCalledWith(expect.objectContaining({
+      stableEdgeId: 'edge-test',
+      operation: 'fillet-edge-chain',
+      depthMm: 0.8
+    }));
+    const state = useModelStore.getState();
+    expect(state.cadResult).toBe(updatedEdgeChainCadResult);
+    expect(state.cadFaceSelection).toBeNull();
+    expect(state.messages.at(-1)?.content).toContain('共对 3 条边执行圆角');
+    expect(state.messages.at(-1)?.content).toContain('夹角不超过 5 度');
+    expect(state.messages.at(-1)?.content).toContain('不支持分叉链、手工多选边链或可变半径');
   });
 
   it('Codex 试图切换稳定边时拒绝调用 Worker并保留当前边选择', async () => {

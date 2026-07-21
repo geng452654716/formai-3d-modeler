@@ -475,7 +475,7 @@ function runLocalCadFeatureWorker(body: {
   command?: string;
   previewOnly?: boolean;
 }) {
-  const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'];
+  const operations = ['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot', 'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'];
   if (!operations.includes(body.operation ?? '')) throw new Error('稳定 CAD 局部特征操作无效');
   const identifiers = [body.selectionRevision, body.partId, body.stableFaceId];
   if (identifiers.some((value) => typeof value !== 'string' || !value.trim() || Array.from(value).length > 200)) {
@@ -498,7 +498,7 @@ function runLocalCadFeatureWorker(body: {
   }
   const cylinder = body.operation === 'add-cylinder' || body.operation === 'cut-cylinder';
   const wholeFace = body.operation === 'offset-face-outward' || body.operation === 'offset-face-inward';
-  const edgeFeature = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'].includes(body.operation!);
+  const edgeFeature = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(body.operation!);
   const edgeLoopFeature = body.operation === 'fillet-edge-loop' || body.operation === 'chamfer-edge-loop';
   const curvedFace = body.surfaceGeometryType !== 'PLANE';
   if (body.previewOnly !== undefined && typeof body.previewOnly !== 'boolean') {

@@ -1298,7 +1298,7 @@ pub async fn run_local_cad_feature(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = state.generation_lock.lock().map_err(|_| "CAD 工作进程锁已损坏".to_string())?;
-        if !matches!(operation.as_str(), "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot" | "offset-face-outward" | "offset-face-inward" | "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop") {
+        if !matches!(operation.as_str(), "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot" | "offset-face-outward" | "offset-face-inward" | "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop" | "fillet-edge-chain" | "chamfer-edge-chain") {
             return Err("稳定 CAD 局部特征操作无效".to_string());
         }
         if selection_revision.is_empty() || selection_revision.chars().count() > 200
@@ -1326,14 +1326,14 @@ pub async fn run_local_cad_feature(
         let slot = operation == "cut-slot";
         let rectangle = matches!(operation.as_str(), "add-rectangle" | "cut-rectangle");
         let whole_face = matches!(operation.as_str(), "offset-face-outward" | "offset-face-inward");
-        let edge_feature = matches!(operation.as_str(), "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop");
+        let edge_feature = matches!(operation.as_str(), "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop" | "fillet-edge-chain" | "chamfer-edge-chain");
         let edge_loop_feature = matches!(operation.as_str(), "fillet-edge-loop" | "chamfer-edge-loop");
         let curved_face = surface_geometry_type != "PLANE";
         if preview_only && !curved_face {
             return Err("OpenCascade 精确工具体预演第一版只用于非平面曲面局部特征".into());
         }
         if curved_face && !cylinder && !rectangle && !slot && !edge_feature {
-            return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角".into());
+            return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选稳定边执行单边或切线连续边链圆角与倒角".into());
         }
         if curved_face && edge_loop_feature {
             return Err("整圈边圆角或倒角第一版只支持平面边界，请重新选择平面所属边".into());
@@ -1873,7 +1873,7 @@ fn codex_output_schema() -> Value {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "operation": { "type": "string", "enum": ["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop"] },
+                "operation": { "type": "string", "enum": ["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward", "fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"] },
                 "partId": { "type": "string" },
                 "stableFaceId": { "type": "string" },
                 "stableEdgeId": { "type": ["string", "null"] },
@@ -1904,7 +1904,7 @@ fn codex_prompt(command: &str, parameters: &Value, selection_context: Option<&Va
 当 selectionMode=click 且 faces[0] 是非 PLANE 曲面时，只允许使用 add-cylinder、cut-cylinder、add-rectangle、cut-rectangle 或 cut-slot；矩形和槽孔是在真实 UV 点击位置的切平面安全近似，不是沿任意曲面贴合轮廓；不得生成整面偏移。\
 曲面操作必须使用上下文中 resolutionStatus=resolved、precision=opencascade 的真实点击点、外法线和 surfaceUv，不得改写 UV、切换目标或伪造曲面参数。\
 曲面矩形和槽孔的 rotationDeg=0 表示沿上下文中的真实 U 切向，正角度围绕真实外法线旋转；真实 U 切向由 OpenCascade 命中结果提供，Codex 不得改写，也不得在 localFeature 中增加切向字段。\
-当 selectionMode=edge 时：fillet-edge/chamfer-edge 对当前种子稳定边执行单边圆角或倒角，可用于平面或非平面所属边；fillet-edge-loop/chamfer-edge-loop 只在用户明确要求“这圈、整圈、一圈、整周、周边、轮廓边或边界圈”且所属面为 PLANE 时使用，以当前 stableEdgeId 作为种子边，对其所属唯一平面边界 Wire 执行整圈圆角或倒角；非平面所属边仍必须使用当前 OpenCascade 精确点击点、真实 UV 和外法线；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，不得改成任意多边链、切线传播或可变半径。\
+当 selectionMode=edge 时：fillet-edge/chamfer-edge 对当前种子稳定边执行单边圆角或倒角；fillet-edge-chain/chamfer-edge-chain 只在用户明确要求“切线链、相切边、切线连续、连续边链、沿切线或顺着切线”时使用，从当前种子边两端自动传播到唯一且夹角不超过 5 度的切线连续边，允许平面或非平面所属种子边；fillet-edge-loop/chamfer-edge-loop 只在用户明确要求“这圈、整圈、一圈、整周、周边、轮廓边或边界圈”且所属面为 PLANE 时使用，以当前 stableEdgeId 作为种子边，对其所属唯一平面边界 Wire 执行整圈圆角或倒角；若同时要求整圈和切线链必须拒绝并要求用户明确范围。非平面所属边仍必须使用当前 OpenCascade 精确点击点、真实 UV 和外法线；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，不得改成任意手工多边链或可变半径。\
 四个轮廓尺寸必须全部为 null，rotationDeg 必须为 0，depthMm 表示圆角半径或倒角距离，范围为 0.20 至 50.00 毫米。\
 所有 localFeature 都必须让 changes 为空，不得自行切换到其他零件、面或边。点击平面操作中：圆形凸台/圆孔使用 add-cylinder/cut-cylinder；矩形凸台/孔使用 add-rectangle/cut-rectangle；\
 槽孔使用 cut-slot；整面向外拉伸/向内偏移使用 offset-face-outward/offset-face-inward。radiusMm 只用于圆柱，widthMm+heightMm 只用于矩形，widthMm+lengthMm 只用于槽孔；\
@@ -2104,7 +2104,12 @@ fn validate_codex_model_result(
 
     let edge_operation = matches!(
         feature.operation.as_str(),
-        "fillet-edge" | "chamfer-edge" | "fillet-edge-loop" | "chamfer-edge-loop"
+        "fillet-edge"
+            | "chamfer-edge"
+            | "fillet-edge-loop"
+            | "chamfer-edge-loop"
+            | "fillet-edge-chain"
+            | "chamfer-edge-chain"
     );
     let edge_loop_operation = matches!(
         feature.operation.as_str(),
@@ -2121,7 +2126,9 @@ fn validate_codex_model_result(
         }
         LocalSelectionMode::Edge => {
             if !edge_operation {
-                return Err("点击稳定边时只允许执行单边或平面边界整圈圆角与倒角".into());
+                return Err(
+                    "点击稳定边时只允许执行单边、切线连续边链或平面边界整圈圆角与倒角".into(),
+                );
             }
             if feature.stable_edge_id.as_deref() != target.stable_edge_id.as_deref() {
                 return Err("Codex 计划试图修改当前选择之外的稳定边，已拒绝执行".into());
@@ -2143,9 +2150,11 @@ fn validate_codex_model_result(
                 | "cut-slot"
                 | "fillet-edge"
                 | "chamfer-edge"
+                | "fillet-edge-chain"
+                | "chamfer-edge-chain"
         )
     {
-        return Err("当前选中的是非平面曲面；当前只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角".into());
+        return Err("当前选中的是非平面曲面；当前只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选稳定边执行单边或切线连续边链圆角与倒角".into());
     }
     let directional_profile = matches!(
         feature.operation.as_str(),
@@ -2175,6 +2184,8 @@ fn validate_codex_model_result(
             | "chamfer-edge"
             | "fillet-edge-loop"
             | "chamfer-edge-loop"
+            | "fillet-edge-chain"
+            | "chamfer-edge-chain"
     ) {
         return Err("Codex 返回了未知的稳定 CAD 局部特征操作".into());
     }
@@ -2617,6 +2628,7 @@ mod tests {
         let prompt = codex_prompt("这里增加一个凸台", &parameters, Some(&context));
         assert!(prompt.contains("已验证的 CAD 局部选择上下文"));
         assert!(prompt.contains("face-123"));
+        assert!(prompt.contains("fillet-edge-chain/chamfer-edge-chain"));
         assert!(prompt.contains("fillet-edge-loop/chamfer-edge-loop"));
         assert!(prompt.contains("不得把 STL 三角面索引当作跨重建永久标识"));
     }
@@ -2714,9 +2726,11 @@ mod tests {
             "chamfer-edge",
             "fillet-edge-loop",
             "chamfer-edge-loop",
+            "fillet-edge-chain",
+            "chamfer-edge-chain",
         ] {
             validate_codex_model_result(&edge_feature_result(operation), Some(&context))
-                .expect("合法的点击单边或平面边界整圈圆角与倒角计划应通过");
+                .expect("合法的点击单边、切线连续边链或平面边界整圈圆角与倒角计划应通过");
         }
     }
 
@@ -2758,7 +2772,7 @@ mod tests {
             Some(&valid_local_edge_selection())
         )
         .expect_err("点击稳定边不得执行平面操作")
-        .contains("点击稳定边时只允许执行单边或平面边界整圈圆角与倒角"));
+        .contains("点击稳定边时只允许执行单边、切线连续边链或平面边界整圈圆角与倒角"));
     }
 
     #[test]
@@ -2814,10 +2828,15 @@ mod tests {
             );
         }
 
-        validate_codex_model_result(&edge_feature_result("fillet-edge"), Some(&curved))
-            .expect("非平面曲面所属单边圆角仍应通过");
-        validate_codex_model_result(&edge_feature_result("chamfer-edge"), Some(&curved))
-            .expect("非平面曲面所属单边倒角仍应通过");
+        for operation in [
+            "fillet-edge",
+            "chamfer-edge",
+            "fillet-edge-chain",
+            "chamfer-edge-chain",
+        ] {
+            validate_codex_model_result(&edge_feature_result(operation), Some(&curved))
+                .expect("非平面曲面所属单边或切线连续边链计划应通过");
+        }
     }
 
     #[test]
@@ -2914,7 +2933,7 @@ mod tests {
                 Some(&curved_face)
             )
             .expect_err("曲面不受支持的操作必须被拒绝")
-            .contains("只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选单条稳定边执行圆角与倒角"));
+            .contains("只支持圆形凸台、圆孔、矩形凸台、矩形孔、受限槽孔，或对所选稳定边执行单边或切线连续边链圆角与倒角"));
         }
 
         let mut missing_tangent = curved_face.clone();

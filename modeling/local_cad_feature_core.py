@@ -35,6 +35,8 @@ Operation = Literal[
     "chamfer-edge",
     "fillet-edge-loop",
     "chamfer-edge-loop",
+    "fillet-edge-chain",
+    "chamfer-edge-chain",
 ]
 
 
@@ -166,7 +168,7 @@ def validate_edge_feature_inputs(
     size_mm: float,
 ) -> None:
     """校验稳定边圆角或倒角的受限输入。"""
-    if operation not in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop"):
+    if operation not in ("fillet-edge", "chamfer-edge", "fillet-edge-loop", "chamfer-edge-loop", "fillet-edge-chain", "chamfer-edge-chain"):
         raise ValueError("稳定 CAD 边特征操作无效")
     if not stable_face_id.strip() or not stable_edge_id.strip():
         raise ValueError("稳定 CAD 边选择缺少稳定面或稳定边 ID，请重新点击目标边")
@@ -294,6 +296,91 @@ def _target_edge(
     if len(candidates) > 1 and abs(candidates[1][0] - candidates[0][0]) < 1e-5:
         raise ValueError("目标面存在无法区分的对称边，请换一个视角重新点击目标边")
     return candidates[0][1]
+
+
+def _point_distance(first: cq.Vector, second: cq.Vector) -> float:
+    """返回两个 OpenCascade 点之间的毫米距离。"""
+    return float(first.sub(second).Length)
+
+
+def _edge_endpoint_direction(edge: cq.Edge, endpoint: cq.Vector, tolerance: float) -> cq.Vector | None:
+    """返回从指定端点沿边向内的单位切向；闭合边或端点不匹配时返回空。"""
+    start = edge.startPoint()
+    end = edge.endPoint()
+    at_start = _point_distance(start, endpoint) <= tolerance
+    at_end = _point_distance(end, endpoint) <= tolerance
+    if at_start and at_end:
+        return None
+    try:
+        if at_start:
+            return edge.tangentAt(0.0).normalized()
+        if at_end:
+            return edge.tangentAt(1.0).multiply(-1.0).normalized()
+    except Exception:
+        return None
+    return None
+
+
+def _tangent_chain_edges(
+    model: cq.Workplane,
+    seed_edge: cq.Edge,
+    diagonal: float,
+    *,
+    maximum_angle_deg: float = 5.0,
+) -> list[cq.Edge]:
+    """从种子边两端确定性传播到唯一切线连续边链。"""
+    vertex_tolerance = max(1e-6, min(1e-3, diagonal * 1e-7))
+    minimum_dot = math.cos(math.radians(maximum_angle_deg))
+    all_edges = [edge for edge in model.val().Edges() if float(edge.Length()) > 1e-6]
+    chain: list[cq.Edge] = [seed_edge]
+
+    def contains(edge: cq.Edge) -> bool:
+        return any(candidate.isSame(edge) for candidate in chain)
+
+    def extend(endpoint: cq.Vector, current: cq.Edge) -> None:
+        nonlocal chain
+        visited_vertices: list[cq.Vector] = []
+        while True:
+            if any(_point_distance(endpoint, value) <= vertex_tolerance for value in visited_vertices):
+                return
+            visited_vertices.append(endpoint)
+            current_direction = _edge_endpoint_direction(current, endpoint, vertex_tolerance)
+            if current_direction is None:
+                return
+            candidates: list[tuple[float, cq.Edge]] = []
+            for candidate in all_edges:
+                if contains(candidate):
+                    continue
+                candidate_direction = _edge_endpoint_direction(candidate, endpoint, vertex_tolerance)
+                if candidate_direction is None:
+                    continue
+                alignment = -float(current_direction.dot(candidate_direction))
+                if alignment >= minimum_dot:
+                    candidates.append((alignment, candidate))
+            if not candidates:
+                return
+            candidates.sort(key=lambda value: value[0], reverse=True)
+            if len(candidates) > 1:
+                raise ValueError("种子边端点存在多条切线连续候选边，形成分叉链，已拒绝自动传播")
+            next_edge = candidates[0][1]
+            chain.append(next_edge)
+            start = next_edge.startPoint()
+            end = next_edge.endPoint()
+            if _point_distance(start, endpoint) <= vertex_tolerance:
+                endpoint = end
+            elif _point_distance(end, endpoint) <= vertex_tolerance:
+                endpoint = start
+            else:
+                return
+            current = next_edge
+            if len(chain) > 64:
+                raise ValueError("切线连续边链超过 64 条边，已拒绝自动传播")
+
+    extend(seed_edge.startPoint(), seed_edge)
+    extend(seed_edge.endPoint(), seed_edge)
+    if len(chain) < 2:
+        raise ValueError("所选种子边两端没有可唯一传播的切线连续边，请选择分段连续边")
+    return chain
 
 
 def _local_x_direction(
@@ -948,7 +1035,7 @@ def apply_edge_feature(
     target_edge_descriptor: dict[str, Any] | None = None,
     surface_uv: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    """对点击并复核后的单条稳定 CAD 边或平面边界整圈执行圆角/倒角。"""
+    """对点击并复核后的单边、平面整圈或唯一切线连续边链执行圆角/倒角。"""
     validate_edge_feature_inputs(
         operation, stable_face_id, stable_edge_id, hit_point, hit_normal, size_mm
     )
@@ -958,6 +1045,7 @@ def apply_edge_feature(
     surface_geometry_type = str(face_descriptor.get("geometryType", ""))
     curved_owner_face = surface_geometry_type != "PLANE"
     loop_operation = operation in ("fillet-edge-loop", "chamfer-edge-loop")
+    chain_operation = operation in ("fillet-edge-chain", "chamfer-edge-chain")
     if loop_operation and curved_owner_face:
         raise ValueError("整圈边圆角或倒角第一版只支持平面边界，请重新选择平面所属边")
     if curved_owner_face and (
@@ -989,6 +1077,8 @@ def apply_edge_feature(
             raise ValueError("所选平面边界不足两条有效边，不能执行整圈圆角或倒角")
         if len(target_edges) > 64:
             raise ValueError("所选平面边界超过 64 条边，已拒绝整圈圆角或倒角")
+    elif chain_operation:
+        target_edges = _tangent_chain_edges(model, target_edge, diagonal)
     point_distance = float(target_edge.distance(cq.Vertex.makeVertex(*hit_point)))
     maximum_distance = max(0.35, min(3.0, diagonal * 0.025))
     if point_distance > maximum_distance:
@@ -1025,9 +1115,9 @@ def apply_edge_feature(
     volume_before = float(model.val().Volume())
     try:
         stack = cq.Workplane(obj=model.val()).newObject(target_edges)
-        edited = stack.fillet(size_mm) if operation in ("fillet-edge", "fillet-edge-loop") else stack.chamfer(size_mm)
+        edited = stack.fillet(size_mm) if operation in ("fillet-edge", "fillet-edge-loop", "fillet-edge-chain") else stack.chamfer(size_mm)
     except Exception as error:
-        label = "圆角" if operation in ("fillet-edge", "fillet-edge-loop") else "倒角"
+        label = "圆角" if operation in ("fillet-edge", "fillet-edge-loop", "fillet-edge-chain") else "倒角"
         raise ValueError(f"OpenCascade 无法对目标边执行{label}：{error}") from error
     solids = _closed_solids(edited, "稳定 CAD 边特征结果")
     if len(solids) != 1 or not edited.val().isValid():
@@ -1070,7 +1160,7 @@ def apply_edge_feature(
             "pointDistanceMm": point_distance,
             "maximumPointDistanceMm": maximum_distance,
             "affectedEdgeCount": len(target_edges),
-            "edgeScope": "loop" if loop_operation else "single",
+            "edgeScope": "loop" if loop_operation else "tangent-chain" if chain_operation else "single",
             "surfacePointDistanceMm": surface_point_distance,
             "maximumSurfacePointDistanceMm": maximum_surface_point_distance,
             "surfaceGeometryType": surface_geometry_type,

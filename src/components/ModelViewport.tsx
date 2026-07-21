@@ -1505,8 +1505,8 @@ export function ModelViewport() {
           <span>
             {cadFaceSelection.selectionMode === 'edge'
               ? cadFaceSelection.faces[0]?.geometryType === 'PLANE'
-                ? '1 条种子边；支持单边或所属平面边界整圈圆角/倒角，不支持任意多边链、切线链或可变半径'
-                : '1 条种子边；当前仅支持曲面所属单边圆角/倒角，不支持整圈、任意多边链、切线链或可变半径'
+                ? '1 条种子边；支持单边、唯一切线连续边链或所属平面边界整圈圆角/倒角，不支持手工多选边链或可变半径'
+                : '1 条种子边；支持曲面所属单边或唯一切线连续边链圆角/倒角，不支持整圈、手工多选边链或可变半径'
               : `${cadFaceSelection.faces.length} 个面`} · {new Set(cadFaceSelection.faces.map((face) => face.partId)).size} 个零件 · 下一条指令将附带原始毫米坐标、法线和局部截图
           </span>
           {localCadFeaturePreview && (

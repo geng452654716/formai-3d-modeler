@@ -1,4 +1,4 @@
-"""稳定 CAD 单边与平面边界整圈圆角、倒角的几何和安全协议回归测试。"""
+"""稳定 CAD 单边、切线连续边链与平面边界整圈圆角、倒角的几何和安全协议回归测试。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from cadquery import exporters
 from face_geometry_signatures import match_shape_faces_with_sources
 from face_tessellation_mapping import export_face_tessellation_mapping
 from local_cad_feature import _export_assembly_3mf, edit_cad_feature
-from local_cad_feature_core import apply_edge_feature, validate_edge_feature_inputs
+from local_cad_feature_core import _tangent_chain_edges, apply_edge_feature, validate_edge_feature_inputs
 
 
 class LocalCadEdgeFeatureTests(unittest.TestCase):
@@ -44,6 +44,8 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
         model: cq.Workplane | None = None,
         face_geometry_type: str = "PLANE",
         edge_geometry_type: str = "LINE",
+        face_selector=None,
+        edge_selector=None,
     ):
         if model is None:
             model, sources_faces, face, edge = self._fixture()
@@ -53,10 +55,12 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
             face = next(
                 value for value in sources_faces
                 if value.get("geometryType") == face_geometry_type
+                and (face_selector is None or face_selector(value))
             )
             edge = next(
                 value for value in face.get("edges", [])
                 if value.get("geometryType") == edge_geometry_type
+                and (edge_selector is None or edge_selector(value))
             )
         sources, matching = match_shape_faces_with_sources(model, sources_faces)
         stl_name = "generic-part.stl"
@@ -161,6 +165,48 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
         inherited_face = next(value for value in new_faces if value["stableId"] == old_face["stableId"])
         self.assertTrue(any(value["stableId"] == old_edge["stableId"] for value in inherited_face["edges"]))
 
+    def test_tangent_chain_fillet_propagates_from_seed_to_unique_collinear_edge(self):
+        points = [(-10, -5), (0, -5), (10, -5), (10, 5), (-10, 5)]
+        model = cq.Workplane("XY").polyline(points).close().extrude(10, clean=False)
+        sources, _ = match_shape_faces_with_sources(model)
+        faces = [descriptor for _, descriptor in sources]
+        face = next(
+            value for value in faces
+            if value.get("geometryType") == "PLANE"
+            and abs(float(value["centerMm"][2])) < 1e-6
+        )
+        edge = next(
+            value for value in face["edges"]
+            if abs(float(value["lengthMm"]) - 10.0) < 1e-6
+            and abs(float(value["centerMm"][1]) + 5.0) < 1e-6
+        )
+        result = apply_edge_feature(
+            model, faces, "fillet-edge-chain", face["stableId"], edge["stableId"],
+            tuple(edge["centerMm"]), (0, 0, -1), 1.0,
+        )
+        self.assertTrue(result["validation"]["valid"])
+        self.assertEqual(result["validation"]["affectedEdgeCount"], 2)
+        self.assertEqual(result["validation"]["edgeScope"], "tangent-chain")
+        self.assertLess(result["validation"]["volumeDeltaMm3"], 0)
+
+    def test_tangent_chain_rejects_seed_without_unique_continuation(self):
+        model, faces, face, edge = self._fixture()
+        with self.assertRaisesRegex(ValueError, "没有可唯一传播的切线连续边"):
+            apply_edge_feature(
+                model, faces, "chamfer-edge-chain", face["stableId"], edge["stableId"],
+                tuple(edge["centerMm"]), (0, 0, 1), 1.0,
+            )
+
+    def test_tangent_chain_rejects_multiple_tangent_candidates_at_same_endpoint(self):
+        shared = cq.Vector(0, 0, 0)
+        seed = cq.Edge.makeLine(shared, cq.Vector(10, 0, 0))
+        first_candidate = cq.Edge.makeLine(shared, cq.Vector(-10, 0, 0))
+        second_candidate = cq.Edge.makeLine(shared, cq.Vector(-20, 0, 0))
+        compound = cq.Compound.makeCompound([seed, first_candidate, second_candidate])
+        model = cq.Workplane(obj=compound)
+        with self.assertRaisesRegex(ValueError, "形成分叉链"):
+            _tangent_chain_edges(model, seed, 30.0)
+
     def test_curved_owner_face_supports_single_circular_edge_fillet_and_chamfer(self):
         for operation in ("fillet-edge", "chamfer-edge"):
             with self.subTest(operation=operation):
@@ -251,6 +297,30 @@ class LocalCadEdgeFeatureTests(unittest.TestCase):
                 self.assertTrue((root / name).is_file(), name)
                 self.assertGreater((root / name).stat().st_size, 0, name)
 
+    def test_worker_executes_tangent_chain_and_records_edge_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            points = [(-10, -5), (0, -5), (10, -5), (10, 5), (-10, 5)]
+            model = cq.Workplane("XY").polyline(points).close().extrude(10, clean=False)
+            manifest, face, edge = self._project(
+                root, model,
+                face_selector=lambda value: abs(float(value["centerMm"][2])) < 1e-6,
+                edge_selector=lambda value: (
+                    abs(float(value["lengthMm"]) - 10.0) < 1e-6
+                    and abs(float(value["centerMm"][1]) + 5.0) < 1e-6
+                ),
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = edit_cad_feature(
+                    root, "fillet-edge-chain", manifest["revision"], "generic-part", face["stableId"],
+                    tuple(edge["centerMm"]), (0, 0, -1), None, 1,
+                    "沿切线链做 1 毫米圆角", stable_edge_id=edge["stableId"],
+                )
+            feature = result["updatedCadResult"]["localFeatures"][0]
+            self.assertEqual(feature["operation"], "fillet-edge-chain")
+            self.assertEqual(feature["targetEdge"]["stableId"], edge["stableId"])
+            self.assertEqual(result["validation"]["affectedEdgeCount"], 2)
+            self.assertEqual(result["validation"]["edgeScope"], "tangent-chain")
 
     def test_worker_executes_curved_owner_edge_and_records_real_uv(self):
         with tempfile.TemporaryDirectory() as directory:

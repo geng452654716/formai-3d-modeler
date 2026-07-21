@@ -17,6 +17,7 @@ import cadquery as cq
 from face_geometry_signatures import match_shape_faces_with_sources
 from generate_model import EnclosureParameters, _replay_local_features, export_models
 from local_cad_feature import edit_cad_feature
+from local_cad_feature_core import apply_edge_feature
 
 
 class LocalCadFeatureReplayTests(unittest.TestCase):
@@ -143,6 +144,46 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
             "depthMm": 1.0,
             "rotationDeg": 0.0,
             "command": "将这条圆柱面边做 1 毫米倒角",
+        }
+        return model, faces, record
+
+    def _tangent_chain_replay_fixture(
+        self,
+    ) -> tuple[cq.Workplane, list[dict[str, Any]], dict[str, Any]]:
+        """创建包含两条共线分段边的切线连续边链重放记录。"""
+        points = [(-10, -5), (0, -5), (10, -5), (10, 5), (-10, 5)]
+        model = cq.Workplane("XY").polyline(points).close().extrude(10, clean=False)
+        sources, _ = match_shape_faces_with_sources(model)
+        faces = [descriptor for _, descriptor in sources]
+        face = next(
+            value for value in faces
+            if value.get("geometryType") == "PLANE"
+            and abs(float(value["centerMm"][2])) < 1e-6
+        )
+        edge = next(
+            value for value in face["edges"]
+            if abs(float(value["lengthMm"]) - 10.0) < 1e-6
+            and abs(float(value["centerMm"][1]) + 5.0) < 1e-6
+        )
+        center = [float(value) for value in edge["centerMm"]]
+        record = {
+            "operation": "fillet-edge-chain",
+            "partId": "generic-part",
+            "stableFaceId": face["stableId"],
+            "stableEdgeId": edge["stableId"],
+            "surfaceGeometryType": "PLANE",
+            "surfaceUv": None,
+            "centerMm": {"x": center[0], "y": center[1], "z": center[2]},
+            "outwardNormal": {"x": 0.0, "y": 0.0, "z": -1.0},
+            "targetFace": face,
+            "targetEdge": edge,
+            "radiusMm": None,
+            "widthMm": None,
+            "heightMm": None,
+            "lengthMm": None,
+            "depthMm": 1.0,
+            "rotationDeg": 0.0,
+            "command": "沿切线链做 1 毫米圆角",
         }
         return model, faces, record
 
@@ -418,6 +459,27 @@ class LocalCadFeatureReplayTests(unittest.TestCase):
             self.assertEqual(replayed["replayStatus"], "replayed")
             self.assertEqual(rebuilt["localFeatureReplay"]["requestedCount"], 1)
             self.assertEqual(rebuilt["localFeatureReplay"]["replayedCount"], 1)
+
+    def test_tangent_chain_replays_by_rediscovering_current_topology(self) -> None:
+        model, faces, record = self._tangent_chain_replay_fixture()
+        direct = apply_edge_feature(
+            model, faces, "fillet-edge-chain", record["stableFaceId"],
+            record["stableEdgeId"],
+            (record["centerMm"]["x"], record["centerMm"]["y"], record["centerMm"]["z"]),
+            (0.0, 0.0, -1.0), 1.0,
+            target_face_descriptor=record["targetFace"],
+            target_edge_descriptor=record["targetEdge"],
+        )
+        models, replayed = _replay_local_features(
+            {"generic-part": model},
+            {"generic-part": faces},
+            [record],
+            "tangent-chain-replay",
+        )
+        self.assertAlmostEqual(models["generic-part"].val().Volume(), direct["model"].val().Volume(), places=6)
+        self.assertEqual(replayed[0]["operation"], "fillet-edge-chain")
+        self.assertEqual(replayed[0]["stableEdgeId"], record["stableEdgeId"])
+        self.assertEqual(replayed[0]["replayStatus"], "replayed")
 
     def test_curved_owner_edge_replays_with_real_uv_safety_chain(self) -> None:
         model, faces, record = self._curved_edge_replay_fixture()

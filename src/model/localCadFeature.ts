@@ -13,7 +13,9 @@ export type LocalCadFeatureOperation =
   | 'fillet-edge'
   | 'chamfer-edge'
   | 'fillet-edge-loop'
-  | 'chamfer-edge-loop';
+  | 'chamfer-edge-loop'
+  | 'fillet-edge-chain'
+  | 'chamfer-edge-chain';
 
 export interface CodexLocalCadFeaturePlan {
   operation: LocalCadFeatureOperation;
@@ -145,7 +147,7 @@ export interface LocalCadFeatureResult {
     maximumSurfacePointDistanceMm?: number | null;
     /** OpenCascade 实际参与圆角或倒角的边数量。 */
     affectedEdgeCount?: number | null;
-    edgeScope?: 'single' | 'loop' | null;
+    edgeScope?: 'single' | 'loop' | 'tangent-chain' | null;
     /** OpenCascade 在当前曲面 UV 点击位置计算的单位 U 切向。 */
     surfaceTangentU?: { x: number; y: number; z: number } | null;
     maximumAbsCurvaturePerMm?: number | null;
@@ -365,10 +367,10 @@ function validatePlanDimensions(plan: CodexLocalCadFeaturePlan) {
   const supported: LocalCadFeatureOperation[] = [
     'add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot',
     'offset-face-outward', 'offset-face-inward', 'fillet-edge', 'chamfer-edge',
-    'fillet-edge-loop', 'chamfer-edge-loop'
+    'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'
   ];
   if (!supported.includes(plan.operation)) throw new Error('Codex 返回了未知的稳定 CAD 局部特征操作');
-  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'].includes(plan.operation);
+  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(plan.operation);
   const maximumDepth = edgeOperation ? 50 : 200;
   if (!Number.isFinite(plan.depthMm) || plan.depthMm < 0.2 || plan.depthMm > maximumDepth) {
     throw new Error(`Codex 返回的${edgeOperation ? '圆角半径或倒角距离' : '局部修改深度'}必须在 0.20 至 ${maximumDepth.toFixed(2)} 毫米之间`);
@@ -416,12 +418,12 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
   if (plan.partId !== face.partId || plan.stableFaceId !== face.stableId) {
     throw new Error('Codex 计划试图修改当前选择之外的零件或稳定面，已拒绝执行');
   }
-  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop'].includes(plan.operation);
+  const edgeOperation = ['fillet-edge', 'chamfer-edge', 'fillet-edge-loop', 'chamfer-edge-loop', 'fillet-edge-chain', 'chamfer-edge-chain'].includes(plan.operation);
   if (edgeOperation && (!edge || plan.stableEdgeId !== edge.stableEdgeId)) {
     throw new Error('Codex 计划试图修改当前选择之外的稳定边，已拒绝执行');
   }
   if (!edgeOperation && selection.selectionMode === 'edge') {
-    throw new Error('当前选择的是种子稳定边，只允许执行单边或平面边界整圈圆角与倒角');
+    throw new Error('当前选择的是种子稳定边，只允许执行单边、切线连续边链或平面边界整圈圆角与倒角');
   }
   if (edgeOperation && selection.selectionMode !== 'edge') {
     throw new Error('圆角或倒角必须先使用“点击选边”选择一条稳定 CAD 边');
@@ -517,13 +519,16 @@ function parseEdgeCommand(command: string, partId: string, stableFaceId: string,
   const depthMm = numberFor(trimmed, fillet ? ['圆角(?:半径)?', '半径', 'R'] : ['倒角(?:距离)?', '距离', '边长']);
   if (depthMm === null) throw new Error(fillet ? '请提供圆角半径，例如“将这条边做 2 毫米圆角”' : '请提供倒角距离，例如“将这条边做 1 毫米倒角”');
   const wholeLoop = /这圈|这一圈|整圈|一圈|整周|周边|轮廓边|边界圈/.test(trimmed);
+  const tangentChain = /切线链|相切边|切线连续|连续边链|沿切线|顺着切线/.test(trimmed);
+  if (wholeLoop && tangentChain) throw new Error('请明确选择“平面边界整圈”或“切线连续边链”，不能同时要求两种传播范围');
+  const scope = wholeLoop ? 'loop' : tangentChain ? 'chain' : 'single';
   return {
     operation: fillet
-      ? wholeLoop ? 'fillet-edge-loop' : 'fillet-edge'
-      : wholeLoop ? 'chamfer-edge-loop' : 'chamfer-edge',
+      ? scope === 'loop' ? 'fillet-edge-loop' : scope === 'chain' ? 'fillet-edge-chain' : 'fillet-edge'
+      : scope === 'loop' ? 'chamfer-edge-loop' : scope === 'chain' ? 'chamfer-edge-chain' : 'chamfer-edge',
     partId, stableFaceId, stableEdgeId,
     radiusMm: null, widthMm: null, heightMm: null, lengthMm: null, depthMm, rotationDeg: 0,
-    reason: `${wholeLoop ? '平面边界整圈' : '单边'}${fillet ? '圆角' : '倒角'} ${depthMm} 毫米`
+    reason: `${scope === 'loop' ? '平面边界整圈' : scope === 'chain' ? '切线连续边链' : '单边'}${fillet ? '圆角' : '倒角'} ${depthMm} 毫米`
   };
 }
 
