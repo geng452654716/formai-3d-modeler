@@ -5,6 +5,11 @@ import {
   type LocalCadFeatureAdjustment,
   type LocalCadFeaturePreview
 } from '../model/localCadFeature';
+import {
+  compareLocalCadFeaturePreflights,
+  findPreviousComparableLocalCadFeaturePreflight,
+  suggestLocalCadFeatureRiskAdjustments
+} from '../model/localCadFeaturePreflightHistory';
 import { useModelStore } from '../store/useModelStore';
 
 type EditableField = keyof LocalCadFeatureAdjustment;
@@ -68,12 +73,37 @@ export function LocalCadFeatureRiskPanel({ preview }: { preview: LocalCadFeature
   const aiStatus = useModelStore((state) => state.aiStatus);
   const clearPreview = useModelStore((state) => state.clearLocalCadFeaturePreview);
   const focusInterferenceFace = useModelStore((state) => state.focusLocalCadFeatureInterferenceFace);
+  const preflightHistory = useModelStore((state) => state.localCadFeaturePreflightHistory);
   const originalAdjustment = useMemo(
     () => createLocalCadFeatureAdjustment(preview.request),
     [preview.request]
   );
   const [values, setValues] = useState(() => adjustmentToEditable(originalAdjustment));
   const [error, setError] = useState<string | null>(null);
+  const currentRecord = useMemo(() => [...preflightHistory].reverse().find((record) => (
+    record.sourceRevision === preview.request.selectionRevision
+    && record.request.partId === preview.request.partId
+    && record.request.stableFaceId === preview.request.stableFaceId
+    && record.request.operation === preview.request.operation
+  )) ?? null, [preflightHistory, preview.request]);
+  const previousRecord = useMemo(
+    () => currentRecord
+      ? findPreviousComparableLocalCadFeaturePreflight(preflightHistory, currentRecord)
+      : null,
+    [currentRecord, preflightHistory]
+  );
+  const comparison = useMemo(
+    () => currentRecord && previousRecord
+      ? compareLocalCadFeaturePreflights(previousRecord, currentRecord)
+      : null,
+    [currentRecord, previousRecord]
+  );
+  const suggestionResult = useMemo(
+    () => currentRecord
+      ? suggestLocalCadFeatureRiskAdjustments(currentRecord)
+      : { suggestions: [], explanation: '当前预检尚未完成留档。' },
+    [currentRecord]
+  );
 
   useEffect(() => {
     setValues(adjustmentToEditable(originalAdjustment));
@@ -100,6 +130,16 @@ export function LocalCadFeatureRiskPanel({ preview }: { preview: LocalCadFeature
       await executeCommand(command);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '风险参数无效，请检查后重试');
+    }
+  };
+  const applySuggestion = async (adjustment: LocalCadFeatureAdjustment) => {
+    setValues(adjustmentToEditable(adjustment));
+    try {
+      const command = buildAdjustedLocalCadFeatureCommand(preview.request, adjustment);
+      setError(null);
+      await executeCommand(command);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '安全候选参数无效，请手工调整后重试');
     }
   };
 
@@ -133,6 +173,52 @@ export function LocalCadFeatureRiskPanel({ preview }: { preview: LocalCadFeature
         </div>
         <small>红色为全部干涉面，亮红色为当前定位面；定位不会改变原目标曲面或真实 UV。</small>
       </div>
+
+      <div className="local-cad-risk-section">
+        <strong>安全候选参数</strong>
+        <div className="local-cad-risk-suggestions">
+          {suggestionResult.suggestions.map((suggestion) => (
+            <article key={suggestion.id}>
+              <div>
+                <b>{suggestion.label}</b>
+                <small>{suggestion.explanation}</small>
+              </div>
+              <button
+                type="button"
+                onClick={() => void applySuggestion(suggestion.adjustment)}
+                disabled={aiStatus === 'running'}
+              >
+                应用并重新精确预检
+              </button>
+            </article>
+          ))}
+          {suggestionResult.suggestions.length === 0 && <small>{suggestionResult.explanation}</small>}
+        </div>
+        <small>{suggestionResult.explanation} 该建议只缩小风险参数，不保证最终布尔成功。</small>
+      </div>
+
+      {comparison && (
+        <div className="local-cad-risk-section">
+          <strong>上一次预检 → 本次预检</strong>
+          {comparison.becamePassed && <small className="local-cad-risk-success">本次已从阻断变为通过，并继续进入正式 Worker。</small>}
+          <div className="local-cad-risk-comparison">
+            {[...comparison.parameterDifferences, ...comparison.diagnosticDifferences].map((difference) => (
+              <span key={difference.field}>
+                <small>{difference.label}</small>
+                <b>{difference.before} → {difference.after}</b>
+              </span>
+            ))}
+          </div>
+          {(comparison.removedInterferingStableFaceIds.length > 0 || comparison.addedInterferingStableFaceIds.length > 0) && (
+            <small>
+              干涉面变化：移除 {comparison.removedInterferingStableFaceIds.join('、') || '无'}；新增 {comparison.addedInterferingStableFaceIds.join('、') || '无'}。
+            </small>
+          )}
+          {comparison.parameterDifferences.length === 0 && comparison.diagnosticDifferences.length === 0 && (
+            <small>两次预检的参数和结构化诊断没有变化。</small>
+          )}
+        </div>
+      )}
 
       <div className="local-cad-risk-section">
         <strong>调整风险参数</strong>

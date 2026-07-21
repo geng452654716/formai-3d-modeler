@@ -45,6 +45,12 @@ import {
   describeCadSurfaceGeometryType,
   type LocalCadFeaturePreview
 } from '../model/localCadFeature';
+import {
+  appendLocalCadFeaturePreflightRecord,
+  createLocalCadFeaturePreflightRecord,
+  linkLocalCadFeaturePreflightExecution,
+  type LocalCadFeaturePreflightRecord
+} from '../model/localCadFeaturePreflightHistory';
 import type { VersionGeometryComparisonMode } from '../model/versionGeometryComparison';
 import type { VersionGeometryDifferenceResult } from '../model/versionGeometryDifference';
 import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
@@ -116,6 +122,8 @@ interface ModelStore {
   cadFaceSelectionMode: CadFaceSelectionMode;
   cadFaceSelection: CadFaceSelectionContext | null;
   localCadFeaturePreview: LocalCadFeaturePreview | null;
+  /** 独立于模型版本的精确预检留档，包含被阻断且没有写入模型的尝试。 */
+  localCadFeaturePreflightHistory: LocalCadFeaturePreflightRecord[];
   cadFaceBoxRequest: CadFaceBoxSelectionRequest | null;
   versionGeometryComparisonMode: VersionGeometryComparisonMode;
   versionGeometryComparisonBaseId: string | null;
@@ -158,6 +166,7 @@ interface ModelStore {
   requestCadFaceBoxSelection: (request: CadFaceBoxSelectionRequest) => void;
   clearCadFaceSelection: () => void;
   clearLocalCadFeaturePreview: () => void;
+  clearLocalCadFeaturePreflightHistory: () => void;
   focusLocalCadFeatureInterferenceFace: (stableFaceId: string) => void;
   openVersionGeometryComparison: (
     versionId: string,
@@ -308,6 +317,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   cadFaceSelectionMode: 'off',
   cadFaceSelection: null,
   localCadFeaturePreview: null,
+  localCadFeaturePreflightHistory: [],
   cadFaceBoxRequest: null,
   versionGeometryComparisonMode: 'off',
   versionGeometryComparisonBaseId: null,
@@ -470,6 +480,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       multiViewCalibration: null,
       detectedInterfaces: [],
       interfaceOpenings: null,
+      localCadFeaturePreflightHistory: [],
       importedStlModel: null,
       importedStlStatus: 'idle',
       importedStlError: null,
@@ -798,6 +809,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     cadFaceBoxRequest: null
   }),
   clearLocalCadFeaturePreview: () => set({ localCadFeaturePreview: null }),
+  clearLocalCadFeaturePreflightHistory: () => set({ localCadFeaturePreflightHistory: [] }),
   focusLocalCadFeatureInterferenceFace: (stableFaceId) => set((state) => {
     const preview = state.localCadFeaturePreview;
     if (
@@ -1037,6 +1049,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       }));
 
       let request;
+      let preflightRecordId: string | null = null;
       try {
         if (backendStatus?.codexAuthenticated) {
           const planResult = await runCodexModelCommand(trimmed, currentParameters, faceSelection);
@@ -1081,6 +1094,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         });
         try {
           const preflight = await preflightLocalCadFeature(request);
+          const preflightRecord = createLocalCadFeaturePreflightRecord(request, preflight);
+          preflightRecordId = preflightRecord.id;
           if (preflight.status === 'blocked') {
             set((state) => ({
               aiStatus: backendStatus?.codexAuthenticated ? 'ready' : 'local',
@@ -1095,6 +1110,10 @@ export const useModelStore = create<ModelStore>((set, get) => ({
                     focusedInterferenceFaceId: preflight.validation.interferingStableFaceIds[0] ?? null
                   }
                 : state.localCadFeaturePreview,
+              localCadFeaturePreflightHistory: appendLocalCadFeaturePreflightRecord(
+                state.localCadFeaturePreflightHistory,
+                preflightRecord
+              ),
               messages: state.messages.concat({
                 id: crypto.randomUUID(),
                 role: 'assistant',
@@ -1107,7 +1126,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
             aiActivity: 'OpenCascade 精确工具体预演和曲面干涉检查已通过，准备自动执行',
             localCadFeaturePreview: state.localCadFeaturePreview?.request === request
               ? { ...state.localCadFeaturePreview, status: 'ready', errorMessage: null, preflight }
-              : state.localCadFeaturePreview
+              : state.localCadFeaturePreview,
+            localCadFeaturePreflightHistory: appendLocalCadFeaturePreflightRecord(
+              state.localCadFeaturePreflightHistory,
+              preflightRecord
+            )
           }));
           await waitForLocalCadFeaturePreviewFrame();
         } catch (error) {
@@ -1169,7 +1192,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
             : state.localCadFeaturePreview
         }));
         const featureResult = await runLocalCadFeature(request);
-        set({
+        set((state) => ({
           cadResult: featureResult.updatedCadResult,
           cadStatus: 'ready',
           cadError: null,
@@ -1193,8 +1216,15 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           versionGeometryComparisonSnapshot: null,
           versionGeometryDifferenceResult: null,
           versionGeometryComparisonStatus: 'idle',
-          versionGeometryComparisonError: null
-        });
+          versionGeometryComparisonError: null,
+          localCadFeaturePreflightHistory: preflightRecordId
+            ? linkLocalCadFeaturePreflightExecution(
+                state.localCadFeaturePreflightHistory,
+                preflightRecordId,
+                featureResult.revision
+              )
+            : state.localCadFeaturePreflightHistory
+        }));
         get().commitVersion(request.summary);
         try {
           const resultSnapshot = await createVersionSnapshot(`稳定 CAD 局部修改后-${trimmed}`, {

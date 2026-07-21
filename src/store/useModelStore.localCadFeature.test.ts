@@ -656,6 +656,17 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(state.cadFaceSelection).toBeNull();
     expect(state.cadFaceSelectionMode).toBe('off');
     expect(state.localCadFeaturePreview).toBeNull();
+    expect(state.localCadFeaturePreflightHistory).toHaveLength(1);
+    expect(state.localCadFeaturePreflightHistory[0]).toMatchObject({
+      outcome: 'passed',
+      sourceRevision: 'curved-feature-before',
+      executedRevision: 'curved-feature-after',
+      request: {
+        partId: 'custom-part',
+        stableFaceId: 'face-curved',
+        surfaceUv: { u: 0, v: 10 }
+      }
+    });
     expect(state.messages.at(-1)?.content).toContain('曲率比 0.200');
     expect(state.messages.at(-1)?.content).toContain('局部壁厚约 20.000 毫米');
     expect(state.messages.at(-1)?.content).toContain('剩余壁厚约 16.000 毫米');
@@ -785,6 +796,7 @@ describe('稳定 CAD 局部特征命令链', () => {
     });
     const blockedPreflight = curvedPreflightResult('blocked');
     const interferenceError = blockedPreflight.message;
+    const previousVersionCount = useModelStore.getState().versions.length;
     backendMocks.preflightLocalCadFeature.mockResolvedValue(blockedPreflight);
 
     await useModelStore.getState().executeCommand('在这里开一个直径 4 毫米、深 4 毫米的圆孔');
@@ -804,6 +816,17 @@ describe('稳定 CAD 局部特征命令链', () => {
       }
     });
     expect(backendMocks.runLocalCadFeature).not.toHaveBeenCalled();
+    expect(state.versions).toHaveLength(previousVersionCount);
+    expect(state.localCadFeaturePreflightHistory).toHaveLength(1);
+    expect(state.localCadFeaturePreflightHistory[0]).toMatchObject({
+      outcome: 'blocked',
+      executedRevision: null,
+      request: {
+        selectionRevision: 'curved-feature-before',
+        stableFaceId: 'face-curved',
+        surfaceUv: { u: 0, v: 10 }
+      }
+    });
     expect(state.localCadFeaturePreview?.preflight?.validation.interferingStableFaceIds).toEqual(['face-blocking']);
     expect(state.localCadFeaturePreview?.preflight?.validation.minimumInterferenceDistanceMm).toBe(2);
     expect(state.localCadFeaturePreview?.focusedInterferenceFaceId).toBe('face-blocking');
@@ -825,12 +848,34 @@ describe('稳定 CAD 局部特征命令链', () => {
     expect(backendMocks.preflightLocalCadFeature).toHaveBeenCalledTimes(2);
     expect(backendMocks.createVersionSnapshot).not.toHaveBeenCalled();
     expect(backendMocks.runLocalCadFeature).not.toHaveBeenCalled();
+    expect(useModelStore.getState().localCadFeaturePreflightHistory).toHaveLength(2);
+    expect(useModelStore.getState().localCadFeaturePreflightHistory.map((record) => record.request.radiusMm))
+      .toEqual([2, 1.5]);
     expect(useModelStore.getState().localCadFeaturePreview).toMatchObject({
       status: 'blocked',
       request: { radiusMm: 1.5, depthMm: 3 }
     });
     expect(state.messages.at(-1)?.content).toContain('精确工具体预演已阻止自动执行');
     expect(state.messages.at(-1)?.content).toContain('当前模型未写入任何修改');
+  });
+
+  it('重置画布清空预检历史，恢复版本只清除当前预览而保留独立留档', async () => {
+    useModelStore.setState({
+      cadResult: curvedCadResult,
+      cadFaceSelection: curvedSelection
+    });
+    backendMocks.preflightLocalCadFeature.mockResolvedValue(curvedPreflightResult('blocked'));
+    await useModelStore.getState().executeCommand('在这里开一个直径 4 毫米、深 4 毫米的圆孔');
+    expect(useModelStore.getState().localCadFeaturePreflightHistory).toHaveLength(1);
+
+    useModelStore.getState().commitVersion('可恢复测试版本');
+    const firstVersionId = useModelStore.getState().versions[0].id;
+    useModelStore.getState().restoreVersion(firstVersionId);
+    expect(useModelStore.getState().localCadFeaturePreview).toBeNull();
+    expect(useModelStore.getState().localCadFeaturePreflightHistory).toHaveLength(1);
+
+    useModelStore.getState().resetProject();
+    expect(useModelStore.getState().localCadFeaturePreflightHistory).toEqual([]);
   });
 
   it('曲面精确预检异常时停止自动执行且不创建修改前快照', async () => {

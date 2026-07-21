@@ -308,3 +308,20 @@ Codex 优先输出结构化操作，而不是直接重写整个模型文件：
 因此参数重试与首次自动执行共享同一安全门，不存在第二套可绕过预检的执行入口。Codex 仍只能返回受限 JSON，不执行 Python、CadQuery 或 Shell。
 
 曲面矩形和槽孔仍以真实 UV 点击位置的切平面为局部坐标系，`rotationDeg=0` 沿真实 U 切向；这是安全近似，不是自由曲面贴合或测地线轮廓。稳定面仍是“几何签名匹配第一版”，所有命中和定位上下文只对当前修订有效。
+
+## 精确预检历史与受限参数收敛
+
+曲面局部特征的执行前预检采用独立事件档案，而不是模型版本：
+
+```text
+LocalCadFeatureRequest
+  → OpenCascade 精确工具体预检
+  → LocalCadFeaturePreflightRecord（通过或阻断都深拷贝留档）
+  → 阻断：保留当前 CAD，不创建 ModelVersion
+  → 通过：保存修改前快照并调用正式 Worker
+  → Worker 成功：记录 executedRevision，再提交 ModelVersion
+```
+
+`LocalCadFeaturePreflightRecord` 保存源修订、零件、稳定面、真实 UV、U 切向、受限参数和完整结构化诊断，最多保留最近 50 条。历史记录是只读证据，不是当前选择上下文；恢复版本、切换模型视图或查看历史都不能把记录中的稳定面或 UV 重新变成可执行目标。
+
+`compareLocalCadFeaturePreflights()` 只比较同目标的两条不可变记录，输出参数差异、工具体与安全诊断差异及干涉稳定面增减。`suggestLocalCadFeatureRiskAdjustments()` 是确定性纯函数，只生成缩小轮廓、降低深度或小范围旋转的候选，并逐条复用 `validateLocalCadFeatureAdjustment()`。它不调用 Codex、Python、Shell 或 CAD Worker，也不声称候选已经修复风险；真正应用时仍通过 `buildAdjustedLocalCadFeatureCommand()` 回到完整 OpenCascade 预检和正式执行链。

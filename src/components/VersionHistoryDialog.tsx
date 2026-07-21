@@ -2,6 +2,12 @@ import { ArrowRight, CheckCircle2, HardDrive, History, RotateCcw, X } from 'luci
 import { useMemo, useState } from 'react';
 import { compareModelVersions } from '../model/versionComparison';
 import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
+import { createLocalCadFeatureAdjustment } from '../model/localCadFeature';
+import {
+  compareLocalCadFeaturePreflights,
+  findPreviousComparableLocalCadFeaturePreflight,
+  type LocalCadFeaturePreflightRecord
+} from '../model/localCadFeaturePreflightHistory';
 import type { ModelVersion } from '../model/types';
 import { useModelStore } from '../store/useModelStore';
 
@@ -45,6 +51,32 @@ function chooseInitialBaseVersion(versions: ModelVersion[], currentIndex: number
   return versions[currentIndex + 1]?.id ?? versions[currentIndex]?.id ?? '';
 }
 
+function describePreflightOperation(record: LocalCadFeaturePreflightRecord) {
+  return ({
+    'add-cylinder': '圆形凸台',
+    'cut-cylinder': '圆孔',
+    'add-rectangle': '矩形凸台',
+    'cut-rectangle': '矩形孔',
+    'cut-slot': '槽孔',
+    'offset-face-outward': '整面向外拉伸',
+    'offset-face-inward': '整面向内偏移',
+    'fillet-edge': '圆角',
+    'chamfer-edge': '倒角'
+  } as const)[record.request.operation];
+}
+
+function describePreflightParameters(record: LocalCadFeaturePreflightRecord) {
+  const adjustment = createLocalCadFeatureAdjustment(record.request);
+  return [
+    adjustment.diameterMm !== null ? `直径 ${adjustment.diameterMm} 毫米` : null,
+    adjustment.widthMm !== null ? `宽 ${adjustment.widthMm} 毫米` : null,
+    adjustment.heightMm !== null ? `高 ${adjustment.heightMm} 毫米` : null,
+    adjustment.lengthMm !== null ? `长 ${adjustment.lengthMm} 毫米` : null,
+    `深度或高度 ${adjustment.depthMm} 毫米`,
+    adjustment.rotationDeg !== 0 ? `旋转 ${adjustment.rotationDeg} 度` : null
+  ].filter(Boolean).join(' · ');
+}
+
 export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
   const versions = useModelStore((state) => state.versions);
   const versionIndex = useModelStore((state) => state.versionIndex);
@@ -63,6 +95,8 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
   const openVersionGeometryComparison = useModelStore(
     (state) => state.openVersionGeometryComparison
   );
+  const preflightHistory = useModelStore((state) => state.localCadFeaturePreflightHistory);
+  const clearPreflightHistory = useModelStore((state) => state.clearLocalCadFeaturePreflightHistory);
   const [selectedVersionId, setSelectedVersionId] = useState(() => (
     chooseInitialBaseVersion(versions, versionIndex)
   ));
@@ -195,6 +229,84 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
               当前参数和通用开孔元数据对比用于解释设计意图；标有“本机精确快照”的版本还可加载已保存 STL，
               或使用 OpenCascade 对历史与当前 STEP 实体执行精确布尔差集。
             </p>
+
+            <details className="preflight-history-section">
+              <summary>
+                <div>
+                  <strong>精确预检记录</strong>
+                  <span>共 {preflightHistory.length} 条，通过和阻断尝试都独立留档</span>
+                </div>
+                {preflightHistory.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (window.confirm('清空全部精确预检记录吗？模型版本和当前 CAD 不会受影响。')) {
+                        clearPreflightHistory();
+                      }
+                    }}
+                  >
+                    清空记录
+                  </button>
+                )}
+              </summary>
+              <div className="preflight-history-list">
+                {[...preflightHistory].reverse().map((record) => {
+                  const previousRecord = findPreviousComparableLocalCadFeaturePreflight(
+                    preflightHistory,
+                    record
+                  );
+                  const recordComparison = previousRecord
+                    ? compareLocalCadFeaturePreflights(previousRecord, record)
+                    : null;
+                  const comparisonFields = recordComparison
+                    ? [...recordComparison.parameterDifferences, ...recordComparison.diagnosticDifferences]
+                    : [];
+                  return (
+                    <article className={`is-${record.outcome}`} key={record.id}>
+                      <div className="preflight-history-title">
+                        <div>
+                          <strong>{describePreflightOperation(record)}</strong>
+                          <span>{formatDate(record.createdAt)} · 零件 {record.request.partId} · 稳定面 {record.request.stableFaceId}</span>
+                        </div>
+                        <b>{record.outcome === 'passed' ? '预检通过' : '已阻断'}</b>
+                      </div>
+                      <p>{describePreflightParameters(record)}</p>
+                      <dl>
+                        <div><dt>工具体积</dt><dd>{record.result.validation.toolVolumeMm3.toFixed(2)} 立方毫米</dd></div>
+                        <div><dt>干涉稳定面</dt><dd>{record.result.validation.interferingStableFaceIds.join('、') || '无'}</dd></div>
+                        <div><dt>最近干涉距离</dt><dd>{record.result.validation.minimumInterferenceDistanceMm?.toFixed(3) ?? '未知'} 毫米</dd></div>
+                        <div><dt>正式执行</dt><dd>{record.executedRevision ? `已关联修订 ${record.executedRevision}` : '未写入模型'}</dd></div>
+                      </dl>
+                      {recordComparison && (
+                        <details className="preflight-record-comparison">
+                          <summary>
+                            {recordComparison.becamePassed ? '修改后已从阻断变为通过' : `与同目标上一次预检比较（${comparisonFields.length} 项变化）`}
+                          </summary>
+                          <div>
+                            {comparisonFields.map((difference) => (
+                              <span key={difference.field}>
+                                <small>{difference.label}</small>
+                                <b>{difference.before} → {difference.after}</b>
+                              </span>
+                            ))}
+                            {(recordComparison.removedInterferingStableFaceIds.length > 0 || recordComparison.addedInterferingStableFaceIds.length > 0) && (
+                              <span>
+                                <small>干涉稳定面变化</small>
+                                <b>移除 {recordComparison.removedInterferingStableFaceIds.join('、') || '无'}；新增 {recordComparison.addedInterferingStableFaceIds.join('、') || '无'}</b>
+                              </span>
+                            )}
+                            {comparisonFields.length === 0 && <small>参数和结构化诊断没有变化。</small>}
+                          </div>
+                        </details>
+                      )}
+                    </article>
+                  );
+                })}
+                {preflightHistory.length === 0 && <p className="version-section-empty">还没有精确工具体预检记录。</p>}
+              </div>
+            </details>
 
             <section className="version-geometry-entry">
               <div>
