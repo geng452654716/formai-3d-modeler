@@ -376,3 +376,26 @@ LocalCadFeatureRequest
 5. Worker 通过临时文件、重读和原子替换完成 artifacts 输出，Rust 再处理下载目录重名并复制文件。
 
 CAD 制造拆件复用源 CAD 零件的稳定对象 ID，上传 STL 拆件使用独立的正负侧对象 ID；导出请求按来源选择同一套视口标识，避免 CAD 拆件已经移动、旋转或缩放后仍错误导出原始姿态。STEP 是参数化源数据交换格式，当前继续导出 OpenCascade 原始坐标，不烘焙仅用于场景布置的对象变换。标准几何 3MF 当前不包含 Bambu Studio 专有打印机、耗材、支撑和切片工程元数据。
+
+## 上传 STL 网格元素位移协议
+
+```text
+Three.js 命中当前三角面
+  → worldToLocal 消除对象显示变换
+  → 逆坐标矩阵恢复 STL 源毫米坐标
+  → 选择最近顶点、最近边或当前面
+  → 绑定 imported-model revision
+  → Vite/Tauri 双层请求校验
+  → Python 同步移动全部同坐标 STL 顶点副本
+  → 退化面检查
+  → OpenCascade 重新导入与封闭实体检查
+  → 临时文件 + 批量原子替换 + 失败回滚
+  → 新 revision 刷新视口并清除旧分析
+```
+
+- 前端协议位于 `src/model/meshElementEdit.ts`，只接受 `uploaded-model`、`vertex / edge / face`、有限毫米位移和当前三角面上下文。三角边索引固定为 `0: 0-1`、`1: 1-2`、`2: 2-0`，面的元素索引固定为 0。
+- Three.js 中源 STL/OpenCascade 坐标 `(x, y, z)` 显示为 `(x, z, -y)`；选择时通过逆矩阵恢复源坐标。外层 `TransformableObject` 的用户位移、旋转和均匀缩放先由 `event.object.worldToLocal` 消除，不能进入局部网格坐标。
+- Worker `modeling/edit_mesh_element.py` 使用六位小数坐标键收集选中元素涉及的源坐标，并同步更新所有 STL 顶点副本。这样可维持分面 STL 的共享几何顶点一致性，但不等同于通用拓扑编辑器。
+- 修改结果不得包含 NaN、Infinity 或退化三角面。重新导入后的 Shape 必须有效、封闭，修改前后 Solid 数量一致；如果导入流程报告进行了自动修洞或网格清理，Worker 拒绝提交，避免自动修复掩盖编辑产生的破坏。
+- `imported-model-working.stl`、`imported-model-working.step`、`imported-model-result.json` 和 `mesh-element-edit-result.json` 使用既有受管 artifacts 目录、临时输出、批量原子替换和回滚机制。Web 开发路由与 Tauri 命令调用同一 Python Worker。
+- 成功后 Zustand 更新上传模型修订，清除制造拆件、壁厚热力图和过期选择，并创建中文版本与前后快照。当前 `restoreVersion` 尚未恢复上传工作 STL 文件，所以下一阶段需要增加受管快照恢复命令，不能把现状描述为完整网格撤销/重做。

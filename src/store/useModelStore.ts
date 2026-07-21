@@ -18,6 +18,7 @@ import {
   runCodexModelCommand,
   runLocalCadFeature,
   runLocalStlEdit,
+  runMeshElementEdit,
   runManufacturingSplit,
   resolveCadSurfaceHit,
   runVersionGeometryDifference,
@@ -42,6 +43,13 @@ import {
   failCadSurfaceHitSelection
 } from '../model/cadSurfaceHit';
 import { parseLocalStlEditCommand, type LocalStlEditResult } from '../model/localStlEdit';
+import {
+  MESH_ELEMENT_LABELS,
+  type MeshElementEditMode,
+  type MeshElementEditResult,
+  type MeshElementSelection,
+  type MeshPointMm
+} from '../model/meshElementEdit';
 import {
   buildLocalCadFeatureRequest,
   buildLocalCadFeatureRequestFromPlan,
@@ -95,6 +103,7 @@ export type ManufacturingStatus = 'idle' | 'generating' | 'ready' | 'error';
 export type ImportedStlStatus = 'idle' | 'importing' | 'ready' | 'error';
 export type WallThicknessStatus = 'idle' | 'analyzing' | 'ready' | 'error';
 export type VersionGeometryComparisonStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type MeshElementEditStatus = 'idle' | 'editing' | 'error';
 
 interface ModelStore {
   parameters: EnclosureParameters;
@@ -124,6 +133,11 @@ interface ModelStore {
   importedStlStatus: ImportedStlStatus;
   importedStlError: string | null;
   localStlEditResult: LocalStlEditResult | null;
+  meshElementEditMode: MeshElementEditMode;
+  meshElementSelection: MeshElementSelection | null;
+  meshElementEditStatus: MeshElementEditStatus;
+  meshElementEditError: string | null;
+  meshElementEditResult: MeshElementEditResult | null;
   manufacturingStatus: ManufacturingStatus;
   manufacturingResult: ManufacturingSplitResult | null;
   manufacturingError: string | null;
@@ -170,6 +184,10 @@ interface ModelStore {
   setInterfaceOpenings: (openings: InterfaceOpeningSpec[] | null) => void;
   importStlModel: (file: File) => Promise<ImportedStlModel | null>;
   clearImportedStlModel: () => void;
+  setMeshElementEditMode: (mode: MeshElementEditMode) => void;
+  selectMeshElement: (selection: MeshElementSelection) => void;
+  clearMeshElementSelection: () => void;
+  applyMeshElementMove: (displacementMm: MeshPointMm) => Promise<MeshElementEditResult | null>;
   runManufacturingSplit: (request: ManufacturingSplitRequest) => Promise<ManufacturingSplitResult | null>;
   clearManufacturingSplit: () => void;
   analyzeWallThickness: (request: WallThicknessRequest) => Promise<WallThicknessAnalysisResult | null>;
@@ -349,6 +367,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   importedStlStatus: 'idle',
   importedStlError: null,
   localStlEditResult: null,
+  meshElementEditMode: 'off',
+  meshElementSelection: null,
+  meshElementEditStatus: 'idle',
+  meshElementEditError: null,
+  meshElementEditResult: null,
   manufacturingStatus: 'idle',
   manufacturingResult: null,
   manufacturingError: null,
@@ -578,6 +601,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       importedStlStatus: 'idle',
       importedStlError: null,
       localStlEditResult: null,
+      meshElementEditMode: 'off',
+      meshElementSelection: null,
+      meshElementEditStatus: 'idle',
+      meshElementEditError: null,
+      meshElementEditResult: null,
       manufacturingStatus: 'idle',
       manufacturingResult: null,
       manufacturingError: null,
@@ -655,7 +683,12 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       cadFaceSelectionMode: 'off',
       cadFaceSelection: null,
       localCadFeaturePreview: null,
-      cadFaceBoxRequest: null
+      cadFaceBoxRequest: null,
+      meshElementEditMode: 'off',
+      meshElementSelection: null,
+      meshElementEditStatus: 'idle',
+      meshElementEditError: null,
+      meshElementEditResult: null
     });
     try {
       const importedStlModel = await importStlModelBackend(file);
@@ -665,6 +698,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         importedStlStatus: 'ready',
         importedStlError: null,
         localStlEditResult: null,
+        meshElementEditMode: 'off',
+        meshElementSelection: null,
+        meshElementEditStatus: 'idle',
+        meshElementEditError: null,
+        meshElementEditResult: null,
         manufacturingStatus: 'idle',
         manufacturingResult: null,
         manufacturingError: null,
@@ -701,6 +739,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     importedStlStatus: 'idle',
     importedStlError: null,
     localStlEditResult: null,
+    meshElementEditMode: 'off',
+    meshElementSelection: null,
+    meshElementEditStatus: 'idle',
+    meshElementEditError: null,
+    meshElementEditResult: null,
     manufacturingStatus: 'idle',
     manufacturingResult: null,
     manufacturingError: null,
@@ -717,6 +760,119 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     viewportModelSource: 'cad',
     exploded: false
   }),
+  setMeshElementEditMode: (meshElementEditMode) => set((state) => ({
+    meshElementEditMode,
+    meshElementSelection: meshElementEditMode === 'off' ? null : state.meshElementSelection?.kind === meshElementEditMode
+      ? state.meshElementSelection
+      : null,
+    meshElementEditError: null,
+    objectTransformMode: meshElementEditMode === 'off' ? state.objectTransformMode : 'select',
+    wallThicknessPicking: meshElementEditMode === 'off' ? state.wallThicknessPicking : false,
+    cadFaceSelectionMode: meshElementEditMode === 'off' ? state.cadFaceSelectionMode : 'off'
+  })),
+  selectMeshElement: (meshElementSelection) => set({
+    meshElementSelection,
+    meshElementEditError: null,
+    selectedObject: 'uploaded-model'
+  }),
+  clearMeshElementSelection: () => set({ meshElementSelection: null, meshElementEditError: null }),
+  applyMeshElementMove: async (displacementMm) => {
+    const state = get();
+    const selection = state.meshElementSelection;
+    const importedModel = state.importedStlModel;
+    if (!selection || !importedModel) {
+      set({ meshElementEditError: '请先上传 STL，并在三维视口中选择顶点、边或面' });
+      return null;
+    }
+    if (selection.revision !== importedModel.revision) {
+      set({ meshElementSelection: null, meshElementEditError: '模型已变化，请重新选择网格元素' });
+      return null;
+    }
+    set({
+      meshElementEditStatus: 'editing',
+      meshElementEditError: null,
+      aiStatus: 'running',
+      aiActivity: `OpenCascade 正在校验并移动选中${MESH_ELEMENT_LABELS[selection.kind]}`
+    });
+    try {
+      try {
+        const beforeSnapshot = await createVersionSnapshot(`网格元素位移前-${MESH_ELEMENT_LABELS[selection.kind]}`, {
+          ...state.parameters,
+          interfaceOpenings: state.interfaceOpenings
+        });
+        if (beforeSnapshot) {
+          set((current) => ({ versions: current.versions.map((version, index) => (
+            index === current.versionIndex ? { ...version, snapshotDirectory: beforeSnapshot.directory } : version
+          )) }));
+        }
+      } catch {
+        // 前置快照失败不影响 Worker 的原子回滚安全门。
+      }
+      const result = await runMeshElementEdit({ selection, displacementMm });
+      set({
+        importedStlModel: result.updatedModel,
+        importedStlStatus: 'ready',
+        importedStlError: null,
+        meshElementSelection: null,
+        meshElementEditStatus: 'idle',
+        meshElementEditError: null,
+        meshElementEditResult: result,
+        localStlEditResult: null,
+        manufacturingStatus: 'idle',
+        manufacturingResult: null,
+        manufacturingError: null,
+        wallThicknessStatus: 'idle',
+        wallThicknessResult: null,
+        wallThicknessError: null,
+        wallThicknessVisible: false,
+        wallThicknessPicking: false,
+        wallThicknessSelection: null,
+        viewportModelSource: 'uploaded-stl',
+        exploded: false,
+        aiStatus: state.backendStatus?.codexAuthenticated ? 'ready' : 'local',
+        aiActivity: null,
+        aiError: null
+      });
+      get().commitVersion(`移动上传模型${MESH_ELEMENT_LABELS[selection.kind]}`);
+      try {
+        const afterSnapshot = await createVersionSnapshot(`网格元素位移后-${MESH_ELEMENT_LABELS[selection.kind]}`, {
+          ...state.parameters,
+          interfaceOpenings: state.interfaceOpenings
+        });
+        if (afterSnapshot) {
+          set((current) => ({ versions: current.versions.map((version, index) => (
+            index === current.versionIndex ? { ...version, snapshotDirectory: afterSnapshot.directory } : version
+          )) }));
+        }
+      } catch {
+        // 修改结果已经验证写回；后置快照失败只影响版本留档。
+      }
+      const delta = result.validation.volumeDeltaMm3;
+      set((current) => ({
+        messages: current.messages.concat({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `已移动选中${MESH_ELEMENT_LABELS[selection.kind]}，同步更新 ${result.movedCoordinateCount} 个源坐标、${result.movedVertexOccurrenceCount} 个 STL 顶点副本；体积 ${result.validation.volumeBeforeMm3.toFixed(2)} → ${result.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过封闭性、实体有效性、退化面和 Solid 数量检查；旧拆件与壁厚分析已失效。`
+        })
+      }));
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '上传 STL 网格元素位移失败';
+      set((current) => ({
+        meshElementEditStatus: 'error',
+        meshElementEditError: message,
+        aiStatus: state.backendStatus?.codexAuthenticated ? 'ready' : 'local',
+        aiActivity: null,
+        aiError: message,
+        messages: current.messages.concat({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `网格元素位移未通过安全校验，最后有效模型未被覆盖：${message}`
+        })
+      }));
+      return null;
+    }
+  },
   runManufacturingSplit: async (request) => {
     set({
       manufacturingStatus: 'generating',

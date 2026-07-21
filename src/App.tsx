@@ -24,6 +24,7 @@ import { CommandPanel } from './components/CommandPanel';
 import { ImageImportDialog } from './components/ImageImportDialog';
 import { ManufacturingToolsDialog } from './components/ManufacturingToolsDialog';
 import { ModelViewport } from './components/ModelViewport';
+import { MeshElementEditPanel } from './components/MeshElementEditPanel';
 import { ParameterPanel } from './components/ParameterPanel';
 import { SceneTree } from './components/SceneTree';
 import { VersionHistoryDialog } from './components/VersionHistoryDialog';
@@ -508,6 +509,7 @@ function App() {
             <span>{viewportModelSource === 'uploaded-stl' ? '上传 STL 实体' : viewportModelSource === 'cad' ? 'OpenCascade 实体' : '快速预览'}</span>
           </div>
           <ModelViewport />
+          <MeshElementEditPanel />
           <CommandPanel />
           <button
             type="button"

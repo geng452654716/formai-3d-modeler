@@ -22,6 +22,7 @@ const GENERATED_FILES: &[&str] = &[
     "imported-model-working.stl",
     "imported-model-working.step",
     "local-stl-edit-result.json",
+    "mesh-element-edit-result.json",
     "local-cad-feature-result.json",
     "local-cad-feature-preflight-result.json",
     "manufacturing-negative.stl",
@@ -71,6 +72,7 @@ struct BackendPaths {
     wall_thickness_worker_path: PathBuf,
     version_difference_worker_path: PathBuf,
     local_stl_edit_worker_path: PathBuf,
+    mesh_element_edit_worker_path: PathBuf,
     local_cad_feature_worker_path: PathBuf,
     cad_surface_hit_worker_path: PathBuf,
     transformed_export_worker_path: PathBuf,
@@ -250,6 +252,7 @@ impl BackendPaths {
         let version_difference_worker_path =
             project_root.join("modeling/version_geometry_difference.py");
         let local_stl_edit_worker_path = project_root.join("modeling/local_stl_edit.py");
+        let mesh_element_edit_worker_path = project_root.join("modeling/edit_mesh_element.py");
         let local_cad_feature_worker_path = project_root.join("modeling/local_cad_feature.py");
         let cad_surface_hit_worker_path = project_root.join("modeling/resolve_cad_surface_hit.py");
         let transformed_export_worker_path =
@@ -270,6 +273,7 @@ impl BackendPaths {
             wall_thickness_worker_path,
             version_difference_worker_path,
             local_stl_edit_worker_path,
+            mesh_element_edit_worker_path,
             local_cad_feature_worker_path,
             cad_surface_hit_worker_path,
             transformed_export_worker_path,
@@ -508,6 +512,7 @@ fn generated_file_names(artifacts_dir: &Path) -> Vec<String> {
         "manufacturing-result.json",
         "wall-thickness-result.json",
         "local-stl-edit-result.json",
+        "mesh-element-edit-result.json",
         "local-cad-feature-result.json",
         "local-cad-feature-preflight-result.json",
         "version-difference-result.json",
@@ -1311,6 +1316,108 @@ pub async fn run_local_stl_edit(
     })
     .await
     .map_err(|error| format!("局部 STL 修改后台任务失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn run_mesh_element_edit(
+    source_part_id: String,
+    selection_revision: String,
+    element_kind: String,
+    triangle_index: usize,
+    element_index: usize,
+    delta_xmm: f64,
+    delta_ymm: f64,
+    delta_zmm: f64,
+    state: tauri::State<'_, BackendState>,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = state
+            .generation_lock
+            .lock()
+            .map_err(|_| "CAD 工作进程锁已损坏".to_string())?;
+        if source_part_id != "uploaded-model" {
+            return Err("网格元素编辑只允许当前上传模型".to_string());
+        }
+        if selection_revision.trim().is_empty() || selection_revision.chars().count() > 200 {
+            return Err("网格元素选择修订号无效，请重新选择".to_string());
+        }
+        if !matches!(element_kind.as_str(), "vertex" | "edge" | "face") {
+            return Err("网格元素类型只能是顶点、边或面".to_string());
+        }
+        if triangle_index > 5_000_000 {
+            return Err("三角面索引超过安全上限".to_string());
+        }
+        if element_index > 2 || (element_kind == "face" && element_index != 0) {
+            return Err("网格元素索引与编辑类型不匹配".to_string());
+        }
+        let displacement = [delta_xmm, delta_ymm, delta_zmm];
+        if !displacement
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= 500.0)
+        {
+            return Err("网格元素每轴位移必须是 -500 至 500 毫米的有限数值".to_string());
+        }
+        if displacement.iter().all(|value| value.abs() < 1e-9) {
+            return Err("请至少输入一个非零位移".to_string());
+        }
+        if !state.paths.mesh_element_edit_worker_path.is_file() {
+            return Err(format!(
+                "未找到网格元素编辑 Worker：{}",
+                state.paths.mesh_element_edit_worker_path.display()
+            ));
+        }
+        if !cad_runtime_available(&state.paths) {
+            return Err(format!(
+                "CAD Python 环境不可用：{}。请设置 FORM_AI_PYTHON_PATH 指向已安装 CadQuery 的 Python。",
+                state.paths.python_path.display()
+            ));
+        }
+        let source_file = imported_model_source_file(&state.paths.artifacts_dir)?;
+        let source_path = state.paths.artifacts_dir.join(source_file);
+        let arguments = vec![
+            state.paths.mesh_element_edit_worker_path.display().to_string(),
+            "--input".into(),
+            source_path.display().to_string(),
+            "--output".into(),
+            state.paths.artifacts_dir.display().to_string(),
+            "--selection-revision".into(),
+            selection_revision,
+            "--kind".into(),
+            element_kind,
+            "--triangle-index".into(),
+            triangle_index.to_string(),
+            "--element-index".into(),
+            element_index.to_string(),
+            "--delta-x".into(),
+            delta_xmm.to_string(),
+            "--delta-y".into(),
+            delta_ymm.to_string(),
+            "--delta-z".into(),
+            delta_zmm.to_string(),
+        ];
+        let output = run_process_with_input(
+            &state.paths.python_path,
+            &arguments,
+            &state.paths.project_root,
+            None,
+        )?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if message.is_empty() {
+                format!("网格元素编辑 Worker 退出，状态码：{}", output.status)
+            } else {
+                message
+            });
+        }
+        let result_path = state.paths.artifacts_dir.join("mesh-element-edit-result.json");
+        let contents = fs::read_to_string(&result_path)
+            .map_err(|error| format!("无法读取网格元素编辑结果：{error}"))?;
+        serde_json::from_str(&contents)
+            .map_err(|error| format!("网格元素编辑结果格式错误：{error}"))
+    })
+    .await
+    .map_err(|error| format!("网格元素编辑后台任务失败：{error}"))?
 }
 
 #[tauri::command]

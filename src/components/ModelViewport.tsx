@@ -4,6 +4,7 @@ import {
   ContactShadows,
   Grid,
   Html,
+  Line,
   OrbitControls,
   PerspectiveCamera,
   TransformControls
@@ -33,6 +34,11 @@ import { createLidGeometry, createTrayGeometry } from '../model/createEnclosureG
 import { getOuterDimensions } from '../model/defaults';
 import { degreesToRadians, describeObjectTransformChange, normalizeObjectPresentation } from '../model/objectTransform';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
+import {
+  nearestMeshElementIndex,
+  selectedMeshElementPoints,
+  type MeshElementSelection
+} from '../model/meshElementEdit';
 import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
 import { calculateVersionComparisonOffsets } from '../model/versionGeometryComparison';
@@ -451,6 +457,12 @@ function LoadedCadMesh({
   const selectWallThicknessSample = useModelStore((state) => state.selectWallThicknessSample);
   const wallThicknessPicking = useModelStore((state) => state.wallThicknessPicking);
   const wallThicknessSelection = useModelStore((state) => state.wallThicknessSelection);
+  const viewportModelSource = useModelStore((state) => state.viewportModelSource);
+  const importedStlModel = useModelStore((state) => state.importedStlModel);
+  const manufacturingResult = useModelStore((state) => state.manufacturingResult);
+  const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
+  const meshElementSelection = useModelStore((state) => state.meshElementSelection);
+  const selectMeshElement = useModelStore((state) => state.selectMeshElement);
   const prepared = useMemo(() => {
     const normalized = sourceGeometry.clone();
     const hasHeatmap = wallThicknessAnalysis
@@ -485,6 +497,40 @@ function LoadedCadMesh({
     };
   }, [preserveCoordinates, sourceGeometry, wallThicknessAnalysis]);
   const { geometry, transformedSamples, coordinateTransform, inverseCoordinateTransform } = prepared;
+
+  const meshElementPickingEnabled = Boolean(
+    id === 'uploaded-model'
+    && viewportModelSource === 'uploaded-stl'
+    && importedStlModel
+    && !manufacturingResult
+    && meshElementEditMode !== 'off'
+  );
+  const currentMeshElementSelection = useMemo<MeshElementSelection | null>(() => (
+    id === 'uploaded-model'
+    && importedStlModel
+    && meshElementSelection?.revision === importedStlModel.revision
+      ? meshElementSelection
+      : null
+  ), [id, importedStlModel, meshElementSelection]);
+  const selectedMeshPoints = useMemo(
+    () => currentMeshElementSelection
+      ? selectedMeshElementPoints(currentMeshElementSelection).map((point) => (
+          new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
+        ))
+      : [],
+    [coordinateTransform, currentMeshElementSelection]
+  );
+  const selectedMeshFaceGeometry = useMemo(() => {
+    if (currentMeshElementSelection?.kind !== 'face' || selectedMeshPoints.length !== 3) return null;
+    const faceGeometry = new BufferGeometry();
+    faceGeometry.setAttribute('position', new Float32BufferAttribute(
+      selectedMeshPoints.flatMap((point) => [point.x, point.y, point.z]),
+      3
+    ));
+    faceGeometry.computeVertexNormals();
+    return faceGeometry;
+  }, [currentMeshElementSelection?.kind, selectedMeshPoints]);
+  useEffect(() => () => selectedMeshFaceGeometry?.dispose(), [selectedMeshFaceGeometry]);
 
   const selectedMarker = useMemo(() => {
     if (
@@ -660,6 +706,37 @@ function LoadedCadMesh({
         meshRef={meshRef}
         cadSelectionData={cadPart?.faceTessellation ? { part: cadPart, coordinateTransform } : undefined}
         onSurfacePick={(point, event) => {
+          if (meshElementPickingEnabled && importedStlModel && meshElementEditMode !== 'off') {
+            const triangleIndex = event.faceIndex;
+            const positions = geometry.getAttribute('position');
+            if (triangleIndex === undefined || triangleIndex === null || !positions) return;
+            const indices = geometry.index
+              ? [
+                  geometry.index.getX(triangleIndex * 3),
+                  geometry.index.getX(triangleIndex * 3 + 1),
+                  geometry.index.getX(triangleIndex * 3 + 2)
+                ]
+              : [triangleIndex * 3, triangleIndex * 3 + 1, triangleIndex * 3 + 2];
+            if (indices.some((index) => index < 0 || index >= positions.count)) return;
+            const triangleMm = indices.map((index) => (
+              new Vector3(positions.getX(index), positions.getY(index), positions.getZ(index))
+                .applyMatrix4(inverseCoordinateTransform)
+            )).map((vertex) => ({ x: vertex.x, y: vertex.y, z: vertex.z })) as MeshElementSelection['triangleMm'];
+            const sourcePoint = point.clone().applyMatrix4(inverseCoordinateTransform);
+            selectMeshElement({
+              revision: importedStlModel.revision,
+              sourcePartId: 'uploaded-model',
+              kind: meshElementEditMode,
+              triangleIndex,
+              elementIndex: nearestMeshElementIndex(meshElementEditMode, triangleMm, {
+                x: sourcePoint.x,
+                y: sourcePoint.y,
+                z: sourcePoint.z
+              }),
+              triangleMm
+            });
+            return;
+          }
           if (cadPart?.faceTessellation && (cadFaceSelectionMode === 'click' || cadFaceSelectionMode === 'edge' || cadFaceSelectionMode === 'edge-chain') && cadResult) {
             const faceRange = findCadFaceRangeByTriangleIndex(cadPart.faceTessellation, event.faceIndex);
             if (!faceRange) return;
@@ -790,6 +867,39 @@ function LoadedCadMesh({
           }
         }}
       />
+      {currentMeshElementSelection?.kind === 'vertex' && selectedMeshPoints[0] && (
+        <mesh position={selectedMeshPoints[0]} renderOrder={12}>
+          <sphereGeometry args={[0.9, 20, 14]} />
+          <meshStandardMaterial
+            color="#fff4b0"
+            emissive="#f6b819"
+            emissiveIntensity={1.8}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      )}
+      {currentMeshElementSelection?.kind === 'edge' && selectedMeshPoints.length === 2 && (
+        <Line
+          points={selectedMeshPoints}
+          color="#ffd447"
+          lineWidth={5}
+          depthTest={false}
+          renderOrder={12}
+        />
+      )}
+      {selectedMeshFaceGeometry && (
+        <mesh geometry={selectedMeshFaceGeometry} renderOrder={12}>
+          <meshBasicMaterial
+            color="#ffd447"
+            transparent
+            opacity={0.58}
+            side={2}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      )}
       {highlightGeometry && (
         <mesh geometry={highlightGeometry} renderOrder={5}>
           <meshStandardMaterial

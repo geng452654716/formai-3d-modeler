@@ -1154,3 +1154,51 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .object-color-field input { width: 30px; height: 25px; padding: 2px; border: 1px solid #3a3d42; border-radius: 4px; background: #191b1e; }
 .object-color-field code { color: #777c83; font-size: 7px; }
 .object-transform-reset { width: 100%; margin-top: 9px; }
+
+.mesh-element-edit-panel {
+  position: absolute;
+  top: 64px;
+  right: 14px;
+  z-index: 7;
+  width: 310px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid #3a3d43;
+  border-radius: 9px;
+  color: #b8bbc0;
+  background: rgba(23, 24, 27, .96);
+  box-shadow: 0 12px 35px rgba(0, 0, 0, .3);
+  backdrop-filter: blur(16px);
+}
+.mesh-element-edit-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 10px 11px; border-bottom: 1px solid #34373c; }
+.mesh-element-edit-panel header > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.mesh-element-edit-panel header strong { display: flex; align-items: center; gap: 5px; color: #e1e3df; font-size: 10px; }
+.mesh-element-edit-panel header span { color: #777c84; font-size: 7px; }
+.mesh-element-exit { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid #3a3d42; border-radius: 5px; color: #858a91; background: #202226; cursor: pointer; }
+.mesh-element-exit:hover { color: #f3bc56; border-color: rgba(229, 157, 30, .6); }
+.mesh-element-mode-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 10px 10px 8px; }
+.mesh-element-mode-row button, .mesh-element-actions button, .mesh-element-blocked button { min-height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #3a3d42; border-radius: 5px; color: #92969c; background: #202226; font-family: inherit; font-size: 8px; cursor: pointer; }
+.mesh-element-mode-row button:hover, .mesh-element-mode-row button.is-active { color: #f3bc56; border-color: rgba(229, 157, 30, .65); background: rgba(132, 83, 14, .22); }
+.mesh-element-mode-row button:disabled, .mesh-element-actions button:disabled { cursor: not-allowed; opacity: .42; }
+.mesh-element-selection-summary { margin: 0 10px 9px; padding: 7px 8px; border: 1px dashed #41444a; border-radius: 5px; color: #858a92; background: #1b1d20; font-size: 8px; line-height: 1.45; }
+.mesh-element-selection-summary.has-selection { color: #f0bc5a; border-color: rgba(229, 157, 30, .6); background: rgba(132, 83, 14, .14); }
+.mesh-element-displacement-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 0 10px 10px; }
+.mesh-element-displacement-grid label { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: #888d94; font-size: 7px; }
+.mesh-element-displacement-grid label > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px; }
+.mesh-element-displacement-grid input { width: 100%; min-width: 0; height: 27px; box-sizing: border-box; border: 1px solid #383b40; border-radius: 4px; padding: 0 5px; color: #d1d3d1; background: #191b1e; font-family: inherit; font-size: 8px; }
+.mesh-element-displacement-grid small { color: #666b72; font-size: 7px; }
+.mesh-element-actions { display: grid; grid-template-columns: 1.4fr 1fr; gap: 6px; padding: 0 10px 8px; }
+.mesh-element-actions .mesh-element-apply { color: #2a2112; border-color: #d29424; background: #e0a12e; font-weight: 700; }
+.mesh-element-actions .mesh-element-apply:hover:not(:disabled) { background: #efb442; }
+.mesh-element-validation, .mesh-element-error { margin: 0 10px 7px; font-size: 7px; line-height: 1.45; }
+.mesh-element-validation { color: #d5a44d; }
+.mesh-element-error { color: #e58b8b; }
+.mesh-element-edit-panel footer { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 9px; border-top: 1px solid #303238; color: #6f747c; background: rgba(18, 19, 22, .55); font-size: 7px; line-height: 1.4; }
+.mesh-element-blocked { display: flex; flex-direction: column; gap: 5px; margin: 10px; padding: 9px; border: 1px solid rgba(218, 153, 46, .42); border-radius: 6px; background: rgba(117, 76, 15, .14); }
+.mesh-element-blocked strong { color: #e2b45e; font-size: 9px; }
+.mesh-element-blocked span { color: #96999e; font-size: 8px; line-height: 1.45; }
+.mesh-element-blocked button { margin-top: 3px; color: #efba58; border-color: rgba(218, 153, 46, .5); }
+
+@media (max-width: 1180px) {
+  .mesh-element-edit-panel { width: 280px; }
+}

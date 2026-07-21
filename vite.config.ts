@@ -11,6 +11,7 @@ const workerPath = resolve(projectRoot, 'modeling/generate_model.py');
 const splitWorkerPath = resolve(projectRoot, 'modeling/split_and_cap.py');
 const wallThicknessWorkerPath = resolve(projectRoot, 'modeling/wall_thickness_analysis.py');
 const localStlEditWorkerPath = resolve(projectRoot, 'modeling/local_stl_edit.py');
+const meshElementEditWorkerPath = resolve(projectRoot, 'modeling/edit_mesh_element.py');
 const localCadFeatureWorkerPath = resolve(projectRoot, 'modeling/local_cad_feature.py');
 const cadSurfaceHitWorkerPath = resolve(projectRoot, 'modeling/resolve_cad_surface_hit.py');
 const pythonPath = resolve(projectRoot, 'modeling/.venv/bin/python');
@@ -21,6 +22,7 @@ const resultFileNames = [
   'imported-model-result.json',
   'wall-thickness-result.json',
   'local-stl-edit-result.json',
+  'mesh-element-edit-result.json',
   'local-cad-feature-result.json',
   'local-cad-feature-preflight-result.json'
 ];
@@ -205,6 +207,7 @@ function generatedFiles() {
     'imported-model-result.json',
     'manufacturing-result.json',
     'local-stl-edit-result.json',
+    'mesh-element-edit-result.json',
     'local-cad-feature-result.json',
     'local-cad-feature-preflight-result.json'
   ]) {
@@ -445,6 +448,58 @@ function runLocalStlEditWorker(body: {
       if (code === 0) resolvePromise();
       else rejectPromise(new Error(stderr.trim() || `局部 STL 修改 Worker 退出，状态码：${code}`));
     });
+  });
+}
+
+function runMeshElementEditWorker(body: {
+  sourcePartId?: string;
+  selectionRevision?: string;
+  elementKind?: string;
+  triangleIndex?: number;
+  elementIndex?: number;
+  deltaXmm?: number;
+  deltaYmm?: number;
+  deltaZmm?: number;
+}) {
+  if (body.sourcePartId !== 'uploaded-model') throw new Error('网格元素编辑只允许当前上传模型');
+  if (typeof body.selectionRevision !== 'string' || !body.selectionRevision.trim() || body.selectionRevision.length > 200) {
+    throw new Error('网格元素选择修订号无效，请重新选择');
+  }
+  if (!['vertex', 'edge', 'face'].includes(body.elementKind ?? '')) throw new Error('网格元素类型无效');
+  if (!Number.isInteger(body.triangleIndex) || body.triangleIndex! < 0 || body.triangleIndex! > 5_000_000) {
+    throw new Error('三角面索引无效，请重新选择');
+  }
+  if (!Number.isInteger(body.elementIndex) || body.elementIndex! < 0 || body.elementIndex! > 2) {
+    throw new Error('网格元素索引无效，请重新选择');
+  }
+  if (body.elementKind === 'face' && body.elementIndex !== 0) throw new Error('三角面元素索引无效');
+  const displacement = [body.deltaXmm, body.deltaYmm, body.deltaZmm];
+  if (displacement.some((value) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 500)) {
+    throw new Error('网格元素每轴位移必须是 -500 至 500 毫米的有限数值');
+  }
+  if (displacement.every((value) => Math.abs(value!) < 1e-9)) throw new Error('请至少输入一个非零位移');
+  if (!existsSync(meshElementEditWorkerPath)) throw new Error(`未找到网格元素编辑 Worker：${meshElementEditWorkerPath}`);
+  if (!existsSync(pythonPath)) throw new Error(`CAD Python 环境不可用：${pythonPath}`);
+  const sourcePath = readImportedModelSourceFile();
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const process = spawn(pythonPath, [
+      meshElementEditWorkerPath,
+      '--input', sourcePath,
+      '--output', artifactsDirectory,
+      '--selection-revision', body.selectionRevision!.trim(),
+      '--kind', body.elementKind!,
+      '--triangle-index', String(body.triangleIndex),
+      '--element-index', String(body.elementIndex),
+      '--delta-x', String(body.deltaXmm),
+      '--delta-y', String(body.deltaYmm),
+      '--delta-z', String(body.deltaZmm)
+    ], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    process.on('error', rejectPromise);
+    process.on('close', (code) => code === 0
+      ? resolvePromise()
+      : rejectPromise(new Error(stderr.trim() || `网格元素编辑 Worker 退出，状态码：${code}`)));
   });
 }
 
@@ -805,6 +860,22 @@ function cadWorkerPlugin(): Plugin {
               status: 'error',
               message: error instanceof Error ? error.message : '上传 STL 局部修改失败'
             });
+          } finally {
+            generating = false;
+          }
+          return;
+        }
+
+        if (url.pathname === '/api/model/mesh-element-edit' && request.method === 'POST') {
+          while (generating) await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+          generating = true;
+          try {
+            const body = await readJsonBody(request) as Parameters<typeof runMeshElementEditWorker>[0];
+            await runMeshElementEditWorker(body);
+            const result = JSON.parse(readFileSync(resolve(artifactsDirectory, 'mesh-element-edit-result.json'), 'utf8')) as Record<string, unknown>;
+            writeJson(response, 200, result);
+          } catch (error) {
+            writeJson(response, 400, { status: 'error', message: error instanceof Error ? error.message : '上传 STL 网格元素位移失败' });
           } finally {
             generating = false;
           }

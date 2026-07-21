@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ImageCalibration, ReferenceImageAnalysis } from '../model/imageRecognition';
 import type { ImportedStlModel } from '../model/importedModel';
 import type { LocalStlEditRequest, LocalStlEditResult } from '../model/localStlEdit';
+import type { MeshElementEditResult, MeshElementMoveRequest } from '../model/meshElementEdit';
 import type {
   CodexLocalCadFeaturePlan,
   LocalCadFeaturePreflightResult,
@@ -294,6 +295,35 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
   const result = await response.json() as LocalStlEditResult | { message?: string };
   if (!response.ok || !('status' in result) || result.status !== 'ok') {
     throw new Error('message' in result && result.message ? result.message : '上传 STL 局部修改失败');
+  }
+  return result;
+}
+
+
+/** 对任意上传 STL 的单个顶点、边或三角面执行安全位移。 */
+export async function runMeshElementEdit(request: MeshElementMoveRequest) {
+  const payload = {
+    sourcePartId: request.selection.sourcePartId,
+    selectionRevision: request.selection.revision,
+    elementKind: request.selection.kind,
+    triangleIndex: request.selection.triangleIndex,
+    elementIndex: request.selection.elementIndex,
+    deltaXmm: request.displacementMm.x,
+    deltaYmm: request.displacementMm.y,
+    deltaZmm: request.displacementMm.z
+  };
+  if (isDesktopRuntime()) {
+    return invoke<MeshElementEditResult>('run_mesh_element_edit', payload);
+  }
+
+  const response = await fetch('/api/model/mesh-element-edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json() as MeshElementEditResult | { message?: string };
+  if (!response.ok || !('status' in result) || result.status !== 'ok') {
+    throw new Error('message' in result && result.message ? result.message : '上传 STL 网格元素位移失败');
   }
   return result;
 }
