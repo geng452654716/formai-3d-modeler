@@ -25,6 +25,7 @@ from face_tessellation_mapping import build_face_tessellation
 from local_cad_feature_core import (
     apply_edge_feature,
     apply_planar_feature,
+    describe_surface_geometry_type,
     validate_edge_feature_inputs,
     validate_planar_feature_inputs,
 )
@@ -257,17 +258,19 @@ def edit_cad_feature(
     requested_geometry_type = (surface_geometry_type or descriptor_geometry_type).strip()
     if requested_geometry_type != descriptor_geometry_type:
         raise ValueError(
-            f"请求曲面类型 {requested_geometry_type} 与稳定面类型 {descriptor_geometry_type} 不一致，请重新点击目标面"
+            f"请求曲面类型{describe_surface_geometry_type(requested_geometry_type)}与稳定面类型"
+            f"{describe_surface_geometry_type(descriptor_geometry_type)}不一致，请重新点击目标面"
         )
     if edge_operation and descriptor_geometry_type != "PLANE":
         raise ValueError("稳定 CAD 边圆角和倒角第一版只支持平面所属边")
     if not edge_operation and descriptor_geometry_type != "PLANE":
-        if operation not in ("add-cylinder", "cut-cylinder"):
+        if operation not in ("add-cylinder", "cut-cylinder", "cut-slot"):
             raise ValueError(
-                f"当前选中的是 {descriptor_geometry_type} 曲面；第一版曲面局部特征只支持圆形凸台或圆孔"
+                f"当前选中的是{describe_surface_geometry_type(descriptor_geometry_type)}；"
+                "第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔"
             )
         if surface_uv is None or len(surface_uv) != 2 or not all(math.isfinite(value) for value in surface_uv):
-            raise ValueError("曲面圆形局部特征缺少有限的真实 UV，请重新点击目标面")
+            raise ValueError("曲面局部特征缺少有限的真实 UV，请重新点击目标面")
 
     step_file = _plain_file_name(target_part.get("stepFile"), "目标零件 STEP ")
     stl_file = _plain_file_name(target_part.get("stlFile"), "目标零件 STL ")
@@ -498,8 +501,8 @@ def edit_cad_feature(
             "faceMatching": target_face_matching,
             "updatedCadResult": manifest,
             "limitations": [
-                "第一版支持稳定平面轮廓与整面特征、曲面圆形凸台或圆孔，以及点击单条稳定 CAD 边执行圆角或倒角",
-                "曲面圆形特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；通孔只放行局部壁厚附近的正常出口接触",
+                "第一版支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔或受限槽孔，以及点击单条稳定 CAD 边执行圆角或倒角",
+                "曲面局部特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；槽孔按长度一半的包络半径保守检查，通孔只放行局部壁厚附近的正常出口接触",
                 "稳定面和面内稳定边 ID 使用几何签名匹配第一版，不是 OpenCascade 原生永久拓扑命名",
                 "triangleIndex 只对同一次生成的选择网格有效，修改后必须重新选择",
                 "局部特征记录会在参数化整模重建时按顺序安全重放；稳定面、记录中心或法线不一致时会拒绝重建",

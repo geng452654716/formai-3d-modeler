@@ -4,6 +4,8 @@ import {
   buildLocalCadFeatureRequest,
   buildLocalCadFeatureRequestFromPlan,
   createLocalCadFeaturePreview,
+  describeCadEdgeGeometryType,
+  describeCadSurfaceGeometryType,
   describeLocalCadFeaturePreview
 } from './localCadFeature';
 
@@ -78,7 +80,14 @@ const edgeSelection: CadFaceSelectionContext = {
 };
 
 describe('稳定 CAD 面局部特征请求', () => {
-  it('只为曲面圆形特征创建绑定修订和真实法线的中文预览', () => {
+  it('把底层面和边的几何枚举转换为中文显示名称', () => {
+    expect(describeCadSurfaceGeometryType('CYLINDER')).toBe('圆柱面');
+    expect(describeCadSurfaceGeometryType('UNKNOWN')).toBe('未知曲面');
+    expect(describeCadEdgeGeometryType('LINE')).toBe('直线边');
+    expect(describeCadEdgeGeometryType('UNKNOWN')).toBe('未知曲线边');
+  });
+
+  it('为曲面圆孔和槽孔创建绑定修订与真实法线的中文预览', () => {
     const curvedSelection: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER', stableId: 'face-cylinder' }],
@@ -108,6 +117,16 @@ describe('稳定 CAD 面局部特征请求', () => {
       selection,
       '在这里开一个直径 4 毫米、深 6 毫米的圆孔'
     ))).toBeNull();
+    const slotPreview = createLocalCadFeaturePreview(buildLocalCadFeatureRequest(
+      curvedSelection,
+      '开长 14 毫米、宽 5 毫米、深 4 毫米、旋转 25 度的槽孔'
+    ));
+    expect(slotPreview?.request).toMatchObject({
+      operation: 'cut-slot', widthMm: 5, lengthMm: 14, depthMm: 4, rotationDeg: 25
+    });
+    expect(describeLocalCadFeaturePreview(slotPreview!)).toBe(
+      '曲面槽孔预览：宽 5.00 毫米、长 14.00 毫米、深 4.00 毫米，旋转 25.00 度；沿真实内法线显示。'
+    );
   });
 
   it('从点击平面和中文圆孔指令创建毫米制请求', () => {
@@ -147,7 +166,7 @@ describe('稳定 CAD 面局部特征请求', () => {
       .toThrow('尚未完成 OpenCascade 精确解析');
   });
 
-  it('接受曲面圆形凸台和圆孔，并携带真实曲面类型与 UV', () => {
+  it('接受曲面圆形凸台、圆孔和受限槽孔，并携带真实曲面类型与 UV', () => {
     const curved: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }]
@@ -159,19 +178,20 @@ describe('稳定 CAD 面局部特征请求', () => {
     });
     const hole = buildLocalCadFeatureRequest(curved, '开直径 3 毫米、深 4 毫米的圆孔');
     expect(hole).toMatchObject({ operation: 'cut-cylinder', radiusMm: 1.5, depthMm: 4 });
+    const slot = buildLocalCadFeatureRequest(curved, '开长 8 毫米、宽 3 毫米、深 4 毫米、旋转 15 度的槽孔');
+    expect(slot).toMatchObject({ operation: 'cut-slot', widthMm: 3, lengthMm: 8, depthMm: 4, rotationDeg: 15 });
   });
 
-  it('拒绝曲面矩形、槽孔、整面偏移和曲面边特征', () => {
+  it('拒绝曲面矩形、整面偏移和曲面边特征', () => {
     const curved: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }]
     };
     for (const command of [
       '增加宽 10 毫米、高 6 毫米、凸出 2 毫米的矩形凸台',
-      '开长 14 毫米、宽 5 毫米、深 4 毫米的槽孔',
       '将整个面向外拉伸 2 毫米'
     ]) {
-      expect(() => buildLocalCadFeatureRequest(curved, command)).toThrow('只支持圆形凸台或圆孔');
+      expect(() => buildLocalCadFeatureRequest(curved, command)).toThrow('只支持圆形凸台、圆孔或受限槽孔');
     }
     const curvedEdge: CadFaceSelectionContext = {
       ...edgeSelection,

@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { Bot, CornerDownLeft, MapPin, Sparkles, X } from 'lucide-react';
+import { describeCadEdgeGeometryType, describeCadSurfaceGeometryType } from '../model/localCadFeature';
 import { WALL_THICKNESS_LABELS } from '../model/wallThickness';
 import { useModelStore } from '../store/useModelStore';
 
@@ -14,7 +15,8 @@ const cadFaceSuggestions = [
 ];
 const cadCurvedFaceSuggestions = [
   '在这里增加直径 4 毫米、高 2 毫米的圆形凸台',
-  '在这里开一个直径 3 毫米、深 4 毫米的圆孔'
+  '在这里开一个直径 3 毫米、深 4 毫米的圆孔',
+  '在这里开一个宽 3 毫米、长 6 毫米、深 4 毫米、旋转 20 度的槽孔'
 ];
 const cadEdgeSuggestions = ['将这条边做 2 毫米圆角', '将这条边做 1 毫米倒角'];
 const uploadedStlSuggestions = ['这里增加一个直径 8 毫米、高 2 毫米的凸台', '这里开一个直径 4 毫米、深 6 毫米的孔'];
@@ -94,8 +96,8 @@ export function CommandPanel() {
             <span>
               {cadFaceSelection.hit
                 ? cadFaceSelection.edge
-                  ? `${cadFaceSelection.edge.stableEdgeId} · ${cadFaceSelection.edge.geometryType} · 长度 ${cadFaceSelection.edge.lengthMm.toFixed(2)} 毫米 · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
-                  : `${cadFaceSelection.hit.stableId} · ${cadFaceSelection.faces[0]?.geometryType ?? '未知曲面'} · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
+                  ? `${cadFaceSelection.edge.stableEdgeId} · ${describeCadEdgeGeometryType(cadFaceSelection.edge.geometryType)} · 长度 ${cadFaceSelection.edge.lengthMm.toFixed(2)} 毫米 · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
+                  : `${cadFaceSelection.hit.stableId} · ${describeCadSurfaceGeometryType(cadFaceSelection.faces[0]?.geometryType ?? '')} · 点击坐标 ${cadFaceSelection.hit.pointMm.x.toFixed(2)}，${cadFaceSelection.hit.pointMm.y.toFixed(2)}，${cadFaceSelection.hit.pointMm.z.toFixed(2)} 毫米。`
                 : `稳定面：${cadFaceSelection.faces.slice(0, 3).map((face) => face.stableId).join('、')}${cadFaceSelection.faces.length > 3 ? '…' : ''}。`}
               {cadHitResolutionText && ` ${cadHitResolutionText}`}
               {cadFaceSelection.selectionMode === 'edge'
@@ -103,7 +105,7 @@ export function CommandPanel() {
                 : cadFaceSelection.selectionMode === 'click' && cadFaceSelection.faces.length === 1 && cadFaceSelection.faces[0]?.geometryType === 'PLANE'
                 ? ' 精确解析完成后可在此平面执行圆形或矩形凸台、圆孔、矩形孔、槽孔，以及整面向外拉伸或向内偏移；修改后需要重新选择，因为原三角面索引会失效。'
                 : cadFaceSelection.selectionMode === 'click'
-                  ? ' 精确解析完成后可沿真实外法线生成受限圆形凸台或圆孔；曲面矩形、槽孔、整面偏移和曲面边特征仍未实现。修改后需要重新选择。'
+                  ? ' 精确解析完成后可沿真实法线生成受限圆形凸台、圆孔或槽孔；槽孔是点击位置切平面安全近似，不是任意曲面贴合轮廓。曲面矩形、整面偏移和曲面边特征仍未实现，修改后需要重新选择。'
                   : ' 框选多面作为 AI 局部范围上下文，不执行局部布尔；下一条指令仍会附带局部截图、零件尺寸与摄像机上下文。'}
             </span>
           </div>

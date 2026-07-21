@@ -1,10 +1,10 @@
-"""Normalize persisted diagnostics for non-planar circular CAD features."""
+"""Normalize persisted diagnostics for supported non-planar CAD features."""
 
 from __future__ import annotations
 
 from typing import Any
 
-CURVED_CIRCULAR_OPERATIONS = {"add-cylinder", "cut-cylinder"}
+CURVED_DIAGNOSTIC_OPERATIONS = {"add-cylinder", "cut-cylinder", "cut-slot"}
 
 
 def build_curved_feature_diagnostics(
@@ -12,8 +12,8 @@ def build_curved_feature_diagnostics(
     surface_geometry_type: str,
     validation: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Return a JSON-safe diagnostic snapshot only for circular features on curved faces."""
-    if operation not in CURVED_CIRCULAR_OPERATIONS or surface_geometry_type == "PLANE":
+    """Return a JSON-safe diagnostic snapshot for supported features on curved faces."""
+    if operation not in CURVED_DIAGNOSTIC_OPERATIONS or surface_geometry_type == "PLANE":
         return None
     interfering_ids = validation.get("interferingStableFaceIds")
     return {

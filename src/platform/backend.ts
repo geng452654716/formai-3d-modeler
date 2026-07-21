@@ -290,7 +290,7 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
   return result;
 }
 
-/** 对点击选中的稳定 CAD 面执行受限局部特征；曲面第一版只允许圆形凸台或圆孔。 */
+/** 对点击选中的稳定 CAD 面执行受限局部特征；曲面第一版允许圆形凸台、圆孔或受限槽孔。 */
 export async function runLocalCadFeature(request: LocalCadFeatureRequest) {
   const payload = {
     selectionRevision: request.selectionRevision,

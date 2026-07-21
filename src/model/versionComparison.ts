@@ -58,6 +58,9 @@ export interface OpeningModeDifference {
 export type CurvedFeatureField =
   | 'radiusMm'
   | 'diameterMm'
+  | 'widthMm'
+  | 'lengthMm'
+  | 'rotationDeg'
   | 'depthMm'
   | 'surfaceGeometryType'
   | 'maximumAbsCurvaturePerMm'
@@ -149,7 +152,10 @@ const CURVED_FEATURE_FIELDS: ReadonlyArray<{
   value: (feature: VersionCurvedFeature) => unknown;
 }> = [
   { key: 'radiusMm', label: '工具半径', value: (feature) => feature.radiusMm },
-  { key: 'diameterMm', label: '工具直径', value: (feature) => feature.radiusMm * 2 },
+  { key: 'diameterMm', label: '工具直径', value: (feature) => feature.radiusMm === null ? null : feature.radiusMm * 2 },
+  { key: 'widthMm', label: '槽孔宽度', value: (feature) => feature.widthMm },
+  { key: 'lengthMm', label: '槽孔长度', value: (feature) => feature.lengthMm },
+  { key: 'rotationDeg', label: '旋转角', value: (feature) => feature.operation === 'cut-slot' ? feature.rotationDeg : null },
   { key: 'depthMm', label: '作用深度', value: (feature) => feature.depthMm },
   { key: 'surfaceGeometryType', label: '曲面类型', value: (feature) => feature.surfaceGeometryType },
   { key: 'maximumAbsCurvaturePerMm', label: '最大绝对曲率', value: (feature) => feature.diagnostics.maximumAbsCurvaturePerMm },
@@ -168,15 +174,21 @@ const CURVED_FEATURE_FIELDS: ReadonlyArray<{
   { key: 'contactSampleCount', label: '接触采样数量', value: (feature) => feature.diagnostics.contactSampleCount }
 ];
 
-const CURVED_FEATURE_SUMMARY_FIELDS = CURVED_FEATURE_FIELDS.filter(({ key }) => (
-  key === 'diameterMm'
-  || key === 'depthMm'
-  || key === 'curvatureRatio'
-  || key === 'localWallThicknessMm'
-  || key === 'remainingWallMm'
-  || key === 'throughCut'
-  || key === 'interferenceCheckPassed'
-));
+function curvedFeatureSummaryFields(feature: VersionCurvedFeature) {
+  const dimensionalKeys: CurvedFeatureField[] = feature.operation === 'cut-slot'
+    ? ['widthMm', 'lengthMm', 'rotationDeg']
+    : ['diameterMm'];
+  const summaryKeys = new Set<CurvedFeatureField>([
+    ...dimensionalKeys,
+    'depthMm',
+    'curvatureRatio',
+    'localWallThicknessMm',
+    'remainingWallMm',
+    'throughCut',
+    'interferenceCheckPassed'
+  ]);
+  return CURVED_FEATURE_FIELDS.filter(({ key }) => summaryKeys.has(key));
+}
 
 const OPENING_SUMMARY_FIELDS = OPENING_FIELDS.filter(({ key }) => (
   key === 'face'
@@ -330,6 +342,7 @@ function formatCurvedFeatureValue(field: CurvedFeatureField, value: unknown) {
   }
   if (typeof value === 'number') {
     if (field === 'curvatureRatio') return formatNumber(value);
+    if (field === 'rotationDeg') return `${formatNumber(value)} 度`;
     if (field === 'maximumAbsCurvaturePerMm') return `${formatNumber(value)} /毫米`;
     if (field === 'interferingFaceCount' || field === 'contactFaceCount' || field === 'contactSampleCount') {
       return `${formatNumber(value)} 个`;
@@ -340,7 +353,8 @@ function formatCurvedFeatureValue(field: CurvedFeatureField, value: unknown) {
 }
 
 function curvedFeatureLabel(feature: VersionCurvedFeature) {
-  return feature.operation === 'add-cylinder' ? '曲面圆形凸台' : '曲面圆孔';
+  if (feature.operation === 'add-cylinder') return '曲面圆形凸台';
+  return feature.operation === 'cut-slot' ? '曲面槽孔' : '曲面圆孔';
 }
 
 function compareCurvedFeatureFields(
@@ -364,7 +378,7 @@ function describeAddedOrRemovedCurvedFeature(
   feature: VersionCurvedFeature,
   changeType: 'added' | 'removed'
 ): CurvedFeatureFieldDifference[] {
-  return CURVED_FEATURE_SUMMARY_FIELDS.map(({ key, label, value }) => ({
+  return curvedFeatureSummaryFields(feature).map(({ key, label, value }) => ({
     field: key,
     label,
     before: changeType === 'added' ? '不存在' : formatCurvedFeatureValue(key, value(feature)),

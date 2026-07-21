@@ -49,6 +49,9 @@ function curvedFeature(
     stableFaceId: '稳定面-1',
     surfaceGeometryType: 'CYLINDER',
     radiusMm: 2,
+    widthMm: null,
+    lengthMm: null,
+    rotationDeg: 0,
     depthMm: 3,
     command: '增加曲面圆形凸台',
     diagnostics: {
@@ -109,6 +112,38 @@ describe('模型版本参数与开孔差异对比', () => {
       { id: '新增特征', label: '曲面圆形凸台', changeType: 'added' }
     ]);
     expect(result.hasDifferences).toBe(true);
+  });
+
+
+  it('比较曲面槽孔尺寸、旋转角并使用中文标签', () => {
+    const before = curvedFeature({
+      id: '创建修订-槽孔:主体:cut-slot',
+      operation: 'cut-slot',
+      radiusMm: null,
+      widthMm: 3,
+      lengthMm: 8,
+      rotationDeg: 0,
+      command: '创建曲面槽孔'
+    });
+    const after = curvedFeature({
+      ...before,
+      widthMm: 4,
+      lengthMm: 10,
+      rotationDeg: 25
+    });
+    const [difference] = compareModelVersions(
+      version('基础', { curvedFeatures: [before] }),
+      version('当前', { curvedFeatures: [after] })
+    ).curvedFeatureDifferences;
+
+    expect(difference.label).toBe('曲面槽孔');
+    expect(difference.changedFields).toEqual(expect.arrayContaining(['槽孔宽度', '槽孔长度', '旋转角']));
+    expect(difference.fields).toContainEqual({
+      field: 'rotationDeg',
+      label: '旋转角',
+      before: '0 度',
+      after: '25 度'
+    });
   });
 
   it('比较工具尺寸、曲率、壁厚、通孔与干涉诊断', () => {

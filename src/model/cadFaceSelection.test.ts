@@ -88,6 +88,8 @@ describe('CAD 稳定面局部选择', () => {
 
     const text = buildCadFaceSelectionCommandContext(selection);
     expect(text).toContain('主体/face-a');
+    expect(text).toContain('主体/face-a(平面，面积 20.000 平方毫米)');
+    expect(text).not.toContain('(PLANE，');
     expect(text).toContain('OpenCascade 精确命中坐标=(1.000, 2.000, 3.000) 毫米');
     expect(text).toContain('真实外法向=(0.000000, 0.000000, 1.000000)');
     expect(text).toContain('曲面 UV=(1.000000000, 2.000000000)');

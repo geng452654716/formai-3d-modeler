@@ -1,4 +1,4 @@
-"""真实 OpenCascade 曲面圆形凸台与圆孔的受限执行测试。"""
+"""真实 OpenCascade 曲面圆形与槽孔局部特征的受限执行测试。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,17 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
             target_face_descriptor=cls.descriptor,
         )
 
-    def apply(self, operation: str, *, radius: float = 2.0, depth: float = 4.0, uv=None):
+    def apply(
+        self,
+        operation: str,
+        *,
+        radius: float = 2.0,
+        width: float = 3.0,
+        length: float = 6.0,
+        depth: float = 4.0,
+        rotation: float = 0.0,
+        uv=None,
+    ):
         point = self.hit["projectedPointMm"]
         normal = self.hit["outwardNormal"]
         surface_uv = uv or (self.hit["surfaceUv"]["u"], self.hit["surfaceUv"]["v"])
@@ -43,10 +53,11 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
             (point["x"], point["y"], point["z"]),
             (normal["x"], normal["y"], normal["z"]),
             radius_mm=radius if operation in ("add-cylinder", "cut-cylinder") else None,
-            width_mm=4.0 if operation == "add-rectangle" else None,
+            width_mm=width if operation in ("add-rectangle", "cut-slot") else None,
             height_mm=4.0 if operation == "add-rectangle" else None,
-            length_mm=None,
+            length_mm=length if operation == "cut-slot" else None,
             depth_mm=depth,
+            rotation_deg=rotation,
             target_face_descriptor=self.descriptor,
             surface_geometry_type="CYLINDER",
             surface_uv=surface_uv,
@@ -76,8 +87,24 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
         self.assertEqual(len(_closed_solids(result["model"], "曲面圆孔结果")), 1)
         self.assertTrue(result["validation"]["watertight"])
 
+
+    def test_curved_slot_decreases_volume_and_uses_conservative_envelope(self) -> None:
+        result = self.apply("cut-slot", width=3.0, length=6.0, depth=4.0, rotation=25.0)
+        self.assertLess(result["validation"]["volumeDeltaMm3"], 0)
+        self.assertAlmostEqual(result["validation"]["curvatureRatio"], 0.3, places=6)
+        self.assertAlmostEqual(result["validation"]["localWallThicknessMm"], 20.0, places=4)
+        self.assertAlmostEqual(result["validation"]["remainingWallMm"], 16.0, places=4)
+        self.assertFalse(result["validation"]["throughCut"])
+        self.assertTrue(result["validation"]["interferenceCheckPassed"])
+        self.assertTrue(result["model"].val().isValid())
+        self.assertEqual(len(_closed_solids(result["model"], "曲面槽孔结果")), 1)
+
+    def test_curved_slot_length_over_curvature_limit_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "槽孔包络半径与局部曲率之比"):
+            self.apply("cut-slot", width=3.0, length=12.0, depth=4.0)
+
     def test_curved_rectangle_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "只支持圆形凸台或圆孔"):
+        with self.assertRaisesRegex(ValueError, "只支持圆形凸台、圆孔或受限槽孔"):
             self.apply("add-rectangle", depth=2.0)
 
     def test_missing_uv_is_rejected(self) -> None:
@@ -345,6 +372,39 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
         self.assertAlmostEqual(diagnostics["remainingWallMm"], 16.0, places=4)
         self.assertFalse(diagnostics["throughCut"])
         self.assertTrue(diagnostics["interferenceCheckPassed"])
+
+    def test_curved_slot_replays_and_rebuilds_diagnostics(self) -> None:
+        point = self.hit["projectedPointMm"]
+        normal = self.hit["outwardNormal"]
+        surface_uv = self.hit["surfaceUv"]
+        feature = {
+            "operation": "cut-slot",
+            "partId": "generic-part",
+            "stableFaceId": self.descriptor["stableId"],
+            "centerMm": {"x": point["x"], "y": point["y"], "z": point["z"]},
+            "outwardNormal": {"x": normal["x"], "y": normal["y"], "z": normal["z"]},
+            "surfaceGeometryType": "CYLINDER",
+            "surfaceUv": {"u": surface_uv["u"], "v": surface_uv["v"]},
+            "radiusMm": None,
+            "widthMm": 3.0,
+            "heightMm": None,
+            "lengthMm": 6.0,
+            "depthMm": 4.0,
+            "rotationDeg": 15.0,
+            "targetFace": self.descriptor,
+            "command": "创建曲面槽孔",
+            "curvedDiagnostics": {"curvatureRatio": 999},
+        }
+
+        _, replayed = _replay_local_features(
+            {"generic-part": self.model}, {"generic-part": self.faces}, [feature],
+            "curved-slot-replay-revision",
+        )
+
+        self.assertEqual(replayed[0]["operation"], "cut-slot")
+        self.assertEqual(replayed[0]["replayStatus"], "replayed")
+        self.assertAlmostEqual(replayed[0]["curvedDiagnostics"]["curvatureRatio"], 0.3, places=6)
+        self.assertTrue(replayed[0]["curvedDiagnostics"]["interferenceCheckPassed"])
 
     def test_curved_feature_replay_without_uv_is_rejected_before_model_change(self) -> None:
         point = self.hit["projectedPointMm"]

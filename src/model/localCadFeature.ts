@@ -50,7 +50,7 @@ export interface LocalCadFeatureRequest {
 
 export type LocalCadFeaturePreviewStatus = 'ready' | 'executing' | 'blocked' | 'failed';
 
-/** 曲面圆形特征的客户端预览；只绑定当前 CAD 修订、零件和稳定面。 */
+/** 曲面受限局部特征的客户端预览；只绑定当前 CAD 修订、零件和稳定面。 */
 export interface LocalCadFeaturePreview {
   request: LocalCadFeatureRequest;
   kind: 'additive' | 'subtractive';
@@ -103,14 +103,17 @@ export interface LocalCadFeatureResult {
   limitations: string[];
 }
 
-/** 第一版只为非平面上的圆形凸台和圆孔创建确定性三维预览。 */
+/** 第一版为非平面上的圆形凸台、圆孔和切平面槽孔创建确定性三维预览。 */
 export function createLocalCadFeaturePreview(
   request: LocalCadFeatureRequest
 ): LocalCadFeaturePreview | null {
+  const circular = request.operation === 'add-cylinder' || request.operation === 'cut-cylinder';
+  const slot = request.operation === 'cut-slot';
   if (
     request.surfaceGeometryType === 'PLANE'
-    || (request.operation !== 'add-cylinder' && request.operation !== 'cut-cylinder')
-    || request.radiusMm === null
+    || (!circular && !slot)
+    || (circular && request.radiusMm === null)
+    || (slot && (request.widthMm === null || request.lengthMm === null))
   ) return null;
   return {
     request,
@@ -121,11 +124,50 @@ export function createLocalCadFeaturePreview(
 }
 
 export function describeLocalCadFeaturePreview(preview: LocalCadFeaturePreview) {
-  const diameterMm = preview.request.radiusMm === null ? 0 : preview.request.radiusMm * 2;
-  if (preview.kind === 'additive') {
-    return `曲面圆形凸台预览：直径 ${diameterMm.toFixed(2)} 毫米，高 ${preview.request.depthMm.toFixed(2)} 毫米；沿真实外法线显示。`;
+  const request = preview.request;
+  if (request.operation === 'cut-slot') {
+    return `曲面槽孔预览：宽 ${request.widthMm!.toFixed(2)} 毫米、长 ${request.lengthMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；沿真实内法线显示。`;
   }
-  return `曲面圆孔预览：直径 ${diameterMm.toFixed(2)} 毫米，深 ${preview.request.depthMm.toFixed(2)} 毫米；沿真实内法线显示。`;
+  const diameterMm = request.radiusMm === null ? 0 : request.radiusMm * 2;
+  if (preview.kind === 'additive') {
+    return `曲面圆形凸台预览：直径 ${diameterMm.toFixed(2)} 毫米，高 ${request.depthMm.toFixed(2)} 毫米；沿真实外法线显示。`;
+  }
+  return `曲面圆孔预览：直径 ${diameterMm.toFixed(2)} 毫米，深 ${request.depthMm.toFixed(2)} 毫米；沿真实内法线显示。`;
+}
+
+const SURFACE_GEOMETRY_LABELS: Record<string, string> = {
+  PLANE: '平面',
+  CYLINDER: '圆柱面',
+  CONE: '圆锥面',
+  SPHERE: '球面',
+  TORUS: '圆环面',
+  BEZIER: '贝塞尔曲面',
+  BSPLINE: 'B 样条曲面',
+  REVOLUTION: '旋转曲面',
+  EXTRUSION: '拉伸曲面',
+  OTHER: '其他曲面'
+};
+
+const EDGE_GEOMETRY_LABELS: Record<string, string> = {
+  LINE: '直线边',
+  CIRCLE: '圆弧边',
+  ELLIPSE: '椭圆边',
+  HYPERBOLA: '双曲线边',
+  PARABOLA: '抛物线边',
+  BEZIER: '贝塞尔曲线边',
+  BSPLINE: 'B 样条曲线边',
+  OFFSET: '偏移曲线边',
+  OTHER: '其他曲线边'
+};
+
+/** 把 OpenCascade 曲面类型转换成界面可读的中文名称。 */
+export function describeCadSurfaceGeometryType(geometryType: string) {
+  return SURFACE_GEOMETRY_LABELS[geometryType] ?? '未知曲面';
+}
+
+/** 把 OpenCascade 边类型转换成界面可读的中文名称。 */
+export function describeCadEdgeGeometryType(geometryType: string) {
+  return EDGE_GEOMETRY_LABELS[geometryType] ?? '未知曲线边';
 }
 
 function finiteVector(vector: { x: number; y: number; z: number }) {
@@ -139,7 +181,7 @@ function validatedSelection(selection: CadFaceSelectionContext) {
   const face = selection.faces[0];
   const hit = selection.hit;
   if (selection.selectionMode === 'edge' && face.geometryType !== 'PLANE') {
-    throw new Error(`当前边所属面是 ${face.geometryType} 曲面；第一版圆角和倒角只支持平面所属边`);
+    throw new Error(`当前边所属面是${describeCadSurfaceGeometryType(face.geometryType)}；第一版圆角和倒角只支持平面所属边`);
   }
   if (face.partId !== hit.partId || face.stableId !== hit.stableId) {
     throw new Error('稳定面描述与点击命中不一致，请重新点击目标平面');
@@ -234,8 +276,8 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
     throw new Error('圆角或倒角必须先使用“点击选边”选择一条稳定 CAD 边');
   }
   const curvedFace = face.geometryType !== 'PLANE';
-  if (curvedFace && plan.operation !== 'add-cylinder' && plan.operation !== 'cut-cylinder') {
-    throw new Error(`当前选中的是 ${face.geometryType} 曲面；第一版曲面局部特征只支持圆形凸台或圆孔`);
+  if (curvedFace && !['add-cylinder', 'cut-cylinder', 'cut-slot'].includes(plan.operation)) {
+    throw new Error(`当前选中的是${describeCadSurfaceGeometryType(face.geometryType)}；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔`);
   }
   return {
     sourceKind: 'cad-part', selectionRevision: selection.revision, partId: face.partId,

@@ -14,9 +14,14 @@ from cad_surface_hit_core import resolve_surface_hit
 from face_geometry_signatures import match_shape_faces_with_sources
 from face_tessellation_mapping import export_face_tessellation_mapping
 from local_cad_feature import _export_assembly_3mf, edit_cad_feature
+from local_cad_feature_core import describe_surface_geometry_type
 
 
 class LocalCadFeatureTests(unittest.TestCase):
+    def test_surface_geometry_type_uses_chinese_display_name(self) -> None:
+        self.assertEqual(describe_surface_geometry_type("CYLINDER"), "圆柱面")
+        self.assertEqual(describe_surface_geometry_type("UNKNOWN"), "未知曲面")
+
     def _project(self, root: Path) -> tuple[dict[str, object], dict[str, object]]:
         main = cq.Workplane("XY").box(20, 16, 10)
         companion = cq.Workplane("XY").box(8, 8, 4).translate((0, 0, 9))
@@ -225,6 +230,34 @@ class LocalCadFeatureTests(unittest.TestCase):
             ):
                 self.assertTrue((root / name).is_file())
                 self.assertGreater((root / name).stat().st_size, 0)
+
+    def test_curved_slot_worker_persists_dimensions_and_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face, hit = self._curved_project(root)
+            point = hit["projectedPointMm"]
+            normal = hit["outwardNormal"]
+            surface_uv = hit["surfaceUv"]
+
+            result = edit_cad_feature(
+                root, "cut-slot", manifest["revision"], "curved-part", face["stableId"],
+                (point["x"], point["y"], point["z"]),
+                (normal["x"], normal["y"], normal["z"]),
+                None, 4.0, "在曲面这里开宽 3 毫米、长 6 毫米、深 4 毫米的槽孔",
+                width_mm=3.0, length_mm=6.0, rotation_deg=20.0,
+                surface_geometry_type="CYLINDER",
+                surface_uv=(surface_uv["u"], surface_uv["v"]),
+            )
+
+            feature = result["updatedCadResult"]["localFeatures"][0]
+            self.assertEqual(feature["operation"], "cut-slot")
+            self.assertEqual(feature["widthMm"], 3.0)
+            self.assertEqual(feature["lengthMm"], 6.0)
+            self.assertEqual(feature["rotationDeg"], 20.0)
+            self.assertAlmostEqual(feature["curvedDiagnostics"]["curvatureRatio"], 0.3, places=6)
+            self.assertTrue(feature["curvedDiagnostics"]["interferenceCheckPassed"])
+            persisted = json.loads((root / "generation-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["localFeatures"][0]["curvedDiagnostics"], feature["curvedDiagnostics"])
 
     def test_adds_circular_boss_and_refreshes_manifest_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

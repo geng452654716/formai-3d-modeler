@@ -369,7 +369,93 @@ function curvedFeatureResult(): LocalCadFeatureResult {
     },
     faceMatching: updatedCurvedCadResult.faceMatching!,
     updatedCadResult: updatedCurvedCadResult,
-    limitations: ['第一版曲面局部特征只支持圆形凸台或圆孔']
+    limitations: ['第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔']
+  };
+}
+
+
+const updatedCurvedSlotCadResult = {
+  ...curvedCadResult,
+  revision: 'curved-slot-after',
+  localFeatures: [{
+    revision: 'curved-slot-after',
+    createdRevision: 'curved-slot-created',
+    operation: 'cut-slot',
+    partId: 'custom-part',
+    stableFaceId: 'face-curved',
+    centerMm: { x: 10, y: 0, z: 0 },
+    outwardNormal: { x: 1, y: 0, z: 0 },
+    surfaceGeometryType: 'CYLINDER',
+    surfaceUv: { u: 0, v: 10 },
+    radiusMm: null,
+    widthMm: 3,
+    lengthMm: 6,
+    depthMm: 4,
+    rotationDeg: 20,
+    command: '在这里开一个宽 3 毫米、长 6 毫米、深 4 毫米、旋转 20 度的槽孔',
+    stableFaceStatus: 'inherited',
+    curvedDiagnostics: {
+      maximumAbsCurvaturePerMm: 0.1,
+      minimumCurvatureRadiusMm: 10,
+      curvatureRatio: 0.3,
+      localWallThicknessMm: 20,
+      remainingWallMm: 16,
+      throughCut: false,
+      interferenceCheckPassed: true,
+      selfIntersectionDetected: false,
+      adjacentFaceInterferenceDetected: false,
+      interferingFaceCount: 0,
+      interferingStableFaceIds: [] as string[],
+      minimumInterferenceDistanceMm: null,
+      contactFaceCount: 1,
+      contactSampleCount: 9
+    }
+  }]
+} satisfies CadGenerationResult;
+
+/** 构造曲面槽孔成功结果，验证尺寸、真实 UV 和诊断快照贯穿命令链。 */
+function curvedSlotFeatureResult(): LocalCadFeatureResult {
+  return {
+    status: 'ok',
+    revision: updatedCurvedSlotCadResult.revision,
+    operation: 'cut-slot',
+    command: '在这里开一个宽 3 毫米、长 6 毫米、深 4 毫米、旋转 20 度的槽孔',
+    partId: 'custom-part',
+    stableFaceId: 'face-curved',
+    stableFaceStatus: 'inherited',
+    outputs: updatedCurvedSlotCadResult.outputs,
+    units: 'mm',
+    kernel: updatedCurvedSlotCadResult.kernel,
+    validation: {
+      valid: true,
+      watertight: true,
+      solidCount: 1,
+      pointDistanceMm: 0,
+      normalDot: 1,
+      volumeBeforeMm3: 6_283.19,
+      volumeAfterMm3: 6_211.19,
+      volumeDeltaMm3: -72,
+      boundsMm: { x: 20, y: 20, z: 20 },
+      surfaceGeometryType: 'CYLINDER',
+      surfaceUv: { u: 0, v: 10 },
+      maximumAbsCurvaturePerMm: 0.1,
+      minimumCurvatureRadiusMm: 10,
+      curvatureRatio: 0.3,
+      localWallThicknessMm: 20,
+      remainingWallMm: 16,
+      throughCut: false,
+      interferenceCheckPassed: true,
+      selfIntersectionDetected: false,
+      adjacentFaceInterferenceDetected: false,
+      interferingFaceCount: 0,
+      interferingStableFaceIds: [],
+      minimumInterferenceDistanceMm: null,
+      contactFaceCount: 1,
+      contactSampleCount: 9
+    },
+    faceMatching: updatedCurvedSlotCadResult.faceMatching!,
+    updatedCadResult: updatedCurvedSlotCadResult,
+    limitations: ['曲面槽孔是点击位置切平面上的安全近似，不是任意曲面贴合轮廓']
   };
 }
 
@@ -528,6 +614,65 @@ describe('稳定 CAD 局部特征命令链', () => {
     });
 
     const fixtureIds = updatedCurvedCadResult.localFeatures[0].curvedDiagnostics.interferingStableFaceIds;
+    fixtureIds.push('后续修改');
+    try {
+      expect(savedFeature?.diagnostics.interferingStableFaceIds).toEqual([]);
+    } finally {
+      fixtureIds.pop();
+    }
+  });
+
+
+  it('曲面槽孔成功后保存宽度、长度、旋转角、真实 UV 和深拷贝诊断快照', async () => {
+    useModelStore.setState({
+      cadResult: curvedCadResult,
+      cadFaceSelection: curvedSelection
+    });
+    backendMocks.runLocalCadFeature.mockResolvedValue(curvedSlotFeatureResult());
+
+    await useModelStore.getState().executeCommand('在这里开一个宽 3 毫米、长 6 毫米、深 4 毫米、旋转 20 度的槽孔');
+
+    expect(backendMocks.runLocalCadFeature).toHaveBeenCalledWith(expect.objectContaining({
+      selectionRevision: 'curved-feature-before',
+      partId: 'custom-part',
+      stableFaceId: 'face-curved',
+      operation: 'cut-slot',
+      center: { xMm: 10, yMm: 0, zMm: 0 },
+      hitNormal: { x: 1, y: 0, z: 0 },
+      surfaceGeometryType: 'CYLINDER',
+      surfaceUv: { u: 0, v: 10 },
+      radiusMm: null,
+      widthMm: 3,
+      lengthMm: 6,
+      depthMm: 4,
+      rotationDeg: 20
+    }));
+    const state = useModelStore.getState();
+    expect(state.cadResult).toBe(updatedCurvedSlotCadResult);
+    expect(state.localCadFeaturePreview).toBeNull();
+    expect(state.messages.at(-1)?.content).toContain('曲率比 0.300');
+    expect(state.messages.at(-1)?.content).toContain('检查 1 个接触面和 9 个接触采样');
+    const savedFeature = state.versions.at(-1)?.curvedFeatures?.[0];
+    expect(savedFeature).toMatchObject({
+      id: 'curved-slot-created:custom-part:cut-slot',
+      operation: 'cut-slot',
+      partId: 'custom-part',
+      stableFaceId: 'face-curved',
+      radiusMm: null,
+      widthMm: 3,
+      lengthMm: 6,
+      rotationDeg: 20,
+      depthMm: 4,
+      diagnostics: {
+        curvatureRatio: 0.3,
+        localWallThicknessMm: 20,
+        remainingWallMm: 16,
+        interferenceCheckPassed: true,
+        interferingStableFaceIds: []
+      }
+    });
+
+    const fixtureIds = updatedCurvedSlotCadResult.localFeatures[0].curvedDiagnostics!.interferingStableFaceIds;
     fixtureIds.push('后续修改');
     try {
       expect(savedFeature?.diagnostics.interferingStableFaceIds).toEqual([]);

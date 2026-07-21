@@ -7,7 +7,7 @@ import {
   OrbitControls,
   PerspectiveCamera
 } from '@react-three/drei';
-import { BufferGeometry, Color, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
+import { BufferGeometry, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
 import type { Camera } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
@@ -29,7 +29,7 @@ import {
 } from '../model/cadFaceSelection';
 import { createLidGeometry, createTrayGeometry } from '../model/createEnclosureGeometry';
 import { getOuterDimensions } from '../model/defaults';
-import { describeLocalCadFeaturePreview } from '../model/localCadFeature';
+import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
 import { calculateVersionComparisonOffsets } from '../model/versionGeometryComparison';
 import {
@@ -44,6 +44,69 @@ import { useModelStore } from '../store/useModelStore';
 const CAD_FACE_SELECTION_LIMIT = 100;
 const CAD_FACE_CANDIDATE_LIMIT = 400;
 const CAD_FACE_VISIBILITY_SAMPLES = 4;
+
+interface FeaturePreviewGeometryProps {
+  profile: 'circle' | 'slot';
+  radiusMm: number | null;
+  widthMm: number | null;
+  lengthMm: number | null;
+  depthMm: number;
+  rotationRad: number;
+  color: string;
+}
+
+/** 创建与 OpenCascade 切平面槽孔一致的长圆形挤出预览，不把它描述成任意曲面贴合轮廓。 */
+function createSlotPreviewGeometry(widthMm: number, lengthMm: number, depthMm: number) {
+  const radius = widthMm / 2;
+  const straightHalf = Math.max(0, (lengthMm - widthMm) / 2);
+  const shape = new Shape();
+  shape.moveTo(-straightHalf, -radius);
+  shape.lineTo(straightHalf, -radius);
+  shape.absarc(straightHalf, 0, radius, -Math.PI / 2, Math.PI / 2, false);
+  shape.lineTo(-straightHalf, radius);
+  shape.absarc(-straightHalf, 0, radius, Math.PI / 2, Math.PI * 1.5, false);
+  const geometry = new ExtrudeGeometry(shape, { depth: depthMm, steps: 1, bevelEnabled: false, curveSegments: 24 });
+  geometry.translate(0, 0, -depthMm / 2);
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+}
+
+function FeaturePreviewGeometry(props: FeaturePreviewGeometryProps) {
+  const geometry = useMemo(() => props.profile === 'slot'
+    ? createSlotPreviewGeometry(props.widthMm!, props.lengthMm!, props.depthMm)
+    : new CylinderGeometry(props.radiusMm!, props.radiusMm!, props.depthMm, 48), [
+      props.depthMm, props.lengthMm, props.profile, props.radiusMm, props.widthMm
+    ]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  const rotation = props.profile === 'slot' ? [0, props.rotationRad, 0] as const : undefined;
+  return (
+    <>
+      <mesh renderOrder={8} rotation={rotation}>
+        <primitive object={geometry} attach="geometry" />
+        <meshStandardMaterial
+          color={props.color}
+          emissive={props.color}
+          emissiveIntensity={0.35}
+          transparent
+          opacity={0.28}
+          depthTest={false}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh renderOrder={9} rotation={rotation} scale={1.002}>
+        <primitive object={geometry} attach="geometry" />
+        <meshBasicMaterial
+          color={props.color}
+          transparent
+          opacity={0.82}
+          wireframe
+          depthTest={false}
+          depthWrite={false}
+        />
+      </mesh>
+    </>
+  );
+}
 
 function captureCanvasRegion(
   canvas: HTMLCanvasElement,
@@ -385,7 +448,8 @@ function LoadedCadMesh({
       || request.partId !== cadPart.id
       || request.stableFaceId !== selectedFace?.stableId
       || request.partId !== selectedFace.partId
-      || request.radiusMm === null
+      || (request.operation !== 'cut-slot' && request.radiusMm === null)
+      || (request.operation === 'cut-slot' && (request.widthMm === null || request.lengthMm === null))
     ) return null;
     const direction = new Vector3(request.hitNormal.x, request.hitNormal.y, request.hitNormal.z);
     if (direction.lengthSq() < 1e-12) return null;
@@ -400,8 +464,12 @@ function LoadedCadMesh({
     return {
       center,
       quaternion,
+      profile: request.operation === 'cut-slot' ? 'slot' as const : 'circle' as const,
       radiusMm: request.radiusMm,
+      widthMm: request.widthMm,
+      lengthMm: request.lengthMm,
       depthMm: request.depthMm,
+      rotationRad: request.rotationDeg * Math.PI / 180,
       color: preview.status === 'blocked'
         ? '#f59e0b'
         : preview.status === 'failed' ? '#fb7185'
@@ -440,7 +508,7 @@ function LoadedCadMesh({
             const screenshot = captureClickScreenshot(gl.domElement, event.clientX, event.clientY);
             const faceDescriptor = cadPart.faces?.find((face) => face.stableId === faceRange.stableId);
             if (cadFaceSelectionMode === 'edge' && faceRange.geometryType !== 'PLANE') {
-              addAssistantMessage(`当前点击边所属面是 ${faceRange.geometryType} 曲面；第一版圆角和倒角只支持平面所属边，请选择平面边界。`);
+              addAssistantMessage(`当前点击边所属面是${describeCadSurfaceGeometryType(faceRange.geometryType)}；第一版圆角和倒角只支持平面所属边，请选择平面边界。`);
               return;
             }
             const nearestEdge = cadFaceSelectionMode === 'edge'
@@ -538,39 +606,15 @@ function LoadedCadMesh({
           quaternion={featurePreviewTransform.quaternion}
           renderOrder={8}
         >
-          <mesh renderOrder={8}>
-            <cylinderGeometry args={[
-              featurePreviewTransform.radiusMm,
-              featurePreviewTransform.radiusMm,
-              featurePreviewTransform.depthMm,
-              48
-            ]} />
-            <meshStandardMaterial
-              color={featurePreviewTransform.color}
-              emissive={featurePreviewTransform.color}
-              emissiveIntensity={0.35}
-              transparent
-              opacity={0.28}
-              depthTest={false}
-              depthWrite={false}
-            />
-          </mesh>
-          <mesh renderOrder={9} scale={1.002}>
-            <cylinderGeometry args={[
-              featurePreviewTransform.radiusMm,
-              featurePreviewTransform.radiusMm,
-              featurePreviewTransform.depthMm,
-              48
-            ]} />
-            <meshBasicMaterial
-              color={featurePreviewTransform.color}
-              transparent
-              opacity={0.82}
-              wireframe
-              depthTest={false}
-              depthWrite={false}
-            />
-          </mesh>
+          <FeaturePreviewGeometry
+            profile={featurePreviewTransform.profile}
+            radiusMm={featurePreviewTransform.radiusMm}
+            widthMm={featurePreviewTransform.widthMm}
+            lengthMm={featurePreviewTransform.lengthMm}
+            depthMm={featurePreviewTransform.depthMm}
+            rotationRad={featurePreviewTransform.rotationRad}
+            color={featurePreviewTransform.color}
+          />
         </group>
       )}
       {cadFaceSelection?.selectionMode === 'click'

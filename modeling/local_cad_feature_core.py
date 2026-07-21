@@ -35,6 +35,24 @@ Operation = Literal[
     "chamfer-edge",
 ]
 
+SURFACE_GEOMETRY_LABELS = {
+    "PLANE": "平面",
+    "CYLINDER": "圆柱面",
+    "CONE": "圆锥面",
+    "SPHERE": "球面",
+    "TORUS": "圆环面",
+    "BEZIER": "贝塞尔曲面",
+    "BSPLINE": "B 样条曲面",
+    "REVOLUTION": "旋转曲面",
+    "EXTRUSION": "拉伸曲面",
+    "OTHER": "其他曲面",
+}
+
+
+def describe_surface_geometry_type(geometry_type: str) -> str:
+    """把 OpenCascade 曲面枚举转换为可直接展示的中文名称。"""
+    return SURFACE_GEOMETRY_LABELS.get(geometry_type, "未知曲面")
+
 
 def _unit_vector(values: tuple[float, float, float], label: str) -> cq.Vector:
     if len(values) != 3 or not all(math.isfinite(value) for value in values):
@@ -303,8 +321,13 @@ def _surface_point_and_normal(face: cq.Face, surface_uv: tuple[float, float]) ->
     )
 
 
-def _curvature_diagnostics(face: cq.Face, surface_uv: tuple[float, float], radius_mm: float) -> dict[str, float | None]:
-    """计算曲面局部曲率并限制圆形工具相对曲率半径的尺寸。"""
+def _curvature_diagnostics(
+    face: cq.Face,
+    surface_uv: tuple[float, float],
+    footprint_radius_mm: float,
+    profile_label: str,
+) -> dict[str, float | None]:
+    """计算曲面局部曲率，并限制切平面轮廓包络相对曲率半径的尺寸。"""
     u, v = surface_uv
     surface = BRep_Tool.Surface_s(face.wrapped)
     properties = GeomLProp_SLProps(surface, float(u), float(v), 2, 1e-9)
@@ -313,12 +336,12 @@ def _curvature_diagnostics(face: cq.Face, surface_uv: tuple[float, float], radiu
     maximum_abs = max(abs(float(properties.MaxCurvature())), abs(float(properties.MinCurvature())))
     if not math.isfinite(maximum_abs):
         raise ValueError("当前曲面的局部曲率不是有限值，已拒绝自动修改")
-    curvature_ratio = radius_mm * maximum_abs
+    curvature_ratio = footprint_radius_mm * maximum_abs
     if curvature_ratio > 0.5 + 1e-9:
         minimum_radius = 1.0 / maximum_abs if maximum_abs > 1e-12 else math.inf
         raise ValueError(
-            f"圆形区域半径与局部曲率之比为 {curvature_ratio:.3f}，超过 0.500；"
-            f"当前最小曲率半径约 {minimum_radius:.3f} 毫米，请减小圆形半径"
+            f"{profile_label}包络半径与局部曲率之比为 {curvature_ratio:.3f}，超过 0.500；"
+            f"当前最小曲率半径约 {minimum_radius:.3f} 毫米，请减小{profile_label}尺寸"
         )
     return {
         "maximumAbsCurvaturePerMm": maximum_abs,
@@ -327,8 +350,14 @@ def _curvature_diagnostics(face: cq.Face, surface_uv: tuple[float, float], radiu
     }
 
 
-def _validate_curved_circle_footprint(face: cq.Face, point: cq.Vector, outward: cq.Vector, radius_mm: float) -> None:
-    """把切平面圆周投影回同一裁剪面，拒绝越过裁剪边界的曲面圆形区域。"""
+def _validate_curved_profile_footprint(
+    face: cq.Face,
+    point: cq.Vector,
+    outward: cq.Vector,
+    footprint_radius_mm: float,
+    profile_label: str,
+) -> None:
+    """把切平面轮廓包络投影回同一裁剪面，保守拒绝越过裁剪边界的曲面特征。"""
     surface = BRep_Tool.Surface_s(face.wrapped)
     tolerance = max(float(BRep_Tool.Tolerance_s(face.wrapped)) * 10.0, 1e-7)
     x_direction = _local_x_direction(outward, 0.0)
@@ -336,8 +365,8 @@ def _validate_curved_circle_footprint(face: cq.Face, point: cq.Vector, outward: 
     for index in range(24):
         angle = math.tau * index / 24.0
         sample = point.add(
-            x_direction.multiply(radius_mm * math.cos(angle)).add(
-                y_direction.multiply(radius_mm * math.sin(angle))
+            x_direction.multiply(footprint_radius_mm * math.cos(angle)).add(
+                y_direction.multiply(footprint_radius_mm * math.sin(angle))
             )
         )
         projection = GeomAPI_ProjectPointOnSurf(gp_Pnt(sample.x, sample.y, sample.z), surface, 1e-9)
@@ -351,7 +380,7 @@ def _validate_curved_circle_footprint(face: cq.Face, point: cq.Vector, outward: 
                 inside = True
                 break
         if not inside:
-            raise ValueError("圆形作用区域会越过当前曲面的裁剪边界，请缩小半径或远离边界重新点击")
+            raise ValueError(f"{profile_label}作用区域会越过当前曲面的裁剪边界，请缩小尺寸或远离边界重新点击")
 
 
 def _local_wall_thickness(model: cq.Workplane, point: cq.Vector, outward: cq.Vector, diagonal: float) -> float | None:
@@ -385,28 +414,29 @@ def _contact_axis_samples(contact: cq.Shape, point: cq.Vector, direction: cq.Vec
     return samples
 
 
-def _curved_circle_interference_diagnostics(
+def _curved_profile_interference_diagnostics(
     model: cq.Workplane,
     target_face: cq.Face,
     current_faces: list[dict[str, Any]],
     tool: cq.Workplane,
     point: cq.Vector,
     outward: cq.Vector,
-    operation: Literal["add-cylinder", "cut-cylinder"],
-    radius_mm: float,
+    operation: Literal["add-cylinder", "cut-cylinder", "cut-slot"],
+    footprint_radius_mm: float,
+    profile_label: str,
     depth_mm: float,
     curvature_ratio: float,
     local_wall_thickness: float,
     through_cut: bool,
 ) -> dict[str, Any]:
-    """在写入布尔结果前检查圆形工具是否再次撞回目标曲面或碰到非目标面。"""
+    """在写入布尔结果前检查曲面轮廓工具是否再次撞回目标曲面或碰到非目标面。"""
     direction = outward if operation == "add-cylinder" else outward.multiply(-1.0)
-    root_allowance = max(0.1, radius_mm * max(curvature_ratio, 0.0) + 0.05)
+    root_allowance = max(0.1, footprint_radius_mm * max(curvature_ratio, 0.0) + 0.05)
     extent_tolerance = max(1e-4, min(0.05, depth_mm * 0.01))
     exit_allowance = max(root_allowance, 0.25)
     expected_exit_start = (
         local_wall_thickness - exit_allowance
-        if operation == "cut-cylinder" and through_cut
+        if operation in ("cut-cylinder", "cut-slot") and through_cut
         else math.inf
     )
     face_sources, _ = match_shape_faces_with_sources(model, current_faces)
@@ -453,19 +483,19 @@ def _curved_circle_interference_diagnostics(
         details: list[str] = []
         if self_intersection:
             nearest = min(self_intersection_distances)
-            details.append(f"圆形工具在距离点击位置约 {nearest:.3f} 毫米处再次接触目标曲面")
+            details.append(f"{profile_label}工具在距离点击位置约 {nearest:.3f} 毫米处再次接触目标曲面")
         if adjacent_face_interference:
             nearest = min(distance for _, distance in adjacent_interference)
             stable_ids = list(dict.fromkeys(stable_id for stable_id, _ in adjacent_interference))
             preview_ids = "、".join(stable_ids[:3])
             suffix = "等" if len(stable_ids) > 3 else ""
             details.append(
-                f"圆形工具在距离点击位置约 {nearest:.3f} 毫米处碰到 "
+                f"{profile_label}工具在距离点击位置约 {nearest:.3f} 毫米处碰到 "
                 f"{len(stable_ids)} 个非目标稳定面（{preview_ids}{suffix}）"
             )
         raise ValueError(
             f"曲面作用区域干涉检查未通过：{'；'.join(details)}。"
-            "已阻止写入模型，请减小半径或深度，或更换点击位置"
+            f"已阻止写入模型，请减小{profile_label}尺寸或深度，或更换点击位置"
         )
 
     return {
@@ -575,7 +605,7 @@ def apply_planar_feature(
     surface_geometry_type: str | None = None,
     surface_uv: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    """执行可验证的稳定面特征；曲面第一版只允许圆形凸台或圆孔。"""
+    """执行可验证的稳定面特征；曲面允许圆形凸台、圆孔和切平面安全近似槽孔。"""
     validate_planar_feature_inputs(
         operation,
         stable_face_id,
@@ -601,14 +631,18 @@ def apply_planar_feature(
     requested_geometry_type = (surface_geometry_type or geometry_type).strip()
     if requested_geometry_type != geometry_type:
         raise ValueError(
-            f"记录曲面类型 {requested_geometry_type} 与当前 OpenCascade 面类型 {geometry_type} 不一致，需要重新选择目标面"
+            f"记录曲面类型{describe_surface_geometry_type(requested_geometry_type)}与当前 OpenCascade 面类型"
+            f"{describe_surface_geometry_type(geometry_type)}不一致，需要重新选择目标面"
         )
     curved_face = geometry_type != "PLANE"
-    if curved_face and operation not in ("add-cylinder", "cut-cylinder"):
-        raise ValueError(f"当前稳定面是 {geometry_type} 曲面；第一版曲面局部特征只支持圆形凸台或圆孔")
+    if curved_face and operation not in ("add-cylinder", "cut-cylinder", "cut-slot"):
+        raise ValueError(
+            f"当前稳定面是{describe_surface_geometry_type(geometry_type)}；"
+            "第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔"
+        )
     if curved_face:
         if surface_uv is None:
-            raise ValueError("曲面圆形局部特征缺少真实 UV，请重新点击目标面")
+            raise ValueError("曲面局部特征缺少真实 UV，请重新点击目标面")
         point, outward = _surface_point_and_normal(target_face, surface_uv)
     else:
         normal_values = current_descriptor.get("normal")
@@ -641,8 +675,14 @@ def apply_planar_feature(
     remaining_wall: float | None = None
     through_cut = False
     if curved_face:
-        curvature = _curvature_diagnostics(target_face, surface_uv, float(radius_mm))
-        _validate_curved_circle_footprint(target_face, point, outward, float(radius_mm))
+        profile_label = "槽孔" if operation == "cut-slot" else "圆形"
+        footprint_radius_mm = float(length_mm) / 2.0 if operation == "cut-slot" else float(radius_mm)
+        curvature = _curvature_diagnostics(
+            target_face, surface_uv, footprint_radius_mm, profile_label
+        )
+        _validate_curved_profile_footprint(
+            target_face, point, outward, footprint_radius_mm, profile_label
+        )
         local_wall_thickness = _local_wall_thickness(model, point, outward, diagonal)
         if local_wall_thickness is None or not math.isfinite(local_wall_thickness):
             raise ValueError("无法沿真实内法线估算当前曲面的局部壁厚，已拒绝自动修改")
@@ -650,13 +690,13 @@ def apply_planar_feature(
             raise ValueError(
                 f"点击位置局部壁厚约 {local_wall_thickness:.3f} 毫米，小于曲面凸台要求的 0.800 毫米"
             )
-        if operation == "cut-cylinder":
+        if operation in ("cut-cylinder", "cut-slot"):
             through_cut = depth_mm >= local_wall_thickness - 1e-6
             if not through_cut:
                 remaining_wall = local_wall_thickness - depth_mm
                 if remaining_wall < 1.2:
                     raise ValueError(
-                        f"圆孔切除后预计剩余壁厚仅 {remaining_wall:.3f} 毫米，小于 1.200 毫米；请减小深度或改为通孔"
+                        f"{profile_label}切除后预计剩余壁厚仅 {remaining_wall:.3f} 毫米，小于 1.200 毫米；请减小深度或改为通孔"
                     )
 
     tool = _planar_tool(
@@ -683,7 +723,7 @@ def apply_planar_feature(
         "contactSampleCount": 0,
     }
     if curved_face:
-        interference = _curved_circle_interference_diagnostics(
+        interference = _curved_profile_interference_diagnostics(
             model,
             target_face,
             current_faces,
@@ -691,7 +731,8 @@ def apply_planar_feature(
             point,
             outward,
             operation,
-            float(radius_mm),
+            footprint_radius_mm,
+            profile_label,
             depth_mm,
             float(curvature["curvatureRatio"]),
             local_wall_thickness,

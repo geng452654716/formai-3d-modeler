@@ -1,18 +1,19 @@
 import type { CadGenerationResult } from './cad';
 import type { CurvedFeatureDiagnostics, VersionCurvedFeature } from './types';
 
-const circularOperations = new Set(['add-cylinder', 'cut-cylinder']);
+const diagnosticOperations = new Set(['add-cylinder', 'cut-cylinder', 'cut-slot']);
 
-/** 深拷贝曲面圆形局部特征，避免版本历史被后续 CAD 重建结果原地修改。 */
+/** 深拷贝曲面受限局部特征，避免版本历史被后续 CAD 重建结果原地修改。 */
 export function captureVersionCurvedFeatures(
   cadResult: Pick<CadGenerationResult, 'localFeatures'> | null
 ): VersionCurvedFeature[] {
   return (cadResult?.localFeatures ?? []).flatMap((feature) => {
     if (
-      !circularOperations.has(feature.operation)
+      !diagnosticOperations.has(feature.operation)
       || feature.surfaceGeometryType === 'PLANE'
-      || feature.radiusMm === null
       || !feature.curvedDiagnostics
+      || (feature.operation !== 'cut-slot' && feature.radiusMm === null)
+      || (feature.operation === 'cut-slot' && (feature.widthMm == null || feature.lengthMm == null))
     ) return [];
     const operation = feature.operation as VersionCurvedFeature['operation'];
     const diagnostics: CurvedFeatureDiagnostics = {
@@ -26,6 +27,9 @@ export function captureVersionCurvedFeatures(
       stableFaceId: feature.stableFaceId,
       surfaceGeometryType: feature.surfaceGeometryType ?? 'UNKNOWN',
       radiusMm: feature.radiusMm,
+      widthMm: feature.widthMm ?? null,
+      lengthMm: feature.lengthMm ?? null,
+      rotationDeg: feature.rotationDeg ?? 0,
       depthMm: feature.depthMm,
       command: feature.command,
       diagnostics

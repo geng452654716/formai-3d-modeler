@@ -41,6 +41,7 @@ import {
   buildLocalCadFeatureRequest,
   buildLocalCadFeatureRequestFromPlan,
   createLocalCadFeaturePreview,
+  describeCadSurfaceGeometryType,
   type LocalCadFeaturePreview
 } from '../model/localCadFeature';
 import type { VersionGeometryComparisonMode } from '../model/versionGeometryComparison';
@@ -1048,7 +1049,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           messages: state.messages.concat({
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: `${message}。已保留当前模型和稳定 CAD 局部选择；第一版支持点击稳定平面后生成局部轮廓或整面拉伸/偏移、点击曲面后生成受限圆形凸台或圆孔，也支持点击平面所属单条稳定边后执行圆角或倒角。`
+            content: `${message}。已保留当前模型和稳定 CAD 局部选择；第一版支持点击稳定平面后生成局部轮廓或整面拉伸/偏移、点击曲面后生成受限圆形凸台、圆孔或槽孔，也支持点击平面所属单条稳定边后执行圆角或倒角。`
           })
         }));
         return;
@@ -1058,7 +1059,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       if (preview) {
         set({
           localCadFeaturePreview: preview,
-          aiActivity: `${preview.kind === 'additive' ? '曲面圆形凸台' : '曲面圆孔'}三维预览已生成，正在自动执行`
+          aiActivity: `${preview.request.operation === 'cut-slot' ? '曲面槽孔' : preview.kind === 'additive' ? '曲面圆形凸台' : '曲面圆孔'}三维预览已生成，正在自动执行`
         });
         await waitForLocalCadFeaturePreviewFrame();
       }
@@ -1095,7 +1096,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         const edgeOperation = request.operation === 'fillet-edge' || request.operation === 'chamfer-edge';
         const targetSurfaceLabel = edgeOperation
           ? '边'
-          : request.surfaceGeometryType === 'PLANE' ? '平面' : `${request.surfaceGeometryType} 曲面`;
+          : describeCadSurfaceGeometryType(request.surfaceGeometryType);
         set((state) => ({
           aiActivity: `OpenCascade 正在沿稳定${targetSurfaceLabel}${operationLabel}`,
           localCadFeaturePreview: state.localCadFeaturePreview?.request === request
