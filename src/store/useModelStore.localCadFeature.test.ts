@@ -372,7 +372,7 @@ function curvedFeatureResult(): LocalCadFeatureResult {
     },
     faceMatching: updatedCurvedCadResult.faceMatching!,
     updatedCadResult: updatedCurvedCadResult,
-    limitations: ['第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔']
+    limitations: ['曲面圆形、矩形和槽孔均使用真实 UV 点击位置的安全近似']
   };
 }
 

@@ -265,19 +265,21 @@ def edit_cad_feature(
     if edge_operation and descriptor_geometry_type != "PLANE":
         raise ValueError("稳定 CAD 边圆角和倒角第一版只支持平面所属边")
     if not edge_operation and descriptor_geometry_type != "PLANE":
-        if operation not in ("add-cylinder", "cut-cylinder", "cut-slot"):
+        if operation not in (
+            "add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot"
+        ):
             raise ValueError(
                 f"当前选中的是{describe_surface_geometry_type(descriptor_geometry_type)}；"
-                "第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔"
+                "当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔"
             )
         if surface_uv is None or len(surface_uv) != 2 or not all(math.isfinite(value) for value in surface_uv):
             raise ValueError("曲面局部特征缺少有限的真实 UV，请重新点击目标面")
-        if operation == "cut-slot" and (
+        if operation in ("add-rectangle", "cut-rectangle", "cut-slot") and (
             surface_tangent_u is None
             or len(surface_tangent_u) != 3
             or not all(math.isfinite(value) for value in surface_tangent_u)
         ):
-            raise ValueError("曲面槽孔缺少有限的真实 U 切向，请重新点击目标面")
+            raise ValueError("曲面方向轮廓缺少有限的真实 U 切向，请重新点击目标面")
 
     step_file = _plain_file_name(target_part.get("stepFile"), "目标零件 STEP ")
     stl_file = _plain_file_name(target_part.get("stlFile"), "目标零件 STL ")
@@ -510,10 +512,11 @@ def edit_cad_feature(
             "faceMatching": target_face_matching,
             "updatedCadResult": manifest,
             "limitations": [
-                "第一版支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔或受限槽孔，以及点击单条稳定 CAD 边执行圆角或倒角",
-                "曲面局部特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；槽孔按长度一半的包络半径保守检查，通孔只放行局部壁厚附近的正常出口接触",
+                "支持稳定平面轮廓与整面特征、曲面圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔，以及点击单条稳定 CAD 边执行圆角或倒角",
+                "曲面局部特征会在布尔和文件写回前检查目标曲面回撞与非目标稳定面干涉；矩形按半对角线、槽孔按长度一半作为保守包络半径，通孔只放行局部壁厚附近的正常出口接触",
+                "曲面矩形和槽孔位于真实 UV 点击位置的切平面，0 度沿当前修订的真实 U 切向，不是沿任意曲面贴合或测地线轮廓",
                 "稳定面和面内稳定边 ID 使用几何签名匹配第一版，不是 OpenCascade 原生永久拓扑命名",
-                "triangleIndex 只对同一次生成的选择网格有效，修改后必须重新选择",
+                "triangleIndex、曲面 UV 和真实 U 切向只对当前修订有效，修改后必须重新选择",
                 "局部特征记录会在参数化整模重建时按顺序安全重放；稳定面、记录中心或法线不一致时会拒绝重建",
             ],
         }

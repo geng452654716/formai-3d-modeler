@@ -195,7 +195,7 @@ class CadSurfaceHitWorkerTests(unittest.TestCase):
             self.assertGreater(result["normalDot"], 0.99)
             self.assertIn("surfaceTangentU", result)
             self.assertIn(
-                "曲面点击上下文支持受限圆形凸台、圆孔和切平面槽孔；槽孔不代表支持任意曲面贴合轮廓、曲面边圆角或曲面参数直接编辑",
+                "曲面点击上下文支持受限圆形、矩形和切平面槽孔；矩形与槽孔不代表支持任意曲面贴合轮廓、曲面边圆角或曲面参数直接编辑",
                 result["limitations"],
             )
 

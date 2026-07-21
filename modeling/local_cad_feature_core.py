@@ -447,7 +447,7 @@ def _curved_profile_interference_diagnostics(
     tool: cq.Workplane,
     point: cq.Vector,
     outward: cq.Vector,
-    operation: Literal["add-cylinder", "cut-cylinder", "cut-slot"],
+    operation: Literal["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot"],
     footprint_radius_mm: float,
     profile_label: str,
     depth_mm: float,
@@ -456,13 +456,15 @@ def _curved_profile_interference_diagnostics(
     through_cut: bool,
 ) -> dict[str, Any]:
     """在写入布尔结果前检查曲面轮廓工具是否再次撞回目标曲面或碰到非目标面。"""
-    direction = outward if operation == "add-cylinder" else outward.multiply(-1.0)
+    adding = operation in ("add-cylinder", "add-rectangle")
+    cutting = operation in ("cut-cylinder", "cut-rectangle", "cut-slot")
+    direction = outward if adding else outward.multiply(-1.0)
     root_allowance = max(0.1, footprint_radius_mm * max(curvature_ratio, 0.0) + 0.05)
     extent_tolerance = max(1e-4, min(0.05, depth_mm * 0.01))
     exit_allowance = max(root_allowance, 0.25)
     expected_exit_start = (
         local_wall_thickness - exit_allowance
-        if operation in ("cut-cylinder", "cut-slot") and through_cut
+        if cutting and through_cut
         else math.inf
     )
     face_sources, _ = match_shape_faces_with_sources(model, current_faces)
@@ -637,7 +639,7 @@ def apply_planar_feature(
     surface_uv: tuple[float, float] | None = None,
     surface_tangent_u: tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
-    """执行可验证的稳定面特征；曲面允许圆形凸台、圆孔和切平面安全近似槽孔。"""
+    """执行可验证的稳定面特征；曲面允许圆形、矩形和槽孔的切平面安全近似。"""
     validate_planar_feature_inputs(
         operation,
         stable_face_id,
@@ -667,16 +669,19 @@ def apply_planar_feature(
             f"{describe_surface_geometry_type(geometry_type)}不一致，需要重新选择目标面"
         )
     curved_face = geometry_type != "PLANE"
-    if curved_face and operation not in ("add-cylinder", "cut-cylinder", "cut-slot"):
+    if curved_face and operation not in (
+        "add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot"
+    ):
         raise ValueError(
             f"当前稳定面是{describe_surface_geometry_type(geometry_type)}；"
-            "第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔"
+            "当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔"
         )
     if curved_face:
         if surface_uv is None:
             raise ValueError("曲面局部特征缺少真实 UV，请重新点击目标面")
         point, outward, exact_surface_tangent_u = _surface_frame(target_face, surface_uv)
-        if operation == "cut-slot" and surface_tangent_u is not None:
+        directional_profile = operation in ("add-rectangle", "cut-rectangle", "cut-slot")
+        if directional_profile and surface_tangent_u is not None:
             requested_tangent = _unit_vector(surface_tangent_u, "记录曲面 U 切向")
             tangent_dot = float(exact_surface_tangent_u.dot(requested_tangent))
             if tangent_dot < 0.8:
@@ -713,8 +718,15 @@ def apply_planar_feature(
     remaining_wall: float | None = None
     through_cut = False
     if curved_face:
-        profile_label = "槽孔" if operation == "cut-slot" else "圆形"
-        footprint_radius_mm = float(length_mm) / 2.0 if operation == "cut-slot" else float(radius_mm)
+        if operation == "cut-slot":
+            profile_label = "槽孔"
+            footprint_radius_mm = float(length_mm) / 2.0
+        elif operation in ("add-rectangle", "cut-rectangle"):
+            profile_label = "矩形"
+            footprint_radius_mm = math.hypot(float(width_mm), float(height_mm)) / 2.0
+        else:
+            profile_label = "圆形"
+            footprint_radius_mm = float(radius_mm)
         curvature = _curvature_diagnostics(
             target_face, surface_uv, footprint_radius_mm, profile_label
         )
@@ -724,11 +736,11 @@ def apply_planar_feature(
         local_wall_thickness = _local_wall_thickness(model, point, outward, diagonal)
         if local_wall_thickness is None or not math.isfinite(local_wall_thickness):
             raise ValueError("无法沿真实内法线估算当前曲面的局部壁厚，已拒绝自动修改")
-        if operation == "add-cylinder" and local_wall_thickness < 0.8:
+        if operation in ("add-cylinder", "add-rectangle") and local_wall_thickness < 0.8:
             raise ValueError(
                 f"点击位置局部壁厚约 {local_wall_thickness:.3f} 毫米，小于曲面凸台要求的 0.800 毫米"
             )
-        if operation in ("cut-cylinder", "cut-slot"):
+        if operation in ("cut-cylinder", "cut-rectangle", "cut-slot"):
             through_cut = depth_mm >= local_wall_thickness - 1e-6
             if not through_cut:
                 remaining_wall = local_wall_thickness - depth_mm
@@ -749,7 +761,11 @@ def apply_planar_feature(
         length_mm=length_mm,
         depth_mm=depth_mm,
         rotation_deg=rotation_deg,
-        surface_x_direction=exact_surface_tangent_u if curved_face and operation == "cut-slot" else None,
+        surface_x_direction=(
+            exact_surface_tangent_u
+            if curved_face and operation in ("add-rectangle", "cut-rectangle", "cut-slot")
+            else None
+        ),
     )
     interference = {
         "interferenceCheckPassed": None,

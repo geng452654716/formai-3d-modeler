@@ -87,7 +87,7 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(describeCadEdgeGeometryType('UNKNOWN')).toBe('未知曲线边');
   });
 
-  it('为曲面圆孔和槽孔创建绑定修订与真实法线的中文预览', () => {
+  it('为曲面圆孔、矩形和槽孔创建绑定修订与真实法线的中文预览', () => {
     const curvedSelection: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER', stableId: 'face-cylinder' }],
@@ -133,6 +133,20 @@ describe('稳定 CAD 面局部特征请求', () => {
     expect(describeLocalCadFeaturePreview(slotPreview!)).toBe(
       '曲面槽孔预览：宽 5.00 毫米、长 14.00 毫米、深 4.00 毫米，旋转 25.00 度；0 度沿真实 U 切向，沿真实内法线显示。'
     );
+    const rectanglePreview = createLocalCadFeaturePreview(buildLocalCadFeatureRequest(
+      curvedSelection,
+      '增加宽 5 毫米、高 3 毫米、凸出 2 毫米的矩形凸台，旋转 10 度'
+    ));
+    expect(rectanglePreview).toMatchObject({
+      kind: 'additive',
+      request: {
+        operation: 'add-rectangle', widthMm: 5, heightMm: 3, depthMm: 2,
+        rotationDeg: 10, surfaceTangentU: { x: 0, y: 1, z: 0 }
+      }
+    });
+    expect(describeLocalCadFeaturePreview(rectanglePreview!)).toBe(
+      '曲面矩形凸台预览：宽 5.00 毫米、高 3.00 毫米、深 2.00 毫米，旋转 10.00 度；0 度沿真实 U 切向，沿真实外法线显示。'
+    );
   });
 
   it('从点击平面和中文圆孔指令创建毫米制请求', () => {
@@ -172,7 +186,7 @@ describe('稳定 CAD 面局部特征请求', () => {
       .toThrow('尚未完成 OpenCascade 精确解析');
   });
 
-  it('接受曲面圆形凸台、圆孔和受限槽孔，并携带真实曲面类型与 UV', () => {
+  it('接受曲面圆形、矩形和受限槽孔，并携带真实曲面类型、UV 与 U 切向', () => {
     const curved: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }],
@@ -190,19 +204,20 @@ describe('稳定 CAD 面局部特征请求', () => {
       operation: 'cut-slot', widthMm: 3, lengthMm: 8, depthMm: 4, rotationDeg: 15,
       surfaceTangentU: { x: 0, y: 1, z: 0 }
     });
+    const rectangle = buildLocalCadFeatureRequest(curved, '开宽 5 毫米、高 3 毫米、深 4 毫米的矩形孔，旋转 -20 度');
+    expect(rectangle).toMatchObject({
+      operation: 'cut-rectangle', widthMm: 5, heightMm: 3, depthMm: 4, rotationDeg: -20,
+      surfaceTangentU: { x: 0, y: 1, z: 0 }
+    });
   });
 
-  it('拒绝曲面矩形、整面偏移和曲面边特征', () => {
+  it('拒绝曲面整面偏移和曲面边特征', () => {
     const curved: CadFaceSelectionContext = {
       ...selection,
       faces: [{ ...selection.faces[0], geometryType: 'CYLINDER' }]
     };
-    for (const command of [
-      '增加宽 10 毫米、高 6 毫米、凸出 2 毫米的矩形凸台',
-      '将整个面向外拉伸 2 毫米'
-    ]) {
-      expect(() => buildLocalCadFeatureRequest(curved, command)).toThrow('只支持圆形凸台、圆孔或受限槽孔');
-    }
+    expect(() => buildLocalCadFeatureRequest(curved, '将整个面向外拉伸 2 毫米'))
+      .toThrow('只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔');
     const curvedEdge: CadFaceSelectionContext = {
       ...edgeSelection,
       faces: [{ ...edgeSelection.faces[0], geometryType: 'CYLINDER' }]

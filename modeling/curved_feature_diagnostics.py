@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-CURVED_DIAGNOSTIC_OPERATIONS = {"add-cylinder", "cut-cylinder", "cut-slot"}
+CURVED_DIAGNOSTIC_OPERATIONS = {
+    "add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot"
+}
 
 
 def build_curved_feature_diagnostics(

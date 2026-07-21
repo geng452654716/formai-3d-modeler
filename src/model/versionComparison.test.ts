@@ -50,6 +50,7 @@ function curvedFeature(
     surfaceGeometryType: 'CYLINDER',
     radiusMm: 2,
     widthMm: null,
+    heightMm: null,
     lengthMm: null,
     rotationDeg: 0,
     surfaceTangentU: null,
@@ -140,7 +141,7 @@ describe('模型版本参数与开孔差异对比', () => {
     ).curvedFeatureDifferences;
 
     expect(difference.label).toBe('曲面槽孔');
-    expect(difference.changedFields).toEqual(expect.arrayContaining(['槽孔宽度', '槽孔长度', '旋转角', '曲面 U 切向']));
+    expect(difference.changedFields).toEqual(expect.arrayContaining(['轮廓宽度', '槽孔长度', '旋转角', '曲面 U 切向']));
     expect(difference.fields).toContainEqual({
       field: 'rotationDeg',
       label: '旋转角',
@@ -152,6 +153,41 @@ describe('模型版本参数与开孔差异对比', () => {
       label: '曲面 U 切向',
       before: '(0，1，0)',
       after: '(0，0.8，0.6)'
+    });
+  });
+
+  it('比较曲面矩形宽高、旋转角和真实 U 切向', () => {
+    const before = curvedFeature({
+      id: '创建修订-矩形:主体:add-rectangle',
+      operation: 'add-rectangle',
+      radiusMm: null,
+      widthMm: 3,
+      heightMm: 4,
+      rotationDeg: 0,
+      surfaceTangentU: { x: 0, y: 1, z: 0 },
+      command: '创建曲面矩形凸台'
+    });
+    const after = curvedFeature({
+      ...before,
+      widthMm: 5,
+      heightMm: 6,
+      rotationDeg: -20,
+      surfaceTangentU: { x: 0, y: 0.6, z: 0.8 }
+    });
+    const [difference] = compareModelVersions(
+      version('基础', { curvedFeatures: [before] }),
+      version('当前', { curvedFeatures: [after] })
+    ).curvedFeatureDifferences;
+
+    expect(difference.label).toBe('曲面矩形凸台');
+    expect(difference.changedFields).toEqual(expect.arrayContaining([
+      '轮廓宽度', '矩形高度', '旋转角', '曲面 U 切向'
+    ]));
+    expect(difference.fields).toContainEqual({
+      field: 'heightMm', label: '矩形高度', before: '4 毫米', after: '6 毫米'
+    });
+    expect(difference.fields).toContainEqual({
+      field: 'rotationDeg', label: '旋转角', before: '0 度', after: '-20 度'
     });
   });
 

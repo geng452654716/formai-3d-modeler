@@ -202,7 +202,8 @@ impl BackendPaths {
         let worker_path = project_root.join("modeling/generate_model.py");
         let split_worker_path = project_root.join("modeling/split_and_cap.py");
         let wall_thickness_worker_path = project_root.join("modeling/wall_thickness_analysis.py");
-        let version_difference_worker_path = project_root.join("modeling/version_geometry_difference.py");
+        let version_difference_worker_path =
+            project_root.join("modeling/version_geometry_difference.py");
         let local_stl_edit_worker_path = project_root.join("modeling/local_stl_edit.py");
         let local_cad_feature_worker_path = project_root.join("modeling/local_cad_feature.py");
         let cad_surface_hit_worker_path = project_root.join("modeling/resolve_cad_surface_hit.py");
@@ -412,26 +413,23 @@ fn normalize_parameters(parameters: &Value) -> Result<Value, String> {
                 json!(read_number("sourceConfidence", 0.0, 1.0)?),
             );
 
-            let position_fields = [
-                "positionReference",
-                "horizontalOffsetMm",
-                "bottomOffsetMm",
-            ];
-            if position_fields.iter().any(|name| opening.contains_key(*name)) {
-                if position_fields.iter().any(|name| !opening.contains_key(*name)) {
-                    return Err(format!(
-                        "第 {} 个开孔的照片定位锚点不完整",
-                        index + 1
-                    ));
+            let position_fields = ["positionReference", "horizontalOffsetMm", "bottomOffsetMm"];
+            if position_fields
+                .iter()
+                .any(|name| opening.contains_key(*name))
+            {
+                if position_fields
+                    .iter()
+                    .any(|name| !opening.contains_key(*name))
+                {
+                    return Err(format!("第 {} 个开孔的照片定位锚点不完整", index + 1));
                 }
                 let position_reference = read_string("positionReference", 40)?;
                 if !INTERFACE_OPENING_POSITION_REFERENCES.contains(&position_reference.as_str()) {
                     return Err(format!("第 {} 个开孔的照片定位方式无效", index + 1));
                 }
-                normalized_opening.insert(
-                    "position_reference".to_string(),
-                    json!(position_reference),
-                );
+                normalized_opening
+                    .insert("position_reference".to_string(), json!(position_reference));
                 normalized_opening.insert(
                     "horizontal_offset_mm".to_string(),
                     json!(read_number("horizontalOffsetMm", -1000.0, 1000.0)?),
@@ -443,7 +441,10 @@ fn normalize_parameters(parameters: &Value) -> Result<Value, String> {
             }
             normalized_openings.push(Value::Object(normalized_opening));
         }
-        normalized.insert("interface_openings".to_string(), Value::Array(normalized_openings));
+        normalized.insert(
+            "interface_openings".to_string(),
+            Value::Array(normalized_openings),
+        );
     }
     Ok(Value::Object(normalized))
 }
@@ -459,7 +460,7 @@ fn generated_file_names(artifacts_dir: &Path) -> Vec<String> {
         "manufacturing-result.json",
         "wall-thickness-result.json",
         "local-stl-edit-result.json",
-    "local-cad-feature-result.json",
+        "local-cad-feature-result.json",
         "version-difference-result.json",
     ] {
         let result_path = artifacts_dir.join(result_name);
@@ -501,7 +502,9 @@ fn version_snapshot_generated_file_names(artifacts_dir: &Path) -> Result<Vec<Str
 
     let mut add_declared_file = |file_name: &str, source: &str| -> Result<(), String> {
         if !is_plain_file_name(file_name) {
-            return Err(format!("当前精确模型清单中的{source}文件名无效：{file_name}"));
+            return Err(format!(
+                "当前精确模型清单中的{source}文件名无效：{file_name}"
+            ));
         }
         if !files.iter().any(|value| value == file_name) {
             files.push(file_name.to_string());
@@ -531,7 +534,10 @@ fn version_snapshot_generated_file_names(artifacts_dir: &Path) -> Result<Vec<Str
         for (field, label) in [("stlFile", "STL"), ("stepFile", "STEP")] {
             if let Some(file_name) = part.get(field) {
                 let file_name = file_name.as_str().ok_or_else(|| {
-                    format!("当前精确模型清单第 {} 个零件的 {label} 文件名无效", index + 1)
+                    format!(
+                        "当前精确模型清单第 {} 个零件的 {label} 文件名无效",
+                        index + 1
+                    )
                 })?;
                 add_declared_file(file_name, label)?;
             }
@@ -566,7 +572,10 @@ fn validate_generated_file(file_name: &str, artifacts_dir: &Path) -> Result<(), 
     }
 }
 
-fn version_snapshot_directory(snapshot_directory: &str, artifacts_dir: &Path) -> Result<PathBuf, String> {
+fn version_snapshot_directory(
+    snapshot_directory: &str,
+    artifacts_dir: &Path,
+) -> Result<PathBuf, String> {
     let versions_root = artifacts_dir.join("versions");
     let canonical_root = fs::canonicalize(&versions_root)
         .map_err(|error| format!("无法读取版本快照目录：{error}"))?;
@@ -574,8 +583,8 @@ fn version_snapshot_directory(snapshot_directory: &str, artifacts_dir: &Path) ->
     if !requested.is_absolute() {
         return Err("版本快照路径必须是本机绝对路径".into());
     }
-    let canonical_directory = fs::canonicalize(requested)
-        .map_err(|error| format!("无法读取所选版本快照：{error}"))?;
+    let canonical_directory =
+        fs::canonicalize(requested).map_err(|error| format!("无法读取所选版本快照：{error}"))?;
     let is_direct_snapshot = canonical_directory
         .parent()
         .is_some_and(|parent| parent == canonical_root);
@@ -605,7 +614,11 @@ fn snapshot_declares_file(manifest: &Value, file_name: &str) -> bool {
     let declared_output = manifest
         .get("outputs")
         .and_then(Value::as_array)
-        .is_some_and(|outputs| outputs.iter().any(|value| value.as_str() == Some(file_name)));
+        .is_some_and(|outputs| {
+            outputs
+                .iter()
+                .any(|value| value.as_str() == Some(file_name))
+        });
     let declared_part = manifest
         .get("parts")
         .and_then(Value::as_array)
@@ -665,7 +678,9 @@ fn validate_version_snapshot_step_files(directory: &Path, manifest: &Value) -> R
             .and_then(|value| value.to_str())
             .is_some_and(|value| value == file_name)
             && matches!(
-                Path::new(file_name).extension().and_then(|value| value.to_str()),
+                Path::new(file_name)
+                    .extension()
+                    .and_then(|value| value.to_str()),
                 Some("step" | "STEP" | "stp" | "STP")
             );
         if !is_plain_step_file || !snapshot_declares_file(manifest, file_name) {
@@ -674,16 +689,15 @@ fn validate_version_snapshot_step_files(directory: &Path, manifest: &Value) -> R
         let file_path = fs::canonicalize(directory.join(file_name))
             .map_err(|_| format!("版本快照缺少零件 STEP 文件：{file_name}"))?;
         if file_path.parent() != Some(directory) || !file_path.is_file() {
-            return Err(format!("版本快照 STEP 文件不允许指向快照目录之外：{file_name}"));
+            return Err(format!(
+                "版本快照 STEP 文件不允许指向快照目录之外：{file_name}"
+            ));
         }
     }
     Ok(())
 }
 
-fn validate_version_difference_outputs(
-    artifacts_dir: &Path,
-    result: &Value,
-) -> Result<(), String> {
+fn validate_version_difference_outputs(artifacts_dir: &Path, result: &Value) -> Result<(), String> {
     if result.get("status").and_then(Value::as_str) != Some("ok") {
         return Err("精确版本差异结果状态无效".into());
     }
@@ -709,7 +723,9 @@ fn validate_version_difference_outputs(
         let file_path = fs::canonicalize(artifacts_dir.join(file_name))
             .map_err(|_| format!("精确版本差异输出文件不存在：{file_name}"))?;
         if file_path.parent() != Some(canonical_artifacts.as_path()) || !file_path.is_file() {
-            return Err(format!("精确版本差异输出不允许指向模型目录之外：{file_name}"));
+            return Err(format!(
+                "精确版本差异输出不允许指向模型目录之外：{file_name}"
+            ));
         }
     }
     Ok(())
@@ -1305,18 +1321,19 @@ pub async fn run_local_cad_feature(
         }
         let cylinder = matches!(operation.as_str(), "add-cylinder" | "cut-cylinder");
         let slot = operation == "cut-slot";
+        let rectangle = matches!(operation.as_str(), "add-rectangle" | "cut-rectangle");
         let whole_face = matches!(operation.as_str(), "offset-face-outward" | "offset-face-inward");
         let edge_feature = matches!(operation.as_str(), "fillet-edge" | "chamfer-edge");
         let curved_face = surface_geometry_type != "PLANE";
-        if curved_face && !cylinder && !slot {
-            return Err("当前选中的是非平面曲面；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔".into());
+        if curved_face && !cylinder && !rectangle && !slot {
+            return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔".into());
         }
-        if curved_face && slot {
+        if curved_face && (rectangle || slot) {
             let (x, y, z) = surface_tangent_u.ok_or_else(|| {
-                "曲面槽孔缺少有效的 OpenCascade 真实 U 切向，请重新点击目标面".to_string()
+                "曲面方向轮廓缺少有效的 OpenCascade 真实 U 切向，请重新点击目标面".to_string()
             })?;
             if (x * x + y * y + z * z).sqrt() < 0.5 {
-                return Err("曲面槽孔的 OpenCascade 真实 U 切向已退化，请重新点击目标面".to_string());
+                return Err("曲面方向轮廓的 OpenCascade 真实 U 切向已退化，请重新点击目标面".to_string());
             }
         }
         if edge_feature {
@@ -1711,11 +1728,8 @@ pub fn read_version_snapshot_file(
     file_name: String,
     state: tauri::State<'_, BackendState>,
 ) -> Result<Response, String> {
-    let file_path = version_snapshot_file_path(
-        &snapshot_directory,
-        &file_name,
-        &state.paths.artifacts_dir,
-    )?;
+    let file_path =
+        version_snapshot_file_path(&snapshot_directory, &file_name, &state.paths.artifacts_dir)?;
     let bytes = fs::read(&file_path)
         .map_err(|error| format!("无法读取版本快照文件 {file_name}：{error}"))?;
     Ok(Response::new(bytes))
@@ -1869,9 +1883,9 @@ fn codex_prompt(command: &str, parameters: &Value, selection_context: Option<&Va
                 "\n已验证的 CAD 局部选择上下文：{}\n\
 该上下文来自本次生成的稳定面选择网格，稳定面与稳定边都只是几何签名匹配第一版，不是永久拓扑命名。\
 当 selectionMode=click 且 faces[0].geometryType=PLANE 时，允许生成圆形/矩形凸台、圆孔/矩形孔/槽孔，或执行整面向外拉伸/向内偏移；stableEdgeId 必须为 null。\
-当 selectionMode=click 且 faces[0] 是非 PLANE 曲面时，只允许使用 add-cylinder、cut-cylinder 或 cut-slot；槽孔是在真实 UV 点击位置的切平面安全近似，不是沿任意曲面贴合轮廓；不得生成矩形、整面偏移或曲面边特征。\
+当 selectionMode=click 且 faces[0] 是非 PLANE 曲面时，只允许使用 add-cylinder、cut-cylinder、add-rectangle、cut-rectangle 或 cut-slot；矩形和槽孔是在真实 UV 点击位置的切平面安全近似，不是沿任意曲面贴合轮廓；不得生成整面偏移或曲面边特征。\
 曲面操作必须使用上下文中 resolutionStatus=resolved、precision=opencascade 的真实点击点、外法线和 surfaceUv，不得改写 UV、切换目标或伪造曲面参数。\
-曲面槽孔的 rotationDeg=0 表示沿上下文中的真实 U 切向，正角度围绕真实外法线旋转；真实 U 切向由 OpenCascade 命中结果提供，Codex 不得改写，也不得在 localFeature 中增加切向字段。\
+曲面矩形和槽孔的 rotationDeg=0 表示沿上下文中的真实 U 切向，正角度围绕真实外法线旋转；真实 U 切向由 OpenCascade 命中结果提供，Codex 不得改写，也不得在 localFeature 中增加切向字段。\
 当 selectionMode=edge 时，只允许对 edge 指定、且所属 faces[0] 为 PLANE 的单条稳定边执行 fillet-edge 或 chamfer-edge；partId、stableFaceId、stableEdgeId 必须逐字复制当前选择，\
 四个轮廓尺寸必须全部为 null，rotationDeg 必须为 0，depthMm 表示圆角半径或倒角距离，范围为 0.20 至 50.00 毫米。\
 所有 localFeature 都必须让 changes 为空，不得自行切换到其他零件、面或边。点击平面操作中：圆形凸台/圆孔使用 add-cylinder/cut-cylinder；矩形凸台/孔使用 add-rectangle/cut-rectangle；\
@@ -1914,10 +1928,15 @@ struct SelectedLocalTarget {
     stable_face_id: String,
     stable_edge_id: Option<String>,
     geometry_type: String,
+    /// 当前修订中由 OpenCascade 解析出的真实 U 切向；只用于校验方向轮廓上下文。
+    surface_tangent_u: Option<[f64; 3]>,
 }
 
 fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarget, String> {
-    let mode = match selection_context.get("selectionMode").and_then(Value::as_str) {
+    let mode = match selection_context
+        .get("selectionMode")
+        .and_then(Value::as_str)
+    {
         Some("click") => LocalSelectionMode::Face,
         Some("edge") => LocalSelectionMode::Edge,
         _ => return Err("Codex 局部特征第一版只允许点击选择单个稳定平面或单条稳定边".into()),
@@ -1971,11 +1990,26 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
     if !precise_hit {
         return Err("当前点击位置尚未完成 OpenCascade 精确解析，Codex 不得生成局部特征".into());
     }
+    let surface_tangent_u = hit
+        .get("surfaceTangentU")
+        .and_then(Value::as_object)
+        .and_then(|value| {
+            Some([
+                value.get("x")?.as_f64()?,
+                value.get("y")?.as_f64()?,
+                value.get("z")?.as_f64()?,
+            ])
+        })
+        .filter(|values| values.iter().all(|value| value.is_finite()));
 
     let stable_edge_id = match mode {
         LocalSelectionMode::Face => {
-            if selection_context.get("edge").is_some_and(|value| !value.is_null())
-                || hit.get("stableEdgeId").is_some_and(|value| !value.is_null())
+            if selection_context
+                .get("edge")
+                .is_some_and(|value| !value.is_null())
+                || hit
+                    .get("stableEdgeId")
+                    .is_some_and(|value| !value.is_null())
             {
                 return Err("点击稳定面上下文不能携带稳定边，请重新选择目标平面".into());
             }
@@ -2008,6 +2042,7 @@ fn selected_local_target(selection_context: &Value) -> Result<SelectedLocalTarge
         stable_face_id: stable_face_id.to_string(),
         stable_edge_id,
         geometry_type: geometry_type.to_string(),
+        surface_tangent_u,
     })
 }
 
@@ -2026,7 +2061,10 @@ fn validate_codex_model_result(
             .iter()
             .any(|(client_name, _)| *client_name == change.parameter)
         {
-            return Err(format!("Codex 返回了不允许修改的参数：{}", change.parameter));
+            return Err(format!(
+                "Codex 返回了不允许修改的参数：{}",
+                change.parameter
+            ));
         }
         if !change.value.is_finite() {
             return Err(format!("Codex 参数 {} 不是有限数值", change.parameter));
@@ -2070,17 +2108,48 @@ fn validate_codex_model_result(
     }
 
     if target.geometry_type != "PLANE"
-        && !matches!(feature.operation.as_str(), "add-cylinder" | "cut-cylinder" | "cut-slot")
+        && !matches!(
+            feature.operation.as_str(),
+            "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot"
+        )
     {
-        return Err("当前选中的是非平面曲面；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔".into());
+        return Err("当前选中的是非平面曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔".into());
+    }
+    let directional_profile = matches!(
+        feature.operation.as_str(),
+        "add-rectangle" | "cut-rectangle" | "cut-slot"
+    );
+    if target.geometry_type != "PLANE" && directional_profile {
+        let [x, y, z] = target.surface_tangent_u.ok_or_else(|| {
+            "当前曲面方向轮廓缺少 OpenCascade 真实 U 切向，Codex 不得生成或改写该切向".to_string()
+        })?;
+        if (x * x + y * y + z * z).sqrt() < 0.5 {
+            return Err(
+                "当前曲面方向轮廓的 OpenCascade 真实 U 切向已退化，请重新点击目标面".into(),
+            );
+        }
     }
 
-    if !matches!(feature.operation.as_str(), "add-cylinder" | "cut-cylinder" | "add-rectangle" | "cut-rectangle" | "cut-slot" | "offset-face-outward" | "offset-face-inward" | "fillet-edge" | "chamfer-edge") {
+    if !matches!(
+        feature.operation.as_str(),
+        "add-cylinder"
+            | "cut-cylinder"
+            | "add-rectangle"
+            | "cut-rectangle"
+            | "cut-slot"
+            | "offset-face-outward"
+            | "offset-face-inward"
+            | "fillet-edge"
+            | "chamfer-edge"
+    ) {
         return Err("Codex 返回了未知的稳定 CAD 局部特征操作".into());
     }
     let maximum_depth = if edge_operation { 50.0 } else { 200.0 };
-    if !feature.depth_mm.is_finite() || !(0.2..=maximum_depth).contains(&feature.depth_mm)
-        || !feature.rotation_deg.is_finite() || !(-180.0..=180.0).contains(&feature.rotation_deg) {
+    if !feature.depth_mm.is_finite()
+        || !(0.2..=maximum_depth).contains(&feature.depth_mm)
+        || !feature.rotation_deg.is_finite()
+        || !(-180.0..=180.0).contains(&feature.rotation_deg)
+    {
         return Err(if edge_operation {
             "Codex 返回的圆角半径、倒角距离或旋转角超出安全范围".into()
         } else {
@@ -2088,36 +2157,65 @@ fn validate_codex_model_result(
         });
     }
     let cylinder = matches!(feature.operation.as_str(), "add-cylinder" | "cut-cylinder");
-    let whole_face = matches!(feature.operation.as_str(), "offset-face-outward" | "offset-face-inward");
+    let whole_face = matches!(
+        feature.operation.as_str(),
+        "offset-face-outward" | "offset-face-inward"
+    );
     if edge_operation {
-        if feature.radius_mm.is_some() || feature.width_mm.is_some() || feature.height_mm.is_some()
-            || feature.length_mm.is_some() || feature.rotation_deg.abs() > 1e-9 {
+        if feature.radius_mm.is_some()
+            || feature.width_mm.is_some()
+            || feature.height_mm.is_some()
+            || feature.length_mm.is_some()
+            || feature.rotation_deg.abs() > 1e-9
+        {
             return Err("Codex 圆角或倒角计划不能携带平面轮廓尺寸或旋转角".into());
         }
     } else if whole_face {
-        if feature.radius_mm.is_some() || feature.width_mm.is_some() || feature.height_mm.is_some()
-            || feature.length_mm.is_some() || feature.rotation_deg.abs() > 1e-9 {
+        if feature.radius_mm.is_some()
+            || feature.width_mm.is_some()
+            || feature.height_mm.is_some()
+            || feature.length_mm.is_some()
+            || feature.rotation_deg.abs() > 1e-9
+        {
             return Err("Codex 整面拉伸或偏移计划的尺寸字段不符合安全协议".into());
         }
     } else if cylinder {
-        if feature.radius_mm.is_none_or(|value| !value.is_finite() || !(0.5..=100.0).contains(&value))
-            || feature.width_mm.is_some() || feature.height_mm.is_some() || feature.length_mm.is_some()
-            || feature.rotation_deg.abs() > 1e-9 {
+        if feature
+            .radius_mm
+            .is_none_or(|value| !value.is_finite() || !(0.5..=100.0).contains(&value))
+            || feature.width_mm.is_some()
+            || feature.height_mm.is_some()
+            || feature.length_mm.is_some()
+            || feature.rotation_deg.abs() > 1e-9
+        {
             return Err("Codex 圆柱计划的尺寸字段不符合安全协议".into());
         }
     } else {
-        let width = feature.width_mm.ok_or_else(|| "Codex 矩形或槽孔计划缺少宽度".to_string())?;
+        let width = feature
+            .width_mm
+            .ok_or_else(|| "Codex 矩形或槽孔计划缺少宽度".to_string())?;
         if feature.radius_mm.is_some() || !width.is_finite() || !(0.5..=200.0).contains(&width) {
             return Err("Codex 矩形或槽孔计划的宽度或半径字段无效".into());
         }
         if feature.operation == "cut-slot" {
-            let length = feature.length_mm.ok_or_else(|| "Codex 槽孔计划缺少长度".to_string())?;
-            if feature.height_mm.is_some() || !length.is_finite() || !(1.0..=200.0).contains(&length) || length < width {
+            let length = feature
+                .length_mm
+                .ok_or_else(|| "Codex 槽孔计划缺少长度".to_string())?;
+            if feature.height_mm.is_some()
+                || !length.is_finite()
+                || !(1.0..=200.0).contains(&length)
+                || length < width
+            {
                 return Err("Codex 槽孔计划的长度或高度字段无效".into());
             }
         } else {
-            let height = feature.height_mm.ok_or_else(|| "Codex 矩形计划缺少高度".to_string())?;
-            if feature.length_mm.is_some() || !height.is_finite() || !(0.5..=200.0).contains(&height) {
+            let height = feature
+                .height_mm
+                .ok_or_else(|| "Codex 矩形计划缺少高度".to_string())?;
+            if feature.length_mm.is_some()
+                || !height.is_finite()
+                || !(0.5..=200.0).contains(&height)
+            {
                 return Err("Codex 矩形计划的高度或长度字段无效".into());
             }
         }
@@ -2437,7 +2535,10 @@ mod tests {
     #[test]
     fn cad_surface_hit_request_rejects_non_finite_coordinates() {
         let error = validate_cad_surface_hit_request(
-            "revision-1", "part-1", "face-1", 0,
+            "revision-1",
+            "part-1",
+            "face-1",
+            0,
             &[0.0, 0.0, f64::NAN, 0.0, 0.0, 1.0],
         )
         .expect_err("非有限坐标必须被拒绝");
@@ -2447,7 +2548,10 @@ mod tests {
     #[test]
     fn cad_surface_hit_request_rejects_negative_triangle_index() {
         let error = validate_cad_surface_hit_request(
-            "revision-1", "part-1", "face-1", -1,
+            "revision-1",
+            "part-1",
+            "face-1",
+            -1,
             &[0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         )
         .expect_err("负三角面索引必须被拒绝");
@@ -2458,7 +2562,10 @@ mod tests {
     fn cad_surface_hit_request_rejects_overlong_identifier() {
         let identifier = "a".repeat(201);
         let error = validate_cad_surface_hit_request(
-            &identifier, "part-1", "face-1", 0,
+            &identifier,
+            "part-1",
+            "face-1",
+            0,
             &[0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         )
         .expect_err("过长标识必须被拒绝");
@@ -2577,13 +2684,21 @@ mod tests {
     fn rejects_codex_edge_plan_without_or_switching_stable_edge() {
         let context = valid_local_edge_selection();
         let mut missing = edge_feature_result("fillet-edge");
-        missing.local_feature.as_mut().expect("feature").stable_edge_id = None;
+        missing
+            .local_feature
+            .as_mut()
+            .expect("feature")
+            .stable_edge_id = None;
         assert!(validate_codex_model_result(&missing, Some(&context))
             .expect_err("缺少稳定边 ID 必须被拒绝")
             .contains("当前选择之外的稳定边"));
 
         let mut switched = edge_feature_result("chamfer-edge");
-        switched.local_feature.as_mut().expect("feature").stable_edge_id = Some("edge-other".into());
+        switched
+            .local_feature
+            .as_mut()
+            .expect("feature")
+            .stable_edge_id = Some("edge-other".into());
         assert!(validate_codex_model_result(&switched, Some(&context))
             .expect_err("切换稳定边必须被拒绝")
             .contains("当前选择之外的稳定边"));
@@ -2616,7 +2731,11 @@ mod tests {
             .contains("不能携带平面轮廓尺寸"));
 
         let mut rotation = edge_feature_result("chamfer-edge");
-        rotation.local_feature.as_mut().expect("feature").rotation_deg = 1.0;
+        rotation
+            .local_feature
+            .as_mut()
+            .expect("feature")
+            .rotation_deg = 1.0;
         assert!(validate_codex_model_result(&rotation, Some(&context))
             .expect_err("边操作携带旋转角必须被拒绝")
             .contains("不能携带平面轮廓尺寸或旋转角"));
@@ -2647,7 +2766,15 @@ mod tests {
     #[test]
     fn accepts_valid_codex_planar_feature_plans() {
         let context = valid_local_feature_selection();
-        for operation in ["add-cylinder", "cut-cylinder", "add-rectangle", "cut-rectangle", "cut-slot", "offset-face-outward", "offset-face-inward"] {
+        for operation in [
+            "add-cylinder",
+            "cut-cylinder",
+            "add-rectangle",
+            "cut-rectangle",
+            "cut-slot",
+            "offset-face-outward",
+            "offset-face-inward",
+        ] {
             validate_codex_model_result(&local_feature_result(operation), Some(&context))
                 .expect("合法的点击单平面局部轮廓特征计划应通过");
         }
@@ -2657,11 +2784,7 @@ mod tests {
     fn rejects_codex_plan_targeting_another_part_or_face() {
         let context = valid_local_feature_selection();
         let mut wrong_part = local_feature_result("cut-cylinder");
-        wrong_part
-            .local_feature
-            .as_mut()
-            .expect("feature")
-            .part_id = "cover".into();
+        wrong_part.local_feature.as_mut().expect("feature").part_id = "cover".into();
         assert!(validate_codex_model_result(&wrong_part, Some(&context))
             .expect_err("其他零件必须被拒绝")
             .contains("当前选择之外"));
@@ -2690,9 +2813,11 @@ mod tests {
             value: 2.4,
             reason: "同时修改壁厚".into(),
         });
-        assert!(validate_codex_model_result(&mixed, Some(&valid_local_feature_selection()))
-            .expect_err("参数修改与局部特征不得混合")
-            .contains("不能在同一计划中同时修改"));
+        assert!(
+            validate_codex_model_result(&mixed, Some(&valid_local_feature_selection()))
+                .expect_err("参数修改与局部特征不得混合")
+                .contains("不能在同一计划中同时修改")
+        );
     }
 
     #[test]
@@ -2716,17 +2841,33 @@ mod tests {
 
         let mut curved_face = valid_local_feature_selection();
         curved_face["faces"][0]["geometryType"] = json!("CYLINDER");
-        validate_codex_model_result(&result, Some(&curved_face))
-            .expect("曲面圆孔计划必须通过");
+        curved_face["hit"]["surfaceTangentU"] = json!({"x": 0.0, "y": 1.0, "z": 0.0});
+        validate_codex_model_result(&result, Some(&curved_face)).expect("曲面圆孔计划必须通过");
         validate_codex_model_result(&local_feature_result("add-cylinder"), Some(&curved_face))
             .expect("曲面圆形凸台计划必须通过");
+        validate_codex_model_result(&local_feature_result("add-rectangle"), Some(&curved_face))
+            .expect("曲面矩形凸台计划必须通过");
+        validate_codex_model_result(&local_feature_result("cut-rectangle"), Some(&curved_face))
+            .expect("曲面矩形孔计划必须通过");
         validate_codex_model_result(&local_feature_result("cut-slot"), Some(&curved_face))
             .expect("曲面受限槽孔计划必须通过");
-        for operation in ["add-rectangle", "cut-rectangle", "offset-face-outward"] {
-            assert!(validate_codex_model_result(&local_feature_result(operation), Some(&curved_face))
-                .expect_err("曲面不受支持的操作必须被拒绝")
-                .contains("只支持圆形凸台、圆孔或受限槽孔"));
+        for operation in ["offset-face-outward"] {
+            assert!(validate_codex_model_result(
+                &local_feature_result(operation),
+                Some(&curved_face)
+            )
+            .expect_err("曲面不受支持的操作必须被拒绝")
+            .contains("只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔"));
         }
+
+        let mut missing_tangent = curved_face.clone();
+        missing_tangent["hit"]["surfaceTangentU"] = Value::Null;
+        assert!(validate_codex_model_result(
+            &local_feature_result("cut-rectangle"),
+            Some(&missing_tangent)
+        )
+        .expect_err("曲面矩形缺失真实 U 切向必须被拒绝")
+        .contains("Codex 不得生成或改写该切向"));
 
         let mut missing_uv = curved_face.clone();
         missing_uv["hit"]["surfaceUv"] = Value::Null;
@@ -2745,9 +2886,11 @@ mod tests {
             .as_mut()
             .expect("feature")
             .width_mm = Some(5.0);
-        assert!(validate_codex_model_result(&cylinder_with_width, Some(&context))
-            .expect_err("圆柱携带矩形宽度必须被拒绝")
-            .contains("尺寸字段不符合安全协议"));
+        assert!(
+            validate_codex_model_result(&cylinder_with_width, Some(&context))
+                .expect_err("圆柱携带矩形宽度必须被拒绝")
+                .contains("尺寸字段不符合安全协议")
+        );
 
         let mut rectangle_with_length = local_feature_result("cut-rectangle");
         rectangle_with_length
@@ -2755,9 +2898,11 @@ mod tests {
             .as_mut()
             .expect("feature")
             .length_mm = Some(14.0);
-        assert!(validate_codex_model_result(&rectangle_with_length, Some(&context))
-            .expect_err("矩形携带槽孔长度必须被拒绝")
-            .contains("高度或长度字段无效"));
+        assert!(
+            validate_codex_model_result(&rectangle_with_length, Some(&context))
+                .expect_err("矩形携带槽孔长度必须被拒绝")
+                .contains("高度或长度字段无效")
+        );
 
         let mut slot_with_height = local_feature_result("cut-slot");
         slot_with_height
@@ -2765,9 +2910,11 @@ mod tests {
             .as_mut()
             .expect("feature")
             .height_mm = Some(8.0);
-        assert!(validate_codex_model_result(&slot_with_height, Some(&context))
-            .expect_err("槽孔携带矩形高度必须被拒绝")
-            .contains("长度或高度字段无效"));
+        assert!(
+            validate_codex_model_result(&slot_with_height, Some(&context))
+                .expect_err("槽孔携带矩形高度必须被拒绝")
+                .contains("长度或高度字段无效")
+        );
 
         let mut whole_face_with_width = local_feature_result("offset-face-inward");
         whole_face_with_width
@@ -2775,9 +2922,11 @@ mod tests {
             .as_mut()
             .expect("feature")
             .width_mm = Some(5.0);
-        assert!(validate_codex_model_result(&whole_face_with_width, Some(&context))
-            .expect_err("整面计划携带轮廓宽度必须被拒绝")
-            .contains("尺寸字段不符合安全协议"));
+        assert!(
+            validate_codex_model_result(&whole_face_with_width, Some(&context))
+                .expect_err("整面计划携带轮廓宽度必须被拒绝")
+                .contains("尺寸字段不符合安全协议")
+        );
 
         let mut whole_face_with_rotation = local_feature_result("offset-face-outward");
         whole_face_with_rotation
@@ -2785,30 +2934,24 @@ mod tests {
             .as_mut()
             .expect("feature")
             .rotation_deg = 15.0;
-        assert!(validate_codex_model_result(&whole_face_with_rotation, Some(&context))
-            .expect_err("整面计划携带旋转角必须被拒绝")
-            .contains("尺寸字段不符合安全协议"));
+        assert!(
+            validate_codex_model_result(&whole_face_with_rotation, Some(&context))
+                .expect_err("整面计划携带旋转角必须被拒绝")
+                .contains("尺寸字段不符合安全协议")
+        );
     }
 
     #[test]
     fn rejects_codex_local_feature_with_out_of_range_dimensions() {
         let context = valid_local_feature_selection();
         let mut radius = local_feature_result("add-cylinder");
-        radius
-            .local_feature
-            .as_mut()
-            .expect("feature")
-            .radius_mm = Some(0.49);
+        radius.local_feature.as_mut().expect("feature").radius_mm = Some(0.49);
         assert!(validate_codex_model_result(&radius, Some(&context))
             .expect_err("半径越界必须被拒绝")
             .contains("尺寸字段不符合安全协议"));
 
         let mut depth = local_feature_result("cut-cylinder");
-        depth
-            .local_feature
-            .as_mut()
-            .expect("feature")
-            .depth_mm = 200.01;
+        depth.local_feature.as_mut().expect("feature").depth_mm = 200.01;
         assert!(validate_codex_model_result(&depth, Some(&context))
             .expect_err("深度越界必须被拒绝")
             .contains("深度或旋转角超出"));
@@ -2835,12 +2978,21 @@ mod tests {
             .expect("serialize manifest"),
         )
         .expect("write manifest");
-        fs::write(snapshot_dir.join("model-main.stl"), b"solid model\nendsolid model\n")
-            .expect("write STL");
-        fs::write(snapshot_dir.join("model-main.step"), b"ISO-10303-21;\nEND-ISO-10303-21;\n")
-            .expect("write STEP");
-        fs::write(snapshot_dir.join("not-declared.stl"), b"solid model\nendsolid model\n")
-            .expect("write undeclared STL");
+        fs::write(
+            snapshot_dir.join("model-main.stl"),
+            b"solid model\nendsolid model\n",
+        )
+        .expect("write STL");
+        fs::write(
+            snapshot_dir.join("model-main.step"),
+            b"ISO-10303-21;\nEND-ISO-10303-21;\n",
+        )
+        .expect("write STEP");
+        fs::write(
+            snapshot_dir.join("not-declared.stl"),
+            b"solid model\nendsolid model\n",
+        )
+        .expect("write undeclared STL");
         (artifacts_dir, snapshot_dir)
     }
 
@@ -2909,7 +3061,10 @@ mod tests {
         let normalized = normalize_parameters(&source).expect("opening should normalize");
         assert_eq!(normalized["interface_openings"][0]["source_type"], "USB-C");
         assert_eq!(normalized["interface_openings"][0]["center_u_mm"], 1.5);
-        assert_eq!(normalized["interface_openings"][0]["shape"], "rounded-rectangle");
+        assert_eq!(
+            normalized["interface_openings"][0]["shape"],
+            "rounded-rectangle"
+        );
         assert_eq!(
             normalized["interface_openings"][0]["position_reference"],
             "face-center-bottom"
@@ -2918,10 +3073,7 @@ mod tests {
             normalized["interface_openings"][0]["horizontal_offset_mm"],
             1.5
         );
-        assert_eq!(
-            normalized["interface_openings"][0]["bottom_offset_mm"],
-            3.0
-        );
+        assert_eq!(normalized["interface_openings"][0]["bottom_offset_mm"], 3.0);
 
         source["interfaceOpenings"][0]
             .as_object_mut()
@@ -2959,8 +3111,12 @@ mod tests {
         .expect("write face map");
 
         let files = generated_file_names(&artifacts_dir);
-        assert!(files.iter().any(|file| file == "custom-shell-selection.stl"));
-        assert!(files.iter().any(|file| file == "custom-shell-face-map.json"));
+        assert!(files
+            .iter()
+            .any(|file| file == "custom-shell-selection.stl"));
+        assert!(files
+            .iter()
+            .any(|file| file == "custom-shell-face-map.json"));
         assert!(!files.iter().any(|file| file == "../outside.stl"));
         assert!(validate_generated_file("custom-shell-selection.stl", &artifacts_dir).is_ok());
         assert!(validate_generated_file("custom-shell-face-map.json", &artifacts_dir).is_ok());
@@ -3059,8 +3215,8 @@ mod tests {
         )
         .expect("write wall result");
 
-        let files = version_snapshot_generated_file_names(&artifacts_dir)
-            .expect("resolve snapshot files");
+        let files =
+            version_snapshot_generated_file_names(&artifacts_dir).expect("resolve snapshot files");
         assert_eq!(
             files,
             vec![
@@ -3160,13 +3316,17 @@ mod tests {
             .expect("valid difference output should pass");
 
         let invalid = json!({"status": "ok", "outputs": ["../outside.stl"]});
-        assert!(validate_version_difference_outputs(&artifacts_dir, &invalid)
-            .expect_err("traversal should fail")
-            .contains("输出文件名无效"));
+        assert!(
+            validate_version_difference_outputs(&artifacts_dir, &invalid)
+                .expect_err("traversal should fail")
+                .contains("输出文件名无效")
+        );
         let undeclared_name = json!({"status": "ok", "outputs": ["model-body.stl"]});
-        assert!(validate_version_difference_outputs(&artifacts_dir, &undeclared_name)
-            .expect_err("unscoped name should fail")
-            .contains("输出文件名无效"));
+        assert!(
+            validate_version_difference_outputs(&artifacts_dir, &undeclared_name)
+                .expect_err("unscoped name should fail")
+                .contains("输出文件名无效")
+        );
         fs::remove_dir_all(artifacts_dir).expect("remove difference fixture");
     }
 

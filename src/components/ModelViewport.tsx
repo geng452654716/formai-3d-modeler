@@ -7,7 +7,7 @@ import {
   OrbitControls,
   PerspectiveCamera
 } from '@react-three/drei';
-import { BufferGeometry, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
+import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
 import type { Camera } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
@@ -46,9 +46,10 @@ const CAD_FACE_CANDIDATE_LIMIT = 400;
 const CAD_FACE_VISIBILITY_SAMPLES = 4;
 
 interface FeaturePreviewGeometryProps {
-  profile: 'circle' | 'slot';
+  profile: 'circle' | 'rectangle' | 'slot';
   radiusMm: number | null;
   widthMm: number | null;
+  heightMm: number | null;
   lengthMm: number | null;
   depthMm: number;
   rotationRad: number;
@@ -72,13 +73,17 @@ function createSlotPreviewGeometry(widthMm: number, lengthMm: number, depthMm: n
 }
 
 function FeaturePreviewGeometry(props: FeaturePreviewGeometryProps) {
-  const geometry = useMemo(() => props.profile === 'slot'
-    ? createSlotPreviewGeometry(props.widthMm!, props.lengthMm!, props.depthMm)
-    : new CylinderGeometry(props.radiusMm!, props.radiusMm!, props.depthMm, 48), [
-      props.depthMm, props.lengthMm, props.profile, props.radiusMm, props.widthMm
-    ]);
+  const geometry = useMemo(() => {
+    if (props.profile === 'slot') {
+      return createSlotPreviewGeometry(props.widthMm!, props.lengthMm!, props.depthMm);
+    }
+    if (props.profile === 'rectangle') {
+      return new BoxGeometry(props.widthMm!, props.depthMm, props.heightMm!);
+    }
+    return new CylinderGeometry(props.radiusMm!, props.radiusMm!, props.depthMm, 48);
+  }, [props.depthMm, props.heightMm, props.lengthMm, props.profile, props.radiusMm, props.widthMm]);
   useEffect(() => () => geometry.dispose(), [geometry]);
-  const rotation = props.profile === 'slot' ? [0, props.rotationRad, 0] as const : undefined;
+  const rotation = props.profile === 'circle' ? undefined : [0, props.rotationRad, 0] as const;
   return (
     <>
       <mesh renderOrder={8} rotation={rotation}>
@@ -448,7 +453,14 @@ function LoadedCadMesh({
       || request.partId !== cadPart.id
       || request.stableFaceId !== selectedFace?.stableId
       || request.partId !== selectedFace.partId
-      || (request.operation !== 'cut-slot' && request.radiusMm === null)
+      || (
+        !['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(request.operation)
+        && request.radiusMm === null
+      )
+      || (
+        ['add-rectangle', 'cut-rectangle'].includes(request.operation)
+        && (request.widthMm === null || request.heightMm === null)
+      )
       || (request.operation === 'cut-slot' && (request.widthMm === null || request.lengthMm === null))
     ) return null;
     const direction = new Vector3(request.hitNormal.x, request.hitNormal.y, request.hitNormal.z);
@@ -476,9 +488,14 @@ function LoadedCadMesh({
     return {
       center,
       quaternion,
-      profile: request.operation === 'cut-slot' ? 'slot' as const : 'circle' as const,
+      profile: request.operation === 'cut-slot'
+        ? 'slot' as const
+        : request.operation === 'add-rectangle' || request.operation === 'cut-rectangle'
+          ? 'rectangle' as const
+          : 'circle' as const,
       radiusMm: request.radiusMm,
       widthMm: request.widthMm,
+      heightMm: request.heightMm,
       lengthMm: request.lengthMm,
       depthMm: request.depthMm,
       rotationRad: request.rotationDeg * Math.PI / 180 * (preview.kind === 'subtractive' ? -1 : 1),
@@ -623,6 +640,7 @@ function LoadedCadMesh({
             profile={featurePreviewTransform.profile}
             radiusMm={featurePreviewTransform.radiusMm}
             widthMm={featurePreviewTransform.widthMm}
+            heightMm={featurePreviewTransform.heightMm}
             lengthMm={featurePreviewTransform.lengthMm}
             depthMm={featurePreviewTransform.depthMm}
             rotationRad={featurePreviewTransform.rotationRad}

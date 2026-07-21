@@ -272,6 +272,41 @@ class LocalCadFeatureTests(unittest.TestCase):
             persisted = json.loads((root / "generation-result.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["localFeatures"][0]["curvedDiagnostics"], feature["curvedDiagnostics"])
 
+    def test_curved_rectangle_worker_persists_orientation_and_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, face, hit = self._curved_project(root)
+            point = hit["projectedPointMm"]
+            normal = hit["outwardNormal"]
+            surface_uv = hit["surfaceUv"]
+            surface_tangent_u = hit["surfaceTangentU"]
+
+            result = edit_cad_feature(
+                root, "cut-rectangle", manifest["revision"], "curved-part", face["stableId"],
+                (point["x"], point["y"], point["z"]),
+                (normal["x"], normal["y"], normal["z"]),
+                None, 4.0, "在曲面这里开宽 3 毫米、高 4 毫米、深 4 毫米的矩形孔，旋转 -20 度",
+                width_mm=3.0, height_mm=4.0, rotation_deg=-20.0,
+                surface_geometry_type="CYLINDER",
+                surface_uv=(surface_uv["u"], surface_uv["v"]),
+                surface_tangent_u=(
+                    surface_tangent_u["x"],
+                    surface_tangent_u["y"],
+                    surface_tangent_u["z"],
+                ),
+            )
+
+            feature = result["updatedCadResult"]["localFeatures"][0]
+            self.assertEqual(feature["operation"], "cut-rectangle")
+            self.assertEqual(feature["widthMm"], 3.0)
+            self.assertEqual(feature["heightMm"], 4.0)
+            self.assertEqual(feature["rotationDeg"], -20.0)
+            self.assertEqual(feature["surfaceTangentU"], surface_tangent_u)
+            self.assertAlmostEqual(feature["curvedDiagnostics"]["curvatureRatio"], 0.25, places=6)
+            self.assertTrue(feature["curvedDiagnostics"]["interferenceCheckPassed"])
+            persisted = json.loads((root / "generation-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["localFeatures"][0], feature)
+
     def test_adds_circular_boss_and_refreshes_manifest_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

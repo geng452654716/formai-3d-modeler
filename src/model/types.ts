@@ -69,15 +69,16 @@ export interface CurvedFeatureDiagnostics {
 export interface VersionCurvedFeature {
   /** 创建修订与零件、操作共同组成的跨参数化重放稳定标识。 */
   id: string;
-  operation: 'add-cylinder' | 'cut-cylinder' | 'cut-slot';
+  operation: 'add-cylinder' | 'cut-cylinder' | 'add-rectangle' | 'cut-rectangle' | 'cut-slot';
   partId: string;
   stableFaceId: string;
   surfaceGeometryType: string;
   radiusMm: number | null;
   widthMm: number | null;
+  heightMm: number | null;
   lengthMm: number | null;
   rotationDeg: number;
-  /** 当前修订中用于解释槽孔零度方向的 OpenCascade 真实 U 切向。 */
+  /** 当前修订中用于解释矩形或槽孔零度方向的 OpenCascade 真实 U 切向。 */
   surfaceTangentU: { x: number; y: number; z: number } | null;
   depthMm: number;
   command: string;

@@ -498,8 +498,9 @@ function runLocalCadFeatureWorker(body: {
   const edgeFeature = body.operation === 'fillet-edge' || body.operation === 'chamfer-edge';
   const curvedFace = body.surfaceGeometryType !== 'PLANE';
   const slot = body.operation === 'cut-slot';
-  if (curvedFace && !cylinder && !slot) {
-    throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔`);
+  const rectangle = body.operation === 'add-rectangle' || body.operation === 'cut-rectangle';
+  if (curvedFace && !cylinder && !rectangle && !slot) {
+    throw new Error(`当前选中的是 ${body.surfaceGeometryType} 曲面；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔`);
   }
   const surfaceTangentValues = [body.surfaceTangentUx, body.surfaceTangentUy, body.surfaceTangentUz];
   const tangentValueCount = surfaceTangentValues.filter((value) => value !== null && value !== undefined).length;
@@ -509,10 +510,10 @@ function runLocalCadFeatureWorker(body: {
   if (tangentValueCount === 3 && surfaceTangentValues.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
     throw new Error('曲面 U 切向必须同时提供三个有限分量，或全部留空');
   }
-  if (curvedFace && slot) {
-    if (tangentValueCount !== 3) throw new Error('曲面槽孔缺少有效的 OpenCascade 真实 U 切向，请重新点击目标面');
+  if (curvedFace && (rectangle || slot)) {
+    if (tangentValueCount !== 3) throw new Error('曲面方向轮廓缺少有效的 OpenCascade 真实 U 切向，请重新点击目标面');
     const tangentLength = Math.hypot(body.surfaceTangentUx!, body.surfaceTangentUy!, body.surfaceTangentUz!);
-    if (tangentLength < 0.5) throw new Error('曲面槽孔的 OpenCascade 真实 U 切向已退化，请重新点击目标面');
+    if (tangentLength < 0.5) throw new Error('曲面方向轮廓的 OpenCascade 真实 U 切向已退化，请重新点击目标面');
   }
   if (edgeFeature) {
     if (typeof body.stableEdgeId !== 'string' || !body.stableEdgeId.trim() || Array.from(body.stableEdgeId).length > 200) {

@@ -1,7 +1,9 @@
 import type { CadGenerationResult } from './cad';
 import type { CurvedFeatureDiagnostics, VersionCurvedFeature } from './types';
 
-const diagnosticOperations = new Set(['add-cylinder', 'cut-cylinder', 'cut-slot']);
+const diagnosticOperations = new Set([
+  'add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot'
+]);
 
 /** 深拷贝曲面受限局部特征，避免版本历史被后续 CAD 重建结果原地修改。 */
 export function captureVersionCurvedFeatures(
@@ -12,7 +14,14 @@ export function captureVersionCurvedFeatures(
       !diagnosticOperations.has(feature.operation)
       || feature.surfaceGeometryType === 'PLANE'
       || !feature.curvedDiagnostics
-      || (feature.operation !== 'cut-slot' && feature.radiusMm === null)
+      || (
+        !['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(feature.operation)
+        && feature.radiusMm === null
+      )
+      || (
+        ['add-rectangle', 'cut-rectangle'].includes(feature.operation)
+        && (feature.widthMm == null || feature.heightMm == null)
+      )
       || (feature.operation === 'cut-slot' && (feature.widthMm == null || feature.lengthMm == null))
     ) return [];
     const operation = feature.operation as VersionCurvedFeature['operation'];
@@ -28,6 +37,7 @@ export function captureVersionCurvedFeatures(
       surfaceGeometryType: feature.surfaceGeometryType ?? 'UNKNOWN',
       radiusMm: feature.radiusMm,
       widthMm: feature.widthMm ?? null,
+      heightMm: feature.heightMm ?? null,
       lengthMm: feature.lengthMm ?? null,
       rotationDeg: feature.rotationDeg ?? 0,
       surfaceTangentU: feature.surfaceTangentU ? { ...feature.surfaceTangentU } : null,

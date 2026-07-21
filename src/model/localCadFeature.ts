@@ -106,21 +106,24 @@ export interface LocalCadFeatureResult {
   limitations: string[];
 }
 
-/** 第一版为非平面上的圆形凸台、圆孔和切平面槽孔创建确定性三维预览。 */
+/** 为非平面上的受限圆形、矩形和槽孔切平面特征创建确定性三维预览。 */
 export function createLocalCadFeaturePreview(
   request: LocalCadFeatureRequest
 ): LocalCadFeaturePreview | null {
   const circular = request.operation === 'add-cylinder' || request.operation === 'cut-cylinder';
+  const rectangular = request.operation === 'add-rectangle' || request.operation === 'cut-rectangle';
   const slot = request.operation === 'cut-slot';
   if (
     request.surfaceGeometryType === 'PLANE'
-    || (!circular && !slot)
+    || (!circular && !rectangular && !slot)
     || (circular && request.radiusMm === null)
+    || (rectangular && (request.widthMm === null || request.heightMm === null))
     || (slot && (request.widthMm === null || request.lengthMm === null))
   ) return null;
   return {
     request,
-    kind: request.operation === 'add-cylinder' ? 'additive' : 'subtractive',
+    kind: request.operation === 'add-cylinder' || request.operation === 'add-rectangle'
+      ? 'additive' : 'subtractive',
     status: 'ready',
     errorMessage: null
   };
@@ -130,6 +133,11 @@ export function describeLocalCadFeaturePreview(preview: LocalCadFeaturePreview) 
   const request = preview.request;
   if (request.operation === 'cut-slot') {
     return `曲面槽孔预览：宽 ${request.widthMm!.toFixed(2)} 毫米、长 ${request.lengthMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实内法线显示。`;
+  }
+  if (request.operation === 'add-rectangle' || request.operation === 'cut-rectangle') {
+    const direction = request.operation === 'add-rectangle' ? '外法线' : '内法线';
+    const label = request.operation === 'add-rectangle' ? '矩形凸台' : '矩形孔';
+    return `曲面${label}预览：宽 ${request.widthMm!.toFixed(2)} 毫米、高 ${request.heightMm!.toFixed(2)} 毫米、深 ${request.depthMm.toFixed(2)} 毫米，旋转 ${request.rotationDeg.toFixed(2)} 度；0 度沿真实 U 切向，沿真实${direction}显示。`;
   }
   const diameterMm = request.radiusMm === null ? 0 : request.radiusMm * 2;
   if (preview.kind === 'additive') {
@@ -279,11 +287,12 @@ function requestFromPlan(selection: CadFaceSelectionContext, command: string, pl
     throw new Error('圆角或倒角必须先使用“点击选边”选择一条稳定 CAD 边');
   }
   const curvedFace = face.geometryType !== 'PLANE';
-  if (curvedFace && !['add-cylinder', 'cut-cylinder', 'cut-slot'].includes(plan.operation)) {
-    throw new Error(`当前选中的是${describeCadSurfaceGeometryType(face.geometryType)}；第一版曲面局部特征只支持圆形凸台、圆孔或受限槽孔`);
+  if (curvedFace && !['add-cylinder', 'cut-cylinder', 'add-rectangle', 'cut-rectangle', 'cut-slot'].includes(plan.operation)) {
+    throw new Error(`当前选中的是${describeCadSurfaceGeometryType(face.geometryType)}；当前曲面局部特征只支持圆形凸台、圆孔、矩形凸台、矩形孔或受限槽孔`);
   }
-  if (curvedFace && plan.operation === 'cut-slot' && (!hit.surfaceTangentU || !finiteVector(hit.surfaceTangentU))) {
-    throw new Error('曲面槽孔缺少 OpenCascade 真实 U 切向，请重新点击目标面');
+  const directionalProfile = ['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(plan.operation);
+  if (curvedFace && directionalProfile && (!hit.surfaceTangentU || !finiteVector(hit.surfaceTangentU))) {
+    throw new Error('曲面方向轮廓缺少 OpenCascade 真实 U 切向，请重新点击目标面');
   }
   return {
     sourceKind: 'cad-part', selectionRevision: selection.revision, partId: face.partId,
@@ -301,7 +310,8 @@ export function buildLocalCadFeatureRequestFromPlan(selection: CadFaceSelectionC
   return requestFromPlan(selection, command, plan, summary);
 }
 
-const NUMBER = '(\\d+(?:\\.\\d+)?)';
+// 中文局部编辑指令允许旋转角使用正负号；尺寸若为负数会在统一参数校验中被拒绝。
+const NUMBER = '([+-]?\\d+(?:\\.\\d+)?)';
 function numberFor(command: string, labels: string[]) {
   for (const label of labels) {
     const before = command.match(new RegExp(`(?:${label})\\s*${NUMBER}\\s*(?:毫米|mm)?`, 'i'));

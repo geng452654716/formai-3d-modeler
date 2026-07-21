@@ -1,4 +1,4 @@
-"""真实 OpenCascade 曲面圆形与槽孔局部特征的受限执行测试。"""
+"""真实 OpenCascade 曲面圆形、矩形与槽孔局部特征的受限执行测试。"""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
         *,
         radius: float = 2.0,
         width: float = 3.0,
+        height: float = 4.0,
         length: float = 6.0,
         depth: float = 4.0,
         rotation: float = 0.0,
@@ -54,8 +55,8 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
             (point["x"], point["y"], point["z"]),
             (normal["x"], normal["y"], normal["z"]),
             radius_mm=radius if operation in ("add-cylinder", "cut-cylinder") else None,
-            width_mm=width if operation in ("add-rectangle", "cut-slot") else None,
-            height_mm=4.0 if operation == "add-rectangle" else None,
+            width_mm=width if operation in ("add-rectangle", "cut-rectangle", "cut-slot") else None,
+            height_mm=height if operation in ("add-rectangle", "cut-rectangle") else None,
             length_mm=length if operation == "cut-slot" else None,
             depth_mm=depth,
             rotation_deg=rotation,
@@ -66,7 +67,7 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
                 surface_tangent_u["x"],
                 surface_tangent_u["y"],
                 surface_tangent_u["z"],
-            ) if operation == "cut-slot" else None,
+            ) if operation in ("add-rectangle", "cut-rectangle", "cut-slot") else None,
         )
 
     def test_curved_boss_increases_volume_and_returns_diagnostics(self) -> None:
@@ -109,37 +110,49 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
         self.assertTrue(result["model"].val().isValid())
         self.assertEqual(len(_closed_solids(result["model"], "曲面槽孔结果")), 1)
 
-    def test_curved_slot_rejects_stale_or_reversed_u_tangent(self) -> None:
+    def test_curved_directional_profiles_reject_stale_or_reversed_u_tangent(self) -> None:
         point = self.hit["projectedPointMm"]
         normal = self.hit["outwardNormal"]
         uv = self.hit["surfaceUv"]
         tangent = self.hit["surfaceTangentU"]
-        with self.assertRaisesRegex(ValueError, "U 切向与当前 OpenCascade 曲面方向不一致"):
-            apply_planar_feature(
-                self.model,
-                "cut-slot",
-                self.descriptor["stableId"],
-                self.faces,
-                (point["x"], point["y"], point["z"]),
-                (normal["x"], normal["y"], normal["z"]),
-                radius_mm=None,
-                width_mm=3.0,
-                height_mm=None,
-                length_mm=6.0,
-                depth_mm=4.0,
-                target_face_descriptor=self.descriptor,
-                surface_geometry_type="CYLINDER",
-                surface_uv=(uv["u"], uv["v"]),
-                surface_tangent_u=(-tangent["x"], -tangent["y"], -tangent["z"]),
-            )
+        for operation in ("cut-slot", "cut-rectangle"):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(ValueError, "U 切向与当前 OpenCascade 曲面方向不一致"):
+                    apply_planar_feature(
+                        self.model,
+                        operation,  # type: ignore[arg-type]
+                        self.descriptor["stableId"],
+                        self.faces,
+                        (point["x"], point["y"], point["z"]),
+                        (normal["x"], normal["y"], normal["z"]),
+                        radius_mm=None,
+                        width_mm=3.0,
+                        height_mm=4.0 if operation == "cut-rectangle" else None,
+                        length_mm=6.0 if operation == "cut-slot" else None,
+                        depth_mm=4.0,
+                        target_face_descriptor=self.descriptor,
+                        surface_geometry_type="CYLINDER",
+                        surface_uv=(uv["u"], uv["v"]),
+                        surface_tangent_u=(-tangent["x"], -tangent["y"], -tangent["z"]),
+                    )
 
     def test_curved_slot_length_over_curvature_limit_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "槽孔包络半径与局部曲率之比"):
             self.apply("cut-slot", width=3.0, length=12.0, depth=4.0)
 
-    def test_curved_rectangle_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "只支持圆形凸台、圆孔或受限槽孔"):
-            self.apply("add-rectangle", depth=2.0)
+    def test_curved_rectangle_boss_and_hole_use_half_diagonal_envelope(self) -> None:
+        boss = self.apply("add-rectangle", width=3.0, height=4.0, depth=2.0, rotation=30.0)
+        hole = self.apply("cut-rectangle", width=3.0, height=4.0, depth=4.0, rotation=-20.0)
+        self.assertGreater(boss["validation"]["volumeDeltaMm3"], 0)
+        self.assertLess(hole["validation"]["volumeDeltaMm3"], 0)
+        self.assertAlmostEqual(boss["validation"]["curvatureRatio"], 0.25, places=6)
+        self.assertAlmostEqual(hole["validation"]["curvatureRatio"], 0.25, places=6)
+        self.assertTrue(boss["validation"]["interferenceCheckPassed"])
+        self.assertTrue(hole["validation"]["interferenceCheckPassed"])
+
+    def test_curved_rectangle_half_diagonal_over_curvature_limit_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "矩形包络半径与局部曲率之比"):
+            self.apply("add-rectangle", width=9.0, height=6.0, depth=2.0)
 
     def test_missing_uv_is_rejected(self) -> None:
         point = self.hit["projectedPointMm"]
@@ -439,6 +452,40 @@ class LocalCadCurvedFeatureTests(unittest.TestCase):
         self.assertEqual(replayed[0]["replayStatus"], "replayed")
         self.assertEqual(replayed[0]["surfaceTangentU"], self.hit["surfaceTangentU"])
         self.assertAlmostEqual(replayed[0]["curvedDiagnostics"]["curvatureRatio"], 0.3, places=6)
+        self.assertTrue(replayed[0]["curvedDiagnostics"]["interferenceCheckPassed"])
+
+    def test_legacy_curved_rectangle_replays_and_recomputes_u_tangent(self) -> None:
+        point = self.hit["projectedPointMm"]
+        normal = self.hit["outwardNormal"]
+        surface_uv = self.hit["surfaceUv"]
+        feature = {
+            "operation": "cut-rectangle",
+            "partId": "generic-part",
+            "stableFaceId": self.descriptor["stableId"],
+            "centerMm": {"x": point["x"], "y": point["y"], "z": point["z"]},
+            "outwardNormal": {"x": normal["x"], "y": normal["y"], "z": normal["z"]},
+            "surfaceGeometryType": "CYLINDER",
+            "surfaceUv": {"u": surface_uv["u"], "v": surface_uv["v"]},
+            "radiusMm": None,
+            "widthMm": 3.0,
+            "heightMm": 4.0,
+            "lengthMm": None,
+            "depthMm": 4.0,
+            "rotationDeg": -20.0,
+            "targetFace": self.descriptor,
+            "command": "创建曲面矩形孔",
+            "curvedDiagnostics": {"curvatureRatio": 999},
+        }
+
+        _, replayed = _replay_local_features(
+            {"generic-part": self.model}, {"generic-part": self.faces}, [feature],
+            "curved-rectangle-replay-revision",
+        )
+
+        self.assertEqual(replayed[0]["operation"], "cut-rectangle")
+        self.assertEqual(replayed[0]["rotationDeg"], -20.0)
+        self.assertEqual(replayed[0]["surfaceTangentU"], self.hit["surfaceTangentU"])
+        self.assertAlmostEqual(replayed[0]["curvedDiagnostics"]["curvatureRatio"], 0.25, places=6)
         self.assertTrue(replayed[0]["curvedDiagnostics"]["interferenceCheckPassed"])
 
     def test_curved_feature_replay_without_uv_is_rejected_before_model_change(self) -> None:

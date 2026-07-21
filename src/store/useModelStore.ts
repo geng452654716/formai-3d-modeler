@@ -1049,7 +1049,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           messages: state.messages.concat({
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: `${message}。已保留当前模型和稳定 CAD 局部选择；第一版支持点击稳定平面后生成局部轮廓或整面拉伸/偏移、点击曲面后生成受限圆形凸台、圆孔或槽孔，也支持点击平面所属单条稳定边后执行圆角或倒角。`
+            content: `${message}。已保留当前模型和稳定 CAD 局部选择；支持点击稳定平面后生成局部轮廓或整面拉伸/偏移、点击曲面后生成受限圆形、矩形或槽孔特征，也支持点击平面所属单条稳定边后执行圆角或倒角。`
           })
         }));
         return;
@@ -1059,7 +1059,13 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       if (preview) {
         set({
           localCadFeaturePreview: preview,
-          aiActivity: `${preview.request.operation === 'cut-slot' ? '曲面槽孔' : preview.kind === 'additive' ? '曲面圆形凸台' : '曲面圆孔'}三维预览已生成，正在自动执行`
+          aiActivity: `${preview.request.operation === 'cut-slot'
+            ? '曲面槽孔'
+            : preview.request.operation === 'add-rectangle'
+              ? '曲面矩形凸台'
+              : preview.request.operation === 'cut-rectangle'
+                ? '曲面矩形孔'
+                : preview.kind === 'additive' ? '曲面圆形凸台' : '曲面圆孔'}三维预览已生成，正在自动执行`
         });
         await waitForLocalCadFeaturePreviewFrame();
       }

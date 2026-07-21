@@ -59,6 +59,7 @@ export type CurvedFeatureField =
   | 'radiusMm'
   | 'diameterMm'
   | 'widthMm'
+  | 'heightMm'
   | 'lengthMm'
   | 'rotationDeg'
   | 'surfaceTangentU'
@@ -154,10 +155,11 @@ const CURVED_FEATURE_FIELDS: ReadonlyArray<{
 }> = [
   { key: 'radiusMm', label: '工具半径', value: (feature) => feature.radiusMm },
   { key: 'diameterMm', label: '工具直径', value: (feature) => feature.radiusMm === null ? null : feature.radiusMm * 2 },
-  { key: 'widthMm', label: '槽孔宽度', value: (feature) => feature.widthMm },
+  { key: 'widthMm', label: '轮廓宽度', value: (feature) => feature.widthMm },
+  { key: 'heightMm', label: '矩形高度', value: (feature) => feature.heightMm },
   { key: 'lengthMm', label: '槽孔长度', value: (feature) => feature.lengthMm },
-  { key: 'rotationDeg', label: '旋转角', value: (feature) => feature.operation === 'cut-slot' ? feature.rotationDeg : null },
-  { key: 'surfaceTangentU', label: '曲面 U 切向', value: (feature) => feature.operation === 'cut-slot' ? feature.surfaceTangentU : null },
+  { key: 'rotationDeg', label: '旋转角', value: (feature) => ['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(feature.operation) ? feature.rotationDeg : null },
+  { key: 'surfaceTangentU', label: '曲面 U 切向', value: (feature) => ['add-rectangle', 'cut-rectangle', 'cut-slot'].includes(feature.operation) ? feature.surfaceTangentU : null },
   { key: 'depthMm', label: '作用深度', value: (feature) => feature.depthMm },
   { key: 'surfaceGeometryType', label: '曲面类型', value: (feature) => feature.surfaceGeometryType },
   { key: 'maximumAbsCurvaturePerMm', label: '最大绝对曲率', value: (feature) => feature.diagnostics.maximumAbsCurvaturePerMm },
@@ -179,7 +181,9 @@ const CURVED_FEATURE_FIELDS: ReadonlyArray<{
 function curvedFeatureSummaryFields(feature: VersionCurvedFeature) {
   const dimensionalKeys: CurvedFeatureField[] = feature.operation === 'cut-slot'
     ? ['widthMm', 'lengthMm', 'rotationDeg', 'surfaceTangentU']
-    : ['diameterMm'];
+    : feature.operation === 'add-rectangle' || feature.operation === 'cut-rectangle'
+      ? ['widthMm', 'heightMm', 'rotationDeg', 'surfaceTangentU']
+      : ['diameterMm'];
   const summaryKeys = new Set<CurvedFeatureField>([
     ...dimensionalKeys,
     'depthMm',
@@ -375,6 +379,8 @@ function formatCurvedFeatureValue(field: CurvedFeatureField, value: unknown) {
 
 function curvedFeatureLabel(feature: VersionCurvedFeature) {
   if (feature.operation === 'add-cylinder') return '曲面圆形凸台';
+  if (feature.operation === 'add-rectangle') return '曲面矩形凸台';
+  if (feature.operation === 'cut-rectangle') return '曲面矩形孔';
   return feature.operation === 'cut-slot' ? '曲面槽孔' : '曲面圆孔';
 }
 
