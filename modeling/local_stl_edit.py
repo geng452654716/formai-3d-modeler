@@ -206,6 +206,10 @@ def edit_uploaded_stl(
             },
         }
 
+        branch_source = manifest.get("branchSource")
+        if isinstance(branch_source, dict):
+            updated_model["branchSource"] = branch_source
+
         result: dict[str, object] = {
             "status": "ok",
             "revision": revision,

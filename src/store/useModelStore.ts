@@ -11,6 +11,7 @@ import { DEFAULT_PARAMETERS, PARAMETER_LIMITS } from '../model/defaults';
 import { resolveInterfaceOpeningsForParameters } from '../model/interfaceOpenings';
 import {
   analyzeWallThickness as analyzeWallThicknessBackend,
+  createCadMeshBranch as createCadMeshBranchBackend,
   createVersionSnapshot,
   importStlModel as importStlModelBackend,
   loadBackendStatus,
@@ -193,6 +194,7 @@ interface ModelStore {
   setMultiViewCalibration: (result: MultiViewCalibrationResult | null) => void;
   setDetectedInterfaces: (interfaces: DetectedInterface[]) => void;
   setInterfaceOpenings: (openings: InterfaceOpeningSpec[] | null) => void;
+  createCadMeshBranch: (sourcePartId: string) => Promise<ImportedStlModel | null>;
   importStlModel: (file: File) => Promise<ImportedStlModel | null>;
   clearImportedStlModel: () => void;
   setMeshElementEditMode: (mode: MeshElementEditMode) => void;
@@ -467,6 +469,13 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       modelSource,
       importedModelRevision: modelSource === 'uploaded-stl'
         ? state.importedStlModel?.revision
+        : undefined,
+      meshBranchSource: modelSource === 'uploaded-stl' && state.importedStlModel?.branchSource
+        ? {
+            cadRevision: state.importedStlModel.branchSource.cadRevision,
+            partId: state.importedStlModel.branchSource.partId,
+            partLabel: state.importedStlModel.branchSource.partLabel
+          }
         : undefined,
       parameters: { ...state.parameters },
       interfaceOpenings: state.interfaceOpenings?.map((opening) => ({ ...opening })) ?? state.interfaceOpenings,
@@ -824,6 +833,96 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     localCadFeaturePreview: null,
     cadFaceBoxRequest: null
   })),
+  createCadMeshBranch: async (sourcePartId) => {
+    const before = get();
+    if (before.viewportModelSource !== 'cad' || before.cadStatus !== 'ready' || !before.cadResult) {
+      set({ importedStlStatus: 'error', importedStlError: '请先完成精确 CAD 生成，再创建网格分支' });
+      return null;
+    }
+    const part = before.cadResult.parts.find((candidate) => candidate.id === sourcePartId);
+    if (!part) {
+      set({ importedStlStatus: 'error', importedStlError: '当前 CAD 修订中没有找到所选零件' });
+      return null;
+    }
+    set({
+      importedStlStatus: 'importing',
+      importedStlError: null,
+      meshElementEditMode: 'off',
+      meshElementSelection: null,
+      meshElementBoxRequest: null,
+      meshElementEditStatus: 'idle',
+      meshElementEditError: null,
+      meshElementEditResult: null
+    });
+    try {
+      const importedStlModel = await createCadMeshBranchBackend(before.cadResult.revision, sourcePartId);
+      const bounds = importedStlModel.metrics.boundsMm;
+      set((state) => ({
+        importedStlModel,
+        importedStlStatus: 'ready',
+        importedStlError: null,
+        localStlEditResult: null,
+        meshElementEditMode: 'off',
+        meshElementSelectionMethod: 'click',
+        meshElementSelection: null,
+        meshElementBoxRequest: null,
+        meshElementEditStatus: 'idle',
+        meshElementEditError: null,
+        meshElementEditResult: null,
+        manufacturingStatus: 'idle',
+        manufacturingResult: null,
+        manufacturingError: null,
+        wallThicknessStatus: 'idle',
+        wallThicknessResult: null,
+        wallThicknessError: null,
+        wallThicknessVisible: false,
+        wallThicknessPicking: false,
+        wallThicknessSelection: null,
+        cadFaceSelectionMode: 'off',
+        cadFaceSelection: null,
+        localCadFeaturePreview: null,
+        cadFaceBoxRequest: null,
+        viewportModelSource: 'uploaded-stl',
+        selectedObject: importedStlModel.id,
+        exploded: false,
+        messages: state.messages.concat({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `已从参数化 CAD 零件“${part.label}”创建独立网格分支；原 CAD 分支仍保留在版本历史中。网格分支尺寸为 ${bounds.x.toFixed(2)} × ${bounds.y.toFixed(2)} × ${bounds.z.toFixed(2)} 毫米，现在可以使用顶点、边和面编辑；后续修改不再保证参数化特征可编辑。`
+        })
+      }));
+      get().commitVersion(`创建“${part.label}”网格分支`);
+      try {
+        const snapshot = await createVersionSnapshot(
+          `创建“${part.label}”网格分支`,
+          { ...get().parameters, interfaceOpenings: get().interfaceOpenings },
+          { modelSource: 'uploaded-stl', modelRevision: importedStlModel.revision }
+        );
+        if (snapshot) {
+          set((current) => ({
+            versions: current.versions.map((version, index) => index === current.versionIndex
+              ? { ...version, snapshotDirectory: snapshot.directory }
+              : version)
+          }));
+        }
+      } catch (snapshotError) {
+        set((current) => ({
+          messages: current.messages.concat({
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `网格分支已创建，但初始精确快照保存失败：${snapshotError instanceof Error ? snapshotError.message : '未知错误'}`
+          })
+        }));
+      }
+      return importedStlModel;
+    } catch (error) {
+      set({
+        importedStlStatus: 'error',
+        importedStlError: error instanceof Error ? error.message : 'CAD 网格分支创建失败'
+      });
+      return null;
+    }
+  },
   importStlModel: async (file) => {
     set({
       importedStlStatus: 'importing',

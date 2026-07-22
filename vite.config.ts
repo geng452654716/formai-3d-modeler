@@ -35,9 +35,10 @@ const manufacturingFiles = [
 ];
 
 interface GenerationManifest {
+  revision?: string;
   outputs?: string[];
   assemblyFile?: string;
-  parts?: Array<{ id?: string; stepFile?: string; stlFile?: string }>;
+  parts?: Array<{ id?: string; label?: string; stepFile?: string; stlFile?: string }>;
 }
 
 const parameterNames: Record<string, string> = {
@@ -277,6 +278,34 @@ function runStlInspection(originalFileName: string) {
       if (code === 0) resolvePromise();
       else rejectPromise(new Error(stderr.trim() || `STL 检查 Worker 退出，状态码：${code}`));
     });
+  });
+}
+
+
+function createCadMeshBranch(cadRevision: string, sourcePartId: string) {
+  if (!cadRevision || cadRevision.length > 200) throw new Error('CAD 修订号无效，请先重新生成精确模型');
+  if (!sourcePartId || sourcePartId.length > 200) throw new Error('请选择要转换为网格分支的 CAD 零件');
+  const manifestPath = resolve(artifactsDirectory, 'generation-result.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as GenerationManifest;
+  if (manifest.revision !== cadRevision) throw new Error('精确 CAD 已在选择后发生变化，请重新选择零件');
+  const part = manifest.parts?.find((candidate) => candidate.id === sourcePartId);
+  if (!part?.stlFile || basename(part.stlFile) !== part.stlFile) throw new Error(`模型清单中没有找到零件：${sourcePartId}`);
+  const sourcePath = resolve(artifactsDirectory, part.stlFile);
+  if (!existsSync(sourcePath)) throw new Error(`没有找到 CAD 零件 STL：${part.stlFile}`);
+  const partLabel = part.label?.trim() || sourcePartId;
+  writeFileSync(resolve(artifactsDirectory, 'imported-model.stl'), readFileSync(sourcePath));
+  return runStlInspection(`${partLabel}-网格分支.stl`).then(() => {
+    const resultPath = resolve(artifactsDirectory, 'imported-model-result.json');
+    const result = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
+    result.branchSource = {
+      kind: 'cad-part',
+      cadRevision,
+      partId: sourcePartId,
+      partLabel,
+      sourceStlFile: part.stlFile
+    };
+    writeFileSync(resultPath, JSON.stringify(result, null, 2));
+    return result;
   });
 }
 
@@ -817,6 +846,24 @@ function cadWorkerPlugin(): Plugin {
             writeJson(response, 400, {
               status: 'error',
               message: error instanceof Error ? error.message : 'CAD 生成失败'
+            });
+          } finally {
+            generating = false;
+          }
+          return;
+        }
+
+        if (url.pathname === '/api/model/create-cad-mesh-branch' && request.method === 'POST') {
+          while (generating) await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+          generating = true;
+          try {
+            const body = await readJsonBody(request) as { cadRevision?: string; sourcePartId?: string };
+            const summary = await createCadMeshBranch(body.cadRevision ?? '', body.sourcePartId ?? '');
+            writeJson(response, 200, summary);
+          } catch (error) {
+            writeJson(response, 400, {
+              status: 'error',
+              message: error instanceof Error ? error.message : 'CAD 网格分支创建失败'
             });
           } finally {
             generating = false;

@@ -450,3 +450,29 @@ Three.js 点击命中或当前摄像机屏幕投影框选
 - 当前不支持非均匀缩放、任意轴旋转、单独枢轴编辑、拓扑增删、挤出、焊接、分裂或自由雕刻。
 
 2026-07-21 第 42 阶段验证结果：前端 173/173、Rust 45/45、Python 网格元素变换 9/9、上传快照恢复 3/3、拆件与补面 27/27；生产构建、Cargo 检查、Python 语法、Rust 格式和差异检查通过。浏览器实际完成 8 顶点 Z 轴 10° 旋转与 0.9 倍均匀缩放，并确认修订失效、中文结果和当前页面控制台无新增错误。
+
+## 参数化 CAD 零件转受管网格分支协议
+
+第 43 阶段在参数化 B-Rep 与受管 STL 网格之间建立显式、不可混淆的分支边界：
+
+```text
+当前 CAD 修订 + 用户主动选择的任意零件 ID
+  → 前端确认参数化能力边界
+  → Tauri/Vite 读取当前 generation-result.json
+  → 复核修订、零件、普通 STL 文件名、文件大小和存在性
+  → 复用 STL 实体检查生成原始 STL、工作 STL、工作 STEP 和模型清单
+  → branchSource 写入源 CAD 修订、零件 ID、中文名称和源 STL 文件
+  → Zustand 切换到 uploaded-stl 视图并清除旧分析/选择
+  → 创建 CAD 派生网格中文版本和桌面精确快照
+  → 复用网格元素点击/框选、位移、单轴旋转和均匀缩放
+```
+
+- `create_cad_mesh_branch` 持有与 CAD 生成、上传导入和网格编辑相同的工作进程锁。`resolve_cad_mesh_branch_source()` 只从当前清单的 `parts[]` 查找用户选中的 ID，并通过普通文件名校验阻止路径穿越；实现不依赖任何固定零件角色。
+- `inspect_stl_as_imported_model()` 是普通 STL 上传与 CAD 网格分支共用的实体导入入口。普通上传传入空来源；CAD 派生分支在实体检查成功后把 `branchSource.kind=cad-part` 写入模型清单。
+- `ImportedStlModel.branchSource` 和 `ModelVersion.meshBranchSource` 用于区分运行时模型来源与不可变版本来源。来源元数据不是把网格升级为 B-Rep 的证明，只用于历史追踪、中文说明和恢复校验。
+- `modeling/edit_mesh_element.py` 与 `modeling/local_stl_edit.py` 在重建 `updatedModel` 时复制已有 `branchSource`；`restore_uploaded_model_snapshot.py` 恢复完整清单，因此位移、旋转、缩放、局部圆柱布尔和快照恢复都不会把 CAD 派生网格误降级为普通上传模型。
+- Store 只在当前 `cadStatus=ready`、CAD 修订和目标零件仍存在时发起创建。成功后清除拆件、壁厚、局部 CAD 选择、网格选择和旧结果；桌面精确快照创建失败不会回滚已经通过实体检查的网格分支，但会保留清晰中文边界并禁止伪造恢复成功。
+- Web 开发 API 使用相同的修订和文件名校验，但没有 Tauri 受管版本目录，因此可以验证真实工作网格创建与编辑，不能作为桌面精确快照恢复的替代证据。
+- 第一版一次只转换一个 CAD 零件；不执行多个零件合并、不生成参数化特征树、不把编辑后 STEP 称为原生精确 B-Rep，也不实现拓扑增删、焊接、分裂、面挤出或自由雕刻。
+
+2026-07-22 第 43 阶段验证结果：前端 177/177、Rust 47/47、Python 网格元素编辑 10/10、局部 STL 编辑 5/5、上传快照恢复 4/4、拆件与补面 27/27；生产构建、Cargo 检查与测试、Python 语法、Rust 格式和差异检查通过。浏览器完成真实 CAD 零件转网格分支并确认全中文状态、真实毫米尺寸、来源语义和无控制台错误。

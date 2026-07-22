@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { BoxSelect, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
+import { BoxSelect, GitBranch, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
@@ -42,10 +42,15 @@ function parseFinite(value: string) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** 提供任意上传 STL 选择集合的受限位移、单轴旋转和均匀缩放入口。 */
+/** 为精确 CAD 创建受管网格分支，并提供网格选择集合的受限变换入口。 */
 export function MeshElementEditPanel() {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
   const importedStlModel = useModelStore((state) => state.importedStlModel);
+  const importedStlStatus = useModelStore((state) => state.importedStlStatus);
+  const importedStlError = useModelStore((state) => state.importedStlError);
+  const cadStatus = useModelStore((state) => state.cadStatus);
+  const cadResult = useModelStore((state) => state.cadResult);
+  const selectedObject = useModelStore((state) => state.selectedObject);
   const manufacturingResult = useModelStore((state) => state.manufacturingResult);
   const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
   const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
@@ -56,7 +61,9 @@ export function MeshElementEditPanel() {
   const setMeshElementSelectionMethod = useModelStore((state) => state.setMeshElementSelectionMethod);
   const clearMeshElementSelection = useModelStore((state) => state.clearMeshElementSelection);
   const applyMeshElementTransform = useModelStore((state) => state.applyMeshElementTransform);
+  const createCadMeshBranch = useModelStore((state) => state.createCadMeshBranch);
   const clearManufacturingSplit = useModelStore((state) => state.clearManufacturingSplit);
+  const [cadPartSelection, setCadPartSelection] = useState('');
   const [transformKind, setTransformKind] = useState<MeshElementTransformKind>('move');
   const [x, setX] = useState('0');
   const [y, setY] = useState('0');
@@ -84,6 +91,74 @@ export function MeshElementEditPanel() {
     && importedStlModel
     && meshElementSelection.revision === importedStlModel.revision
   );
+  const selectedCadPartId = cadPartSelection && cadResult?.parts.some((part) => part.id === cadPartSelection)
+    ? cadPartSelection
+    : cadResult?.parts.find((part) => part.id === selectedObject)?.id ?? cadResult?.parts[0]?.id ?? '';
+  const selectedCadPart = cadResult?.parts.find((part) => part.id === selectedCadPartId) ?? null;
+  const isCreatingBranch = importedStlStatus === 'importing';
+  const cadBranchBlockedReason = cadStatus !== 'ready' || !cadResult
+    ? '请先等待精确 CAD 生成和实体校验完成。'
+    : !selectedCadPart
+      ? '当前 CAD 修订没有可转换的零件。'
+      : null;
+
+  async function submitCadMeshBranch() {
+    if (!selectedCadPart || cadBranchBlockedReason || isCreatingBranch) return;
+    const confirmed = window.confirm(
+      `要从“${selectedCadPart.label}”创建网格分支吗？\n\n`
+      + '原参数化 CAD 分支会保留在版本历史中；新网格分支可以编辑顶点、边和面；'
+      + '网格修改后不再保证参数化特征可编辑。'
+    );
+    if (!confirmed) return;
+    await createCadMeshBranch(selectedCadPart.id);
+  }
+
+  if (viewportModelSource === 'cad') {
+    return (
+      <aside className="mesh-element-edit-panel mesh-cad-branch-panel" aria-label="创建 CAD 网格分支">
+        <header>
+          <div>
+            <strong><GitBranch size={14} /> CAD 转网格分支</strong>
+            <span>保留参数化原版 · 独立编辑当前零件</span>
+          </div>
+        </header>
+        <div className="mesh-cad-branch-content">
+          <strong>选择要转换的 CAD 零件</strong>
+          <span>系统会读取当前修订的真实毫米 STL，创建独立受管工作集，不会合并其他零件。</span>
+          <label>
+            <span>当前零件</span>
+            <select
+              value={selectedCadPartId}
+              onChange={(event) => setCadPartSelection(event.target.value)}
+              disabled={isCreatingBranch || !cadResult?.parts.length}
+            >
+              {cadResult?.parts.map((part) => (
+                <option key={part.id} value={part.id}>{part.label}</option>
+              ))}
+            </select>
+          </label>
+          {selectedCadPart && (
+            <small>尺寸：{selectedCadPart.metrics.boundsMm.x.toFixed(2)} × {selectedCadPart.metrics.boundsMm.y.toFixed(2)} × {selectedCadPart.metrics.boundsMm.z.toFixed(2)} 毫米</small>
+          )}
+          {cadBranchBlockedReason && <p className="mesh-element-error">{cadBranchBlockedReason}</p>}
+          {importedStlError && <p className="mesh-element-error">{importedStlError}</p>}
+          <button
+            type="button"
+            className="mesh-cad-branch-create"
+            onClick={submitCadMeshBranch}
+            disabled={Boolean(cadBranchBlockedReason) || isCreatingBranch}
+          >
+            <GitBranch size={12} />
+            {isCreatingBranch ? '正在校验并创建网格分支…' : '创建网格分支'}
+          </button>
+        </div>
+        <footer>
+          <span>原参数化 CAD 版本仍可从版本历史恢复；网格分支会单独保存精确快照。</span>
+          <span>第一版支持点击或框选顶点、边、面，并执行位移、单轴旋转和均匀缩放。</span>
+        </footer>
+      </aside>
+    );
+  }
 
   if (viewportModelSource !== 'uploaded-stl' || !importedStlModel) return null;
 
@@ -117,7 +192,7 @@ export function MeshElementEditPanel() {
       <header>
         <div>
           <strong><Move3d size={14} /> 网格元素编辑</strong>
-          <span>任意上传 STL · 源模型毫米坐标</span>
+          <span>{importedStlModel.branchSource ? 'CAD 派生网格分支' : '任意上传 STL'} · 源模型毫米坐标</span>
         </div>
         {meshElementEditMode !== 'off' && (
           <button type="button" className="mesh-element-exit" onClick={() => setMeshElementEditMode('off')} title="退出编辑">

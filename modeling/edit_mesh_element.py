@@ -300,6 +300,10 @@ def transform_mesh_elements(
                 "repair": old_metrics.get("repair", {}),
             },
         }
+        branch_source = manifest.get("branchSource")
+        if isinstance(branch_source, dict):
+            updated_model["branchSource"] = branch_source
+
         result: dict[str, object] = {
             "status": "ok",
             "revision": revision,

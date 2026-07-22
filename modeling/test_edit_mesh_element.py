@@ -42,6 +42,27 @@ class MeshElementEditTests(unittest.TestCase):
             updated = json.loads((root / "imported-model-result.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["revision"], result["revision"])
 
+    def test_preserves_cad_mesh_branch_source_after_transform(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            branch_source = {
+                "kind": "cad-part",
+                "cadRevision": "cad-source-revision",
+                "partId": "figure-head",
+                "partLabel": "头部",
+                "sourceStlFile": "figure-head.stl",
+            }
+            manifest["branchSource"] = branch_source
+            (root / "imported-model-result.json").write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+            )
+
+            result = edit_mesh_element(source, root, str(manifest["revision"]), "vertex", 0, 0, (0.25, 0, 0))
+            self.assertEqual(result["updatedModel"]["branchSource"], branch_source)
+            persisted = json.loads((root / "imported-model-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["branchSource"], branch_source)
+
     def test_moves_edge_and_face_with_distinct_coordinate_counts(self) -> None:
         for kind, element_index, expected in (("edge", 0, 2), ("face", 0, 3)):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:

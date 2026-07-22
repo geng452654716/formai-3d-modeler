@@ -1206,6 +1206,16 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-element-blocked strong { color: #e2b45e; font-size: 9px; }
 .mesh-element-blocked span { color: #96999e; font-size: 8px; line-height: 1.45; }
 .mesh-element-blocked button { margin-top: 3px; color: #efba58; border-color: rgba(218, 153, 46, .5); }
+.mesh-cad-branch-content { display: flex; flex-direction: column; gap: 7px; padding: 11px 10px; }
+.mesh-cad-branch-content > strong { color: #e2e3df; font-size: 9px; }
+.mesh-cad-branch-content > span { color: #8c9198; font-size: 8px; line-height: 1.5; }
+.mesh-cad-branch-content label { display: flex; flex-direction: column; gap: 4px; color: #898e95; font-size: 7px; }
+.mesh-cad-branch-content select { width: 100%; height: 29px; box-sizing: border-box; border: 1px solid #3a3d42; border-radius: 5px; padding: 0 7px; color: #d8dad7; background: #191b1e; font-family: inherit; font-size: 8px; }
+.mesh-cad-branch-content small { color: #747a82; font-size: 7px; line-height: 1.4; }
+.mesh-cad-branch-content .mesh-element-error { margin: 0; }
+.mesh-cad-branch-create { min-height: 30px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #d29424; border-radius: 5px; color: #2a2112; background: #e0a12e; font-family: inherit; font-size: 8px; font-weight: 700; cursor: pointer; }
+.mesh-cad-branch-create:hover:not(:disabled) { background: #efb442; }
+.mesh-cad-branch-create:disabled { cursor: not-allowed; opacity: .45; }
 
 @media (max-width: 1180px) {
   .mesh-element-edit-panel { width: 280px; }

@@ -56,6 +56,14 @@ export interface ImportedStlModel {
   /** 用户上传内容在内部输出目录中的原始安全文件名。 */
   originalSourceFile: string;
   sourceKind: 'uploaded-stl';
+  /** 由精确 CAD 零件主动派生时，记录可追溯的原分支信息。 */
+  branchSource?: {
+    kind: 'cad-part';
+    cadRevision: string;
+    partId: string;
+    partLabel: string;
+    sourceStlFile: string;
+  };
   units: 'mm';
   kernel: string;
   outputs: string[];

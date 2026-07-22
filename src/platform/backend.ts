@@ -252,6 +252,24 @@ export async function importStlModel(file: File) {
   return result;
 }
 
+/** 将当前修订中的一个精确 CAD 零件安全转换为独立受管网格分支。 */
+export async function createCadMeshBranch(cadRevision: string, sourcePartId: string) {
+  const payload = { cadRevision, sourcePartId };
+  if (isDesktopRuntime()) {
+    return invoke<ImportedStlModel>('create_cad_mesh_branch', payload);
+  }
+  const response = await fetch('/api/model/create-cad-mesh-branch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json() as ImportedStlModel | { message?: string };
+  if (!response.ok || !('status' in result) || result.status !== 'ok') {
+    throw new Error('message' in result && result.message ? result.message : 'CAD 网格分支创建失败');
+  }
+  return result;
+}
+
 /** 对当前 CAD 零件或上传 STL 执行 OpenCascade 平面拆件与补面校验。 */
 export async function runManufacturingSplit(request: ManufacturingSplitRequest) {
   if (isDesktopRuntime()) {

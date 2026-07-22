@@ -126,6 +126,44 @@ describe('上传模型精确版本恢复', () => {
     expect(state.versionRestoreError).toContain('体积不一致');
   });
 
+  it('恢复 CAD 派生网格快照时保留原 CAD 零件来源元数据', async () => {
+    const restored = uploadedModel('revision-old', 1000);
+    restored.branchSource = {
+      kind: 'cad-part',
+      cadRevision: 'cad-source-revision',
+      partId: 'figure-head',
+      partLabel: '头部',
+      sourceStlFile: 'figure-head.stl'
+    };
+    useModelStore.setState({
+      versions: [{
+        ...version('old', 'revision-old', '/受管版本/old'),
+        meshBranchSource: {
+          cadRevision: 'cad-source-revision',
+          partId: 'figure-head',
+          partLabel: '头部'
+        }
+      }, version('new', 'revision-new', '/受管版本/new')],
+      versionIndex: 1
+    });
+    backendMocks.restoreUploadedModelSnapshot.mockResolvedValue({
+      status: 'ok',
+      operation: 'restore-uploaded-model-snapshot',
+      restoredRevision: 'revision-old',
+      sourceKind: 'uploaded-stl',
+      updatedModel: restored
+    });
+
+    await expect(useModelStore.getState().undo()).resolves.toBe(true);
+    expect(useModelStore.getState().importedStlModel?.branchSource).toEqual({
+      kind: 'cad-part',
+      cadRevision: 'cad-source-revision',
+      partId: 'figure-head',
+      partLabel: '头部',
+      sourceStlFile: 'figure-head.stl'
+    });
+  });
+
   it('参数化 CAD 版本恢复不调用上传模型恢复 Worker', async () => {
     useModelStore.setState({
       versions: [{

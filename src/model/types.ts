@@ -103,6 +103,8 @@ export interface ModelVersion {
   modelSource?: 'cad' | 'uploaded-stl';
   /** 上传模型版本绑定的不可变修订号。 */
   importedModelRevision?: string;
+  /** CAD 主分支派生出的受管网格分支来源，用于历史列表和安全返回原 CAD。 */
+  meshBranchSource?: { cadRevision: string; partId: string; partLabel: string };
   /** 桌面端受管目录中保存的精确 CAD 或上传模型工作文件快照。 */
   snapshotDirectory?: string;
 }

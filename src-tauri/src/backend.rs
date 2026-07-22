@@ -1130,6 +1130,71 @@ pub async fn generate_cad(
     .map_err(|error| format!("CAD 后台任务失败：{error}"))?
 }
 
+fn inspect_stl_as_imported_model(
+    paths: &BackendPaths,
+    original_file_name: String,
+    file_bytes: Vec<u8>,
+    branch_source: Option<Value>,
+) -> Result<Value, String> {
+    if !paths.split_worker_path.is_file() {
+        return Err(format!(
+            "未找到 STL 检查 Worker：{}",
+            paths.split_worker_path.display()
+        ));
+    }
+    if !cad_runtime_available(paths) {
+        return Err(format!(
+            "CAD Python 环境不可用：{}。请设置 FORM_AI_PYTHON_PATH 指向已安装 CadQuery 的 Python。",
+            paths.python_path.display()
+        ));
+    }
+    fs::create_dir_all(&paths.artifacts_dir)
+        .map_err(|error| format!("无法创建模型输出目录：{error}"))?;
+    let source_path = paths.artifacts_dir.join("imported-model.stl");
+    fs::write(&source_path, file_bytes).map_err(|error| format!("无法保存受管 STL：{error}"))?;
+    let arguments = vec![
+        paths.split_worker_path.display().to_string(),
+        "--input".into(),
+        source_path.display().to_string(),
+        "--output".into(),
+        paths.artifacts_dir.display().to_string(),
+        "--stem".into(),
+        "imported-model".into(),
+        "--source-kind".into(),
+        "uploaded-stl".into(),
+        "--inspect-only".into(),
+        "--original-file-name".into(),
+        original_file_name,
+    ];
+    let output = run_process_with_input(&paths.python_path, &arguments, &paths.project_root, None)?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if message.is_empty() {
+            format!("STL 检查 Worker 退出，状态码：{}", output.status)
+        } else {
+            message
+        });
+    }
+    let result_path = paths.artifacts_dir.join("imported-model-result.json");
+    let contents = fs::read_to_string(&result_path)
+        .map_err(|error| format!("无法读取 STL 导入结果：{error}"))?;
+    let mut result: Value = serde_json::from_str(&contents)
+        .map_err(|error| format!("STL 导入结果格式错误：{error}"))?;
+    if let Some(branch_source) = branch_source {
+        let object = result
+            .as_object_mut()
+            .ok_or_else(|| "STL 导入结果必须是对象".to_string())?;
+        object.insert("branchSource".into(), branch_source);
+        fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&result)
+                .map_err(|error| format!("无法序列化网格分支清单：{error}"))?,
+        )
+        .map_err(|error| format!("无法写入网格分支清单：{error}"))?;
+    }
+    Ok(result)
+}
+
 #[tauri::command]
 pub async fn import_stl_model(
     file_name: String,
@@ -1148,66 +1213,100 @@ pub async fn import_stl_model(
     if file_bytes.len() > 50 * 1024 * 1024 {
         return Err("STL 文件不能超过 50 MB".into());
     }
-
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = state
             .generation_lock
             .lock()
             .map_err(|_| "CAD 工作进程锁已损坏".to_string())?;
-        if !state.paths.split_worker_path.is_file() {
-            return Err(format!(
-                "未找到 STL 检查 Worker：{}",
-                state.paths.split_worker_path.display()
-            ));
-        }
-        if !cad_runtime_available(&state.paths) {
-            return Err(format!(
-                "CAD Python 环境不可用：{}。请设置 FORM_AI_PYTHON_PATH 指向已安装 CadQuery 的 Python。",
-                state.paths.python_path.display()
-            ));
-        }
-        fs::create_dir_all(&state.paths.artifacts_dir)
-            .map_err(|error| format!("无法创建模型输出目录：{error}"))?;
-        let source_path = state.paths.artifacts_dir.join("imported-model.stl");
-        fs::write(&source_path, file_bytes)
-            .map_err(|error| format!("无法保存上传 STL：{error}"))?;
-
-        let arguments = vec![
-            state.paths.split_worker_path.display().to_string(),
-            "--input".into(),
-            source_path.display().to_string(),
-            "--output".into(),
-            state.paths.artifacts_dir.display().to_string(),
-            "--stem".into(),
-            "imported-model".into(),
-            "--source-kind".into(),
-            "uploaded-stl".into(),
-            "--inspect-only".into(),
-            "--original-file-name".into(),
-            original_file_name,
-        ];
-        let output = run_process_with_input(
-            &state.paths.python_path,
-            &arguments,
-            &state.paths.project_root,
-            None,
-        )?;
-        if !output.status.success() {
-            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(if message.is_empty() {
-                format!("STL 检查 Worker 退出，状态码：{}", output.status)
-            } else {
-                message
-            });
-        }
-        let result_path = state.paths.artifacts_dir.join("imported-model-result.json");
-        let contents = fs::read_to_string(&result_path)
-            .map_err(|error| format!("无法读取 STL 导入结果：{error}"))?;
-        serde_json::from_str(&contents).map_err(|error| format!("STL 导入结果格式错误：{error}"))
+        inspect_stl_as_imported_model(&state.paths, original_file_name, file_bytes, None)
     })
     .await
     .map_err(|error| format!("STL 导入后台任务失败：{error}"))?
+}
+
+/** 从当前 CAD 清单解析任意零件的安全 STL 来源，拒绝旧修订和路径穿越。 */
+fn resolve_cad_mesh_branch_source(
+    manifest: &Value,
+    cad_revision: &str,
+    source_part_id: &str,
+) -> Result<(String, String), String> {
+    if manifest.get("revision").and_then(Value::as_str) != Some(cad_revision) {
+        return Err("精确 CAD 已在选择后发生变化，请重新选择零件".into());
+    }
+    let part = manifest
+        .get("parts")
+        .and_then(Value::as_array)
+        .and_then(|parts| {
+            parts
+                .iter()
+                .find(|part| part.get("id").and_then(Value::as_str) == Some(source_part_id))
+        })
+        .ok_or_else(|| format!("模型清单中没有找到零件：{source_part_id}"))?;
+    let part_label = part
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or(source_part_id)
+        .to_string();
+    let stl_file = part
+        .get("stlFile")
+        .and_then(Value::as_str)
+        .filter(|value| is_plain_file_name(value))
+        .ok_or_else(|| "模型清单中的 CAD 零件 STL 文件名无效".to_string())?
+        .to_string();
+    Ok((part_label, stl_file))
+}
+
+#[tauri::command]
+pub async fn create_cad_mesh_branch(
+    cad_revision: String,
+    source_part_id: String,
+    state: tauri::State<'_, BackendState>,
+) -> Result<Value, String> {
+    if cad_revision.trim().is_empty() || cad_revision.chars().count() > 200 {
+        return Err("CAD 修订号无效，请先重新生成精确模型".into());
+    }
+    if source_part_id.trim().is_empty() || source_part_id.chars().count() > 200 {
+        return Err("请选择要转换为网格分支的 CAD 零件".into());
+    }
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = state
+            .generation_lock
+            .lock()
+            .map_err(|_| "CAD 工作进程锁已损坏".to_string())?;
+        let manifest_path = state.paths.artifacts_dir.join("generation-result.json");
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path)
+                .map_err(|error| format!("无法读取当前精确模型清单：{error}"))?,
+        )
+        .map_err(|error| format!("当前精确模型清单格式错误：{error}"))?;
+        let (part_label, stl_file) =
+            resolve_cad_mesh_branch_source(&manifest, &cad_revision, &source_part_id)?;
+        let source_path = state.paths.artifacts_dir.join(&stl_file);
+        let file_bytes =
+            fs::read(&source_path).map_err(|error| format!("无法读取 CAD 零件 STL：{error}"))?;
+        if file_bytes.is_empty() {
+            return Err("CAD 零件 STL 文件为空".into());
+        }
+        if file_bytes.len() > 50 * 1024 * 1024 {
+            return Err("CAD 零件 STL 不能超过 50 MB".into());
+        }
+        inspect_stl_as_imported_model(
+            &state.paths,
+            format!("{part_label}-网格分支.stl"),
+            file_bytes,
+            Some(json!({
+                "kind": "cad-part",
+                "cadRevision": cad_revision,
+                "partId": source_part_id,
+                "partLabel": part_label,
+                "sourceStlFile": stl_file
+            })),
+        )
+    })
+    .await
+    .map_err(|error| format!("CAD 网格分支后台任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -3452,6 +3551,43 @@ mod tests {
                 { "x": 0.0, "y": 10.0, "z": 0.0 }
             ]
         })
+    }
+
+    #[test]
+    fn resolves_arbitrary_cad_part_for_mesh_branch() {
+        let manifest = json!({
+            "revision": "cad-revision-1",
+            "parts": [
+                { "id": "ornament-left", "label": "左侧装饰件", "stlFile": "ornament-left.stl" },
+                { "id": "figure-head", "label": "头部", "stlFile": "figure-head.stl" }
+            ]
+        });
+        let resolved = resolve_cad_mesh_branch_source(&manifest, "cad-revision-1", "figure-head")
+            .expect("任意清单零件都应可创建网格分支");
+        assert_eq!(resolved, ("头部".into(), "figure-head.stl".into()));
+    }
+
+    #[test]
+    fn rejects_stale_unknown_and_unsafe_cad_mesh_branch_sources() {
+        let manifest = json!({
+            "revision": "cad-revision-2",
+            "parts": [{ "id": "part-a", "label": "零件甲", "stlFile": "../outside.stl" }]
+        });
+        assert!(
+            resolve_cad_mesh_branch_source(&manifest, "cad-revision-old", "part-a")
+                .expect_err("旧修订必须被拒绝")
+                .contains("发生变化")
+        );
+        assert!(
+            resolve_cad_mesh_branch_source(&manifest, "cad-revision-2", "missing")
+                .expect_err("未知零件必须被拒绝")
+                .contains("没有找到零件")
+        );
+        assert!(
+            resolve_cad_mesh_branch_source(&manifest, "cad-revision-2", "part-a")
+                .expect_err("路径穿越文件必须被拒绝")
+                .contains("文件名无效")
+        );
     }
 
     #[test]

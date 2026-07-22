@@ -45,6 +45,30 @@ class LocalStlEditTests(unittest.TestCase):
             self.assertEqual(manifest["revision"], result["revision"])
             self.assertAlmostEqual(manifest["metrics"]["boundsMm"]["maxZ"], 12.0, places=2)
 
+    def test_preserves_cad_mesh_branch_source_after_local_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._project(root)
+            manifest_path = root / "imported-model-result.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            branch_source = {
+                "kind": "cad-part",
+                "cadRevision": "cad-source-revision",
+                "partId": "figure-body",
+                "partLabel": "身体",
+                "sourceStlFile": "figure-body.stl",
+            }
+            manifest["branchSource"] = branch_source
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+            result = edit_uploaded_stl(
+                source, root, "add-cylinder", center=(10, 8, 10),
+                inward_normal=(0, 0, -1), radius_mm=3, depth_mm=2,
+            )
+            self.assertEqual(result["updatedModel"]["branchSource"], branch_source)
+            persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["branchSource"], branch_source)
+
     def test_cuts_verified_cylindrical_hole_and_supports_consecutive_edits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

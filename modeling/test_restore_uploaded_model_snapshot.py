@@ -48,6 +48,27 @@ class UploadedModelSnapshotRestoreTests(unittest.TestCase):
             self.assertEqual(restored["validation"]["solidCount"], 1)
             self.assertTrue(restored["validation"]["watertight"])
 
+    def test_preserves_cad_mesh_branch_source_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = self._create_uploaded_model(root, (18, 14, 9))
+            original["branchSource"] = {
+                "kind": "cad-part",
+                "cadRevision": "cad-source-revision",
+                "partId": "figure-head",
+                "partLabel": "头部",
+                "sourceStlFile": "figure-head.stl",
+            }
+            (root / "imported-model-result.json").write_text(
+                json.dumps(original, ensure_ascii=False), encoding="utf-8"
+            )
+            snapshot = self._create_snapshot(root, original)
+
+            restored = restore_uploaded_model_snapshot(snapshot, root, str(original["revision"]))
+            self.assertEqual(restored["updatedModel"]["branchSource"], original["branchSource"])
+            current = json.loads((root / "imported-model-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(current["branchSource"], original["branchSource"])
+
     def test_rejects_revision_mismatch_without_overwriting_current_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

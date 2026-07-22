@@ -46,6 +46,25 @@ function formatMillimeters(value: number) {
   return `${Number(normalized.toFixed(4))} 毫米`;
 }
 
+function describeVersionSnapshot(version: ModelVersion) {
+  if ((version.modelSource ?? 'cad') !== 'uploaded-stl') {
+    return version.snapshotDirectory ? '已保存精确 CAD 快照' : '仅保存参数与开孔记录';
+  }
+  const sourceLabel = version.meshBranchSource ? 'CAD 网格分支' : '上传模型';
+  return version.snapshotDirectory
+    ? `已保存${sourceLabel}精确快照`
+    : `${sourceLabel}版本缺少精确快照`;
+}
+
+function describeVersionRestore(version: ModelVersion) {
+  if ((version.modelSource ?? 'cad') !== 'uploaded-stl') {
+    return '恢复参数并重新生成精确 CAD';
+  }
+  return version.meshBranchSource
+    ? '恢复已保存的 CAD 派生网格工作 STL 与 STEP'
+    : '恢复已保存的上传模型工作 STL 与 STEP';
+}
+
 function chooseInitialBaseVersion(versions: ModelVersion[], currentIndex: number) {
   if (currentIndex > 0) return versions[currentIndex - 1]?.id ?? versions[currentIndex]?.id ?? '';
   return versions[currentIndex + 1]?.id ?? versions[currentIndex]?.id ?? '';
@@ -126,9 +145,7 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
 
   const handleRestore = async () => {
     if (baseVersion.id === currentVersion.id || versionRestoreStatus === 'restoring') return;
-    const sourceLabel = (baseVersion.modelSource ?? 'cad') === 'uploaded-stl'
-      ? '恢复已保存的上传模型工作 STL 与 STEP'
-      : '恢复参数并重新生成精确 CAD';
+    const sourceLabel = describeVersionRestore(baseVersion);
     const confirmed = window.confirm(
       `恢复到“${baseVersion.label}”吗？将${sourceLabel}；如果继续修改，将从该版本创建新的历史分支。`
     );
@@ -171,7 +188,7 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
             <History size={18} />
             <div>
               <strong id="version-history-title">版本历史与对比</strong>
-              <span>恢复参数化 CAD 或上传模型精确快照，并查看版本差异</span>
+              <span>恢复参数化 CAD、上传模型或 CAD 派生网格精确快照，并查看版本差异</span>
             </div>
           </div>
           <button onClick={onClose} title="关闭"><X size={17} /></button>
@@ -204,14 +221,11 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
                       <strong>{version.label}</strong>
                       <small>{formatDate(version.createdAt)}</small>
                       <small className={version.snapshotDirectory ? 'has-snapshot' : ''}>
-                        {version.snapshotDirectory
-                          ? <><HardDrive size={11} /> {(version.modelSource ?? 'cad') === 'uploaded-stl'
-                              ? '已保存上传模型精确快照'
-                              : '已保存精确 CAD 快照'}</>
-                          : (version.modelSource ?? 'cad') === 'uploaded-stl'
-                            ? '上传模型版本缺少精确快照'
-                            : '仅保存参数与开孔记录'}
+                        {version.snapshotDirectory && <HardDrive size={11} />} {describeVersionSnapshot(version)}
                       </small>
+                      {version.meshBranchSource && (
+                        <small>来源：参数化 CAD · {version.meshBranchSource.partLabel}</small>
+                      )}
                     </span>
                     {isCurrent && <b><CheckCircle2 size={12} /> 当前</b>}
                   </button>
@@ -242,7 +256,7 @@ export function VersionHistoryDialog({ onClose }: VersionHistoryDialogProps) {
             </div>
 
             <p className="version-comparison-note">
-              上传模型版本会恢复受管工作 STL、STEP 和模型清单；参数化 CAD 版本会恢复参数并重新生成实体。
+              上传模型和 CAD 派生网格版本会恢复受管工作 STL、STEP 和模型清单；参数化 CAD 版本会恢复参数并重新生成实体。
               只有精确 CAD 快照参与 OpenCascade 历史实体布尔差集。
             </p>
             {versionRestoreError && <p className="version-comparison-note is-error">恢复失败：{versionRestoreError}</p>}
