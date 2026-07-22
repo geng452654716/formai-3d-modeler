@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, LoaderCircle, Printer, Rotate3D, RotateCcw, X } from 'lucide-react';
+import { CheckCircle2, LoaderCircle, MoveDown, Printer, Rotate3D, RotateCcw, X } from 'lucide-react';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { resolveGeneratedModelUrl } from '../model/cad';
 import { normalizeObjectPresentation, type ObjectVector3 } from '../model/objectTransform';
 import {
+  createPrintBedPlacementPresentation,
   createPrintOrientationPresentation,
   evaluateAxisAlignedPrintOrientations,
+  evaluatePrintBedPlacement,
   isPrintOrientationRotationApplied,
+  type PrintBedNormalizationSpace,
+  type PrintBedPlacementPreview,
   type PrintOrientationAnalysis
 } from '../model/printOrientation';
 import { useModelStore } from '../store/useModelStore';
@@ -21,6 +25,9 @@ export interface PrintOrientationSource {
   fallbackColor: string;
   uniformScale: number;
   currentRotationDeg: ObjectVector3;
+  currentPositionMm: ObjectVector3;
+  bedNormalizationSpace: PrintBedNormalizationSpace;
+  basePositionDisplayMm: ObjectVector3;
 }
 
 interface PrintOrientationPanelProps {
@@ -32,7 +39,12 @@ type AnalysisState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; sourceIdentity: string; result: PrintOrientationAnalysis };
+  | {
+      status: 'ready';
+      sourceIdentity: string;
+      result: PrintOrientationAnalysis;
+      bedPlacement: PrintBedPlacementPreview;
+    };
 
 function errorMessage(error: unknown) {
   return error instanceof Error && error.message.trim() ? error.message : '打印方向分析失败，请稍后重试';
@@ -42,14 +54,18 @@ function errorMessage(error: unknown) {
 export function PrintOrientationPanel({ source, unavailableReason }: PrintOrientationPanelProps) {
   const [analysisState, setAnalysisState] = useState<AnalysisState>({ status: 'idle' });
   const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [bedConfirmationOpen, setBedConfirmationOpen] = useState(false);
   const [applicationNotice, setApplicationNotice] = useState<string | null>(null);
   const requestSerial = useRef(0);
+  const pendingPresentationNotice = useRef<string | null>(null);
 
   useEffect(() => {
     requestSerial.current += 1;
     setAnalysisState({ status: 'idle' });
     setConfirmationOpen(false);
-    setApplicationNotice(null);
+    setBedConfirmationOpen(false);
+    setApplicationNotice(pendingPresentationNotice.current);
+    pendingPresentationNotice.current = null;
     return () => {
       requestSerial.current += 1;
     };
@@ -61,6 +77,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     const sourceIdentity = source.identity;
     setAnalysisState({ status: 'loading' });
     setConfirmationOpen(false);
+    setBedConfirmationOpen(false);
     setApplicationNotice(null);
     let sourceUrl: string | null = null;
     try {
@@ -80,8 +97,18 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
           overhangAngleDeg: 45,
           uniformScale: source.uniformScale
         });
+        const bedPlacement = evaluatePrintBedPlacement({
+          positions: positions.array,
+          indices: geometry.getIndex()?.array ?? null
+        }, {
+          rotationDeg: source.currentRotationDeg,
+          positionMm: source.currentPositionMm,
+          uniformScale: source.uniformScale,
+          normalizationSpace: source.bedNormalizationSpace,
+          basePositionDisplayMm: source.basePositionDisplayMm
+        });
         if (serial !== requestSerial.current || sourceIdentity !== source.identity) return;
-        setAnalysisState({ status: 'ready', sourceIdentity, result });
+        setAnalysisState({ status: 'ready', sourceIdentity, result, bedPlacement });
       } finally {
         geometry.dispose();
       }
@@ -97,6 +124,9 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     ? analysisState.result
     : null;
   const recommended = result?.candidates.find((candidate) => candidate.id === result.recommendedId) ?? null;
+  const bedPlacement = analysisState.status === 'ready' && analysisState.sourceIdentity === source?.identity
+    ? analysisState.bedPlacement
+    : null;
   const alreadyApplied = Boolean(source && recommended && isPrintOrientationRotationApplied(
     source.currentRotationDeg,
     recommended.id
@@ -118,6 +148,8 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
       return;
     }
 
+    const successNotice = '已应用推荐方向，请重新分析确认当前打印风险。';
+    pendingPresentationNotice.current = successNotice;
     try {
       const next = createPrintOrientationPresentation(current, recommended.id, source.fallbackColor);
       store.beginObjectPresentationEdit(source.objectId, source.fallbackColor);
@@ -137,12 +169,86 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
       requestSerial.current += 1;
       setAnalysisState({ status: 'idle' });
       setConfirmationOpen(false);
-      setApplicationNotice('已应用推荐方向，请重新分析确认当前打印风险。');
+      setApplicationNotice(successNotice);
     } catch (error) {
+      pendingPresentationNotice.current = null;
       setConfirmationOpen(false);
       setApplicationNotice(`应用推荐方向失败：${errorMessage(error)}`);
     }
   }
+
+  /** 用户确认后只写视口 Y 位置，使当前旋转缩放后的最低点落到平台 0 毫米。 */
+  function applyPrintBedPlacement() {
+    if (
+      !source
+      || !recommended
+      || !bedPlacement
+      || !alreadyApplied
+      || analysisState.status !== 'ready'
+      || analysisState.sourceIdentity !== source.identity
+    ) {
+      setBedConfirmationOpen(false);
+      setApplicationNotice('当前落床预览已经失效，请重新分析后再应用。');
+      return;
+    }
+
+    const store = useModelStore.getState();
+    const current = normalizeObjectPresentation(store.objectPresentations[source.objectId], source.fallbackColor);
+    const sourceTransformStillCurrent = current.transform.scale === source.uniformScale
+      && (['x', 'y', 'z'] as const).every((axis) => (
+        current.transform.positionMm[axis] === source.currentPositionMm[axis]
+        && current.transform.rotationDeg[axis] === source.currentRotationDeg[axis]
+      ));
+    if (!sourceTransformStillCurrent) {
+      setBedConfirmationOpen(false);
+      setApplicationNotice('当前对象变换已经变化，请重新分析后再落床。');
+      return;
+    }
+    if (bedPlacement.alreadyOnBed) {
+      setBedConfirmationOpen(false);
+      setApplicationNotice('当前对象已经落在打印平台，无需重复移动。');
+      return;
+    }
+
+    const successNotice = '已将当前对象落到打印平台，可使用撤销或重做恢复。';
+    pendingPresentationNotice.current = successNotice;
+    try {
+      const next = createPrintBedPlacementPresentation(current, bedPlacement, source.fallbackColor);
+      if (Math.abs(next.transform.positionMm.y - bedPlacement.targetVerticalPositionMm) > 1e-6) {
+        throw new Error('目标垂直位置超出对象变换允许范围');
+      }
+      store.beginObjectPresentationEdit(source.objectId, source.fallbackColor);
+      store.updateObjectPresentation(source.objectId, next, source.fallbackColor);
+      const written = normalizeObjectPresentation(
+        useModelStore.getState().objectPresentations[source.objectId],
+        source.fallbackColor
+      );
+      if (Math.abs(written.transform.positionMm.y - bedPlacement.targetVerticalPositionMm) > 1e-6) {
+        store.updateObjectPresentation(source.objectId, current, source.fallbackColor);
+        store.finishObjectPresentationEdit(source.objectId, '取消无效自动落床', source.fallbackColor);
+        throw new Error('对象垂直位置写入后校验失败');
+      }
+      store.finishObjectPresentationEdit(
+        source.objectId,
+        `将“${source.label}”落到打印平台`,
+        source.fallbackColor
+      );
+      requestSerial.current += 1;
+      setAnalysisState({ status: 'idle' });
+      setBedConfirmationOpen(false);
+      setApplicationNotice(successNotice);
+    } catch (error) {
+      pendingPresentationNotice.current = null;
+      setBedConfirmationOpen(false);
+      setApplicationNotice(`自动落床失败：${errorMessage(error)}`);
+    }
+  }
+
+  const bedMoveDescription = bedPlacement
+    ? bedPlacement.requiredVerticalDeltaMm > 0
+      ? `向上移动 ${Math.abs(bedPlacement.requiredVerticalDeltaMm).toFixed(2)} 毫米`
+      : `向下移动 ${Math.abs(bedPlacement.requiredVerticalDeltaMm).toFixed(2)} 毫米`
+    : '';
 
   return (
     <section className="parameter-section print-orientation-section">
@@ -212,6 +318,46 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
                       <CheckCircle2 size={13} /> 确认应用
                     </button>
                     <button type="button" className="cancel" onClick={() => setConfirmationOpen(false)}>
+                      <X size={13} /> 取消
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {recommended && source && alreadyApplied && bedPlacement && (
+            <div className="print-bed-placement">
+              <div className="print-bed-placement-preview">
+                <strong><MoveDown size={14} /> 自动落床预览</strong>
+                <span>当前最低点：{bedPlacement.minimumHeightMm.toFixed(2)} 毫米</span>
+                <span>目标平台高度：0.00 毫米</span>
+                <span>目标 Y 位置：{bedPlacement.targetVerticalPositionMm.toFixed(2)} 毫米</span>
+                <small>只沿视口垂直 Y 轴移动当前对象；水平位置、旋转、缩放、颜色和其他零件保持不变。</small>
+              </div>
+              {bedPlacement.alreadyOnBed ? (
+                <p className="print-orientation-applied-state"><CheckCircle2 size={14} /> 当前对象已落在打印平台</p>
+              ) : !bedConfirmationOpen ? (
+                <button
+                  type="button"
+                  className="print-bed-apply-button"
+                  onClick={() => {
+                    setBedConfirmationOpen(true);
+                    setApplicationNotice(null);
+                  }}
+                >
+                  <MoveDown size={14} /> 将对象落到平台
+                </button>
+              ) : (
+                <div className="print-orientation-confirmation" role="group" aria-label="确认自动落床">
+                  <strong>确认移动“{source.label}”</strong>
+                  <span>垂直位移：{bedMoveDescription}</span>
+                  <span>最低点：{bedPlacement.minimumHeightMm.toFixed(2)} → 0.00 毫米</span>
+                  <small>本操作只修改当前对象 Y 位置，并生成可撤销、可重做的中文版本。</small>
+                  <div>
+                    <button type="button" className="confirm" onClick={applyPrintBedPlacement}>
+                      <CheckCircle2 size={13} /> 确认落床
+                    </button>
+                    <button type="button" className="cancel" onClick={() => setBedConfirmationOpen(false)}>
                       <X size={13} /> 取消
                     </button>
                   </div>

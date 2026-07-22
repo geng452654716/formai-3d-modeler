@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createPrintBedPlacementPresentation,
   createPrintOrientationPresentation,
   evaluateAxisAlignedPrintOrientations,
+  evaluatePrintBedPlacement,
   getPrintOrientationRotationDeg,
   isPrintOrientationRotationApplied
 } from './printOrientation';
@@ -89,6 +91,106 @@ describe('六向打印方向评估', () => {
       },
       color: '#123456'
     });
+  });
+
+  it('按视口 Y 轴计算六个推荐旋转后的对象内归一化最低点', () => {
+    const expectedMinimumHeight = {
+      'positive-z': 0,
+      'negative-z': -5,
+      'positive-y': -5,
+      'negative-y': -5,
+      'positive-x': -10,
+      'negative-x': -10
+    } as const;
+
+    Object.entries(expectedMinimumHeight).forEach(([id, minimumHeightMm]) => {
+      const preview = evaluatePrintBedPlacement(boxMesh(20, 10, 5), {
+        rotationDeg: getPrintOrientationRotationDeg(id as keyof typeof expectedMinimumHeight),
+        positionMm: { x: 0, y: 0, z: 0 },
+        normalizationSpace: 'object-local'
+      });
+      expect(preview.minimumHeightMm).toBeCloseTo(minimumHeightMm);
+      expect(preview.requiredVerticalDeltaMm).toBeCloseTo(-minimumHeightMm);
+    });
+  });
+
+  it('对象内归一化会叠加基础位置、当前位置和均匀缩放', () => {
+    const preview = evaluatePrintBedPlacement(boxMesh(20, 10, 5), {
+      rotationDeg: getPrintOrientationRotationDeg('negative-z'),
+      positionMm: { x: 8, y: 2, z: -3 },
+      uniformScale: 2,
+      normalizationSpace: 'object-local',
+      basePositionDisplayMm: { x: 0, y: 3, z: 0 }
+    });
+
+    expect(preview.minimumHeightMm).toBeCloseTo(-5);
+    expect(preview.requiredVerticalDeltaMm).toBeCloseTo(5);
+    expect(preview.targetVerticalPositionMm).toBeCloseTo(7);
+    expect(preview.alreadyOnBed).toBe(false);
+  });
+
+  it('上传 STL 使用对象外归一化并保持与视口旋转中心一致', () => {
+    const translated = boxMesh(20, 10, 5);
+    const positions = translated.positions.map((value, index) => index % 3 === 2 ? value + 10 : value);
+    const preview = evaluatePrintBedPlacement({ positions, indices: translated.indices }, {
+      rotationDeg: getPrintOrientationRotationDeg('negative-z'),
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'world'
+    });
+
+    expect(preview.minimumHeightMm).toBeCloseTo(-25);
+    expect(preview.targetVerticalPositionMm).toBeCloseTo(25);
+  });
+
+  it('已经落床时不会产生重复位移，并且只替换垂直位置', () => {
+    const preview = evaluatePrintBedPlacement(boxMesh(20, 10, 5), {
+      rotationDeg: getPrintOrientationRotationDeg('positive-z'),
+      positionMm: { x: 4, y: 0, z: -2 },
+      normalizationSpace: 'object-local'
+    });
+    const presentation = createPrintBedPlacementPresentation({
+      transform: {
+        positionMm: { x: 4, y: 0, z: -2 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 1.25
+      },
+      color: '#123456'
+    }, preview);
+
+    expect(preview.alreadyOnBed).toBe(true);
+    expect(preview.requiredVerticalDeltaMm).toBeCloseTo(0);
+    expect(presentation).toEqual({
+      transform: {
+        positionMm: { x: 4, y: 0, z: -2 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 1.25
+      },
+      color: '#123456'
+    });
+  });
+
+  it('拒绝自动落床中的无效网格、旋转、位置和缩放', () => {
+    expect(() => evaluatePrintBedPlacement({ positions: [0, 0] }, {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    })).toThrow('自动落床至少需要一个完整的三维顶点');
+    expect(() => evaluatePrintBedPlacement(boxMesh(1, 1, 1), {
+      rotationDeg: { x: Number.NaN, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    })).toThrow('自动落床旋转必须是三个有限角度值');
+    expect(() => evaluatePrintBedPlacement(boxMesh(1, 1, 1), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+      normalizationSpace: 'object-local'
+    })).toThrow('自动落床位置必须是三个有限毫米值');
+    expect(() => evaluatePrintBedPlacement(boxMesh(1, 1, 1), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      uniformScale: 0,
+      normalizationSpace: 'object-local'
+    })).toThrow('自动落床的均匀缩放必须是大于 0 的有限值');
   });
 
   it('均匀缩放同步作用于尺寸、面积和体积', () => {

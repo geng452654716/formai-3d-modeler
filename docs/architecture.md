@@ -799,4 +799,15 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 18/18、前端 26 个测试文件 253/253、生产构建和差异检查通过。真实浏览器覆盖 CAD 取消、确认、撤销、重做、角度等价保护、1.5 倍缩放和任意上传 STL 对象写入，Console 为 0 个错误、0 个警告。
 
-**下一阶段架构方向：**先核对 `ModelViewport` 中业务 `positionMm` 与 Three.js 场景垂直轴的映射，再增加无副作用的旋转后包围盒最低点计算。落床预览必须绑定当前来源、绝对旋转、均匀缩放和位置身份；确认后只通过现有对象展示编辑链更新垂直位置，并继续支持版本、撤销和重做。
+### 72. 推荐打印方向应用后的自动落床架构（已实现）
+
+- `evaluatePrintBedPlacement` 纯计算旋转、缩放和归一化后的最低点、当前垂直位置、目标 Y 位置与所需位移；`createPrintBedPlacementPresentation` 只替换对象展示状态中的 `positionMm.y`。
+- 坐标链明确为原始 STL X → 视口 X、原始 STL Z → 视口 Y、原始 STL Y → 视口 -Z，打印平台固定为视口 Y=0。CAD 普通零件使用 `normalizationSpace: 'object-local'`，任意上传 STL 使用 `normalizationSpace: 'world'`，对应 `uploadedGroupPosition` 位于对象变换外层的真实场景结构。
+- `PrintBedPlacementOptions` 同时携带绝对旋转、业务位置、均匀缩放、归一化空间和可选基础显示位置；最低点计算与 UI 解耦，可覆盖 CAD 主体、装配上盖及任意上传 STL，不依赖固定模型名称。
+- `PrintOrientationPanel` 仅在当前精确分析与对象展示来源仍一致时派生预览。来源身份包含对象、修订、位置、旋转、缩放、基础位置和归一化空间；请求序号与写入前 Store 复核共同阻止过期结果或并发变化写入。
+- 确认动作继续复用 `beginObjectPresentationEdit`、`updateObjectPresentation` 与 `finishObjectPresentationEdit`，生成“将‘对象名称’落到打印平台”版本。取消、重复落床、越界和失败路径都不会提交版本。
+- 写入会改变来源身份，因此组件通过 `pendingPresentationNotice` 暂存成功提示，并在来源刷新清理旧分析时恢复该提示；该状态只存在于组件本地，不增加 Zustand、Tauri、Worker 或项目文件协议。
+
+2026-07-22 架构验证：针对性测试 24/24、前端 26 个测试文件 259/259、生产构建和差异检查通过。真实浏览器分别验证 CAD 对象内归一化和上传 STL 对象外归一化路径，覆盖 Y=10、Y=7.5、取消、确认、版本、撤销、重做、重复保护及成功提示保留，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**在现有精确 STL 读取和对象展示身份之上增加无副作用的视口 X/Z 包围范围计算，对照 P1S 256 × 256 毫米平台派生四边余量、越界量与只读居中位移。需要同时处理 CAD 对象内归一化和上传 STL 对象外归一化，结果随位置、旋转、缩放、修订和来源失效；第一版不调用对象展示编辑链。

@@ -1,4 +1,5 @@
 import { normalizeObjectPresentation, type ObjectPresentation, type ObjectVector3 } from './objectTransform';
+import { rotateDisplayPointXyz, sourceToDisplayPoint } from './objectExport';
 
 export type PrintOrientationId = 'positive-x' | 'negative-x' | 'positive-y' | 'negative-y' | 'positive-z' | 'negative-z';
 
@@ -33,6 +34,24 @@ export interface PrintOrientationAnalysis {
   recommendedId: PrintOrientationId | null;
   recommendedReason: string;
   candidates: PrintOrientationCandidate[];
+}
+
+export type PrintBedNormalizationSpace = 'object-local' | 'world';
+
+export interface PrintBedPlacementOptions {
+  rotationDeg: ObjectVector3;
+  positionMm: ObjectVector3;
+  uniformScale?: number;
+  normalizationSpace: PrintBedNormalizationSpace;
+  basePositionDisplayMm?: ObjectVector3;
+}
+
+export interface PrintBedPlacementPreview {
+  minimumHeightMm: number;
+  currentVerticalPositionMm: number;
+  requiredVerticalDeltaMm: number;
+  targetVerticalPositionMm: number;
+  alreadyOnBed: boolean;
 }
 
 interface Vec3 {
@@ -70,6 +89,7 @@ const DEFAULT_BUILD_VOLUME_MM: [number, number, number] = [256, 256, 256];
 const DEFAULT_OVERHANG_ANGLE_DEG = 45;
 const MIN_TRIANGLE_AREA_MM2 = 1e-9;
 const ROTATION_EQUIVALENCE_TOLERANCE_DEG = 1e-6;
+const BED_PLACEMENT_TOLERANCE_MM = 1e-4;
 
 const PRINT_ORIENTATION_ROTATIONS_DEG: Record<PrintOrientationId, ObjectVector3> = {
   'positive-z': { x: 0, y: 0, z: 0 },
@@ -362,6 +382,109 @@ export function createPrintOrientationPresentation(
     transform: {
       ...normalized.transform,
       rotationDeg: getPrintOrientationRotationDeg(id)
+    }
+  };
+}
+
+function validatePlacementVector(value: ObjectVector3, message: string) {
+  if (![value.x, value.y, value.z].every(Number.isFinite)) {
+    throw new Error(message);
+  }
+}
+
+/**
+ * 按视口真实层级计算当前对象最低点：STL 原始 Z 轴先转为 Three.js Y 轴，
+ * 再区分 CAD 的对象内归一化与上传 STL 的对象外归一化。
+ */
+export function evaluatePrintBedPlacement(
+  input: PrintOrientationMeshInput,
+  options: PrintBedPlacementOptions
+): PrintBedPlacementPreview {
+  const positions = input.positions;
+  if (positions.length < 3 || positions.length % 3 !== 0) {
+    throw new Error('自动落床至少需要一个完整的三维顶点');
+  }
+  const uniformScale = options.uniformScale ?? 1;
+  if (!Number.isFinite(uniformScale) || uniformScale <= 0) {
+    throw new Error('自动落床的均匀缩放必须是大于 0 的有限值');
+  }
+  validatePlacementVector(options.rotationDeg, '自动落床旋转必须是三个有限角度值');
+  validatePlacementVector(options.positionMm, '自动落床位置必须是三个有限毫米值');
+  const basePosition = options.basePositionDisplayMm ?? { x: 0, y: 0, z: 0 };
+  validatePlacementVector(basePosition, '自动落床基础位置必须是三个有限毫米值');
+
+  const displayPoints: ObjectVector3[] = [];
+  const minimum = { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY, z: Number.POSITIVE_INFINITY };
+  const maximum = { x: Number.NEGATIVE_INFINITY, y: Number.NEGATIVE_INFINITY, z: Number.NEGATIVE_INFINITY };
+  for (let offset = 0; offset < positions.length; offset += 3) {
+    const sourcePoint = {
+      x: Number(positions[offset]),
+      y: Number(positions[offset + 1]),
+      z: Number(positions[offset + 2])
+    };
+    validatePlacementVector(sourcePoint, '自动落床网格坐标必须是有限毫米值');
+    const displayPoint = sourceToDisplayPoint(sourcePoint);
+    displayPoints.push(displayPoint);
+    (['x', 'y', 'z'] as const).forEach((axis) => {
+      minimum[axis] = Math.min(minimum[axis], displayPoint[axis]);
+      maximum[axis] = Math.max(maximum[axis], displayPoint[axis]);
+    });
+  }
+
+  const normalizationOffset = {
+    x: -(minimum.x + maximum.x) / 2,
+    y: -minimum.y,
+    z: -(minimum.z + maximum.z) / 2
+  };
+  let minimumHeightMm = Number.POSITIVE_INFINITY;
+  displayPoints.forEach((displayPoint) => {
+    const localPoint = options.normalizationSpace === 'object-local'
+      ? {
+          x: displayPoint.x + normalizationOffset.x,
+          y: displayPoint.y + normalizationOffset.y,
+          z: displayPoint.z + normalizationOffset.z
+        }
+      : displayPoint;
+    const rotated = rotateDisplayPointXyz({
+      x: localPoint.x * uniformScale,
+      y: localPoint.y * uniformScale,
+      z: localPoint.z * uniformScale
+    }, options.rotationDeg);
+    const outsideNormalizationY = options.normalizationSpace === 'world' ? normalizationOffset.y : 0;
+    minimumHeightMm = Math.min(
+      minimumHeightMm,
+      rotated.y + options.positionMm.y + basePosition.y + outsideNormalizationY
+    );
+  });
+
+  const requiredVerticalDeltaMm = -minimumHeightMm;
+  return {
+    minimumHeightMm,
+    currentVerticalPositionMm: options.positionMm.y,
+    requiredVerticalDeltaMm,
+    targetVerticalPositionMm: options.positionMm.y + requiredVerticalDeltaMm,
+    alreadyOnBed: Math.abs(minimumHeightMm) <= BED_PLACEMENT_TOLERANCE_MM
+  };
+}
+
+/** 只修改视口垂直位置，使当前最低点落到平台 0 毫米。 */
+export function createPrintBedPlacementPresentation(
+  current: Partial<ObjectPresentation> | undefined,
+  preview: PrintBedPlacementPreview,
+  fallbackColor = '#d9d4c8'
+): ObjectPresentation {
+  if (!Number.isFinite(preview.targetVerticalPositionMm)) {
+    throw new Error('自动落床目标位置不是有限毫米值');
+  }
+  const normalized = normalizeObjectPresentation(current, fallbackColor);
+  return {
+    ...normalized,
+    transform: {
+      ...normalized.transform,
+      positionMm: {
+        ...normalized.transform.positionMm,
+        y: preview.targetVerticalPositionMm
+      }
     }
   };
 }

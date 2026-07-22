@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMETERS } from '../model/defaults';
-import { createPrintOrientationPresentation } from '../model/printOrientation';
+import { createPrintBedPlacementPresentation, createPrintOrientationPresentation } from '../model/printOrientation';
 import { normalizeObjectPresentation } from '../model/objectTransform';
 import type { ModelVersion } from '../model/types';
 import { useModelStore } from './useModelStore';
@@ -160,6 +160,61 @@ describe('对象变换、颜色与版本历史', () => {
     store.finishObjectPresentationEdit('body', '应用“模型主体”的打印方向：Z 正方向朝上', '#d9d4c8');
 
     expect(useModelStore.getState().versions).toHaveLength(1);
+  });
+
+  it('自动落床只提交垂直位置版本并支持撤销和重做', () => {
+    const initialPresentation = {
+      transform: {
+        positionMm: { x: 8, y: -2, z: 3 },
+        rotationDeg: { x: 90, y: 0, z: 0 },
+        scale: 1.25
+      },
+      color: '#123456'
+    };
+    const initialVersion = version('已应用打印方向', { body: initialPresentation });
+    useModelStore.setState({
+      objectPresentations: { body: initialPresentation },
+      versions: [initialVersion],
+      versionIndex: 0
+    });
+    const store = useModelStore.getState();
+    const next = createPrintBedPlacementPresentation(initialPresentation, {
+      minimumHeightMm: -7,
+      currentVerticalPositionMm: -2,
+      requiredVerticalDeltaMm: 7,
+      targetVerticalPositionMm: 5,
+      alreadyOnBed: false
+    }, '#d9d4c8');
+
+    store.beginObjectPresentationEdit('body', '#d9d4c8');
+    store.updateObjectPresentation('body', next, '#d9d4c8');
+    store.finishObjectPresentationEdit('body', '将“模型主体”落到打印平台', '#d9d4c8');
+
+    let state = useModelStore.getState();
+    expect(state.versions).toHaveLength(2);
+    expect(state.versions.at(-1)).toMatchObject({
+      label: '将“模型主体”落到打印平台',
+      changeKind: 'presentation'
+    });
+    expect(state.objectPresentations.body).toEqual({
+      transform: {
+        positionMm: { x: 8, y: 5, z: 3 },
+        rotationDeg: { x: 90, y: 0, z: 0 },
+        scale: 1.25
+      },
+      color: '#123456'
+    });
+
+    state.undo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body).toEqual(initialPresentation);
+
+    state.redo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body.transform.positionMm).toEqual({ x: 8, y: 5, z: 3 });
+    expect(state.objectPresentations.body.transform.rotationDeg).toEqual(initialPresentation.transform.rotationDeg);
+    expect(state.objectPresentations.body.transform.scale).toBe(1.25);
+    expect(state.objectPresentations.body.color).toBe('#123456');
   });
 
   it('新建画布会清空变换状态并退出三维操控器工具', () => {

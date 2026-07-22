@@ -71,16 +71,20 @@ function UploadedModelPanel() {
   if (!importedStlModel) return null;
 
   const presentation = normalizeObjectPresentation(storedPresentation, '#d7dde4');
+  const transform = presentation.transform;
   const printOrientationSource: PrintOrientationSource = {
-    identity: `uploaded-stl:${importedStlModel.revision}:${importedStlModel.sourceFile}:scale-${presentation.transform.scale}`,
+    identity: `uploaded-stl:${importedStlModel.revision}:${importedStlModel.sourceFile}:position-${transform.positionMm.x},${transform.positionMm.y},${transform.positionMm.z}:rotation-${transform.rotationDeg.x},${transform.rotationDeg.y},${transform.rotationDeg.z}:scale-${transform.scale}:bed-world`,
     fileName: importedStlModel.sourceFile,
     revision: importedStlModel.revision,
     label: importedStlModel.name,
     buildVolumeMm: [256, 256, 256],
     objectId: 'uploaded-model',
     fallbackColor: '#d7dde4',
-    uniformScale: presentation.transform.scale,
-    currentRotationDeg: presentation.transform.rotationDeg
+    uniformScale: transform.scale,
+    currentRotationDeg: transform.rotationDeg,
+    currentPositionMm: transform.positionMm,
+    bedNormalizationSpace: 'world',
+    basePositionDisplayMm: { x: 0, y: 0, z: 0 }
   };
 
   const { metrics } = importedStlModel;
@@ -202,6 +206,7 @@ export function ParameterPanel() {
   const cadResult = useModelStore((state) => state.cadResult);
   const selectedObject = useModelStore((state) => state.selectedObject);
   const objectPresentations = useModelStore((state) => state.objectPresentations);
+  const exploded = useModelStore((state) => state.exploded);
   const setParameter = useModelStore((state) => state.setParameter);
   const commitVersion = useModelStore((state) => state.commitVersion);
   const dimensions = getOuterDimensions(parameters);
@@ -214,17 +219,28 @@ export function ParameterPanel() {
     selectedCadPart ? objectPresentations[selectedCadPart.id] : undefined,
     selectedCadFallbackColor
   );
+  const selectedCadTransform = selectedCadPresentation.transform;
+  const selectedCadBasePosition = {
+    x: 0,
+    y: selectedCadPart?.role === 'cover'
+      ? (exploded ? dimensions.height + 18 : dimensions.height - 0.2)
+      : 0,
+    z: 0
+  };
   const printOrientationSource: PrintOrientationSource | null = viewportModelSource === 'cad' && cadResult && selectedCadPart
     ? {
-        identity: `cad:${cadResult.revision}:${selectedCadPart.id}:${selectedCadPart.stlFile}:scale-${selectedCadPresentation.transform.scale}`,
+        identity: `cad:${cadResult.revision}:${selectedCadPart.id}:${selectedCadPart.stlFile}:position-${selectedCadTransform.positionMm.x},${selectedCadTransform.positionMm.y},${selectedCadTransform.positionMm.z}:rotation-${selectedCadTransform.rotationDeg.x},${selectedCadTransform.rotationDeg.y},${selectedCadTransform.rotationDeg.z}:scale-${selectedCadTransform.scale}:base-${selectedCadBasePosition.y}:bed-object-local`,
         fileName: selectedCadPart.stlFile,
         revision: cadResult.revision,
         label: selectedCadPart.label,
         buildVolumeMm: cadResult.printer.buildVolumeMm,
         objectId: selectedCadPart.id,
         fallbackColor: selectedCadFallbackColor,
-        uniformScale: selectedCadPresentation.transform.scale,
-        currentRotationDeg: selectedCadPresentation.transform.rotationDeg
+        uniformScale: selectedCadTransform.scale,
+        currentRotationDeg: selectedCadTransform.rotationDeg,
+        currentPositionMm: selectedCadTransform.positionMm,
+        bedNormalizationSpace: 'object-local',
+        basePositionDisplayMm: selectedCadBasePosition
       }
     : null;
 
