@@ -155,3 +155,78 @@ describe('网格元素选择', () => {
   });
 
 });
+
+describe('连续共面区域执行前预览', () => {
+  const face = (
+    triangleIndex: number,
+    a: readonly [number, number, number],
+    b: readonly [number, number, number],
+    c: readonly [number, number, number]
+  ) => ({
+    triangleIndex,
+    triangleMm: [a, b, c].map(([x, y, z]) => ({ x, y, z })) as [
+      { x: number; y: number; z: number },
+      { x: number; y: number; z: number },
+      { x: number; y: number; z: number }
+    ]
+  });
+
+  it('从长方体顶面种子扩展两个三角面并测量闭合外环', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const preview = expandMeshPlanarRegion('修订-顶面', 0, [
+      face(0, [0, 0, 12], [30, 0, 12], [30, 24, 12]),
+      face(1, [0, 0, 12], [30, 24, 12], [0, 24, 12]),
+      face(2, [0, 0, 0], [30, 0, 0], [30, 0, 12])
+    ], Math.hypot(30, 24, 12));
+    expect(preview.triangleIndexes).toEqual([0, 1]);
+    expect(preview.affectedTriangleCount).toBe(2);
+    expect(preview.regionAreaMm2).toBeCloseTo(720, 8);
+    expect(preview.boundaryLoopCount).toBe(1);
+    expect(preview.normalToleranceDegrees).toBe(0.5);
+    expect(preview.planeToleranceMm).toBeCloseTo(Math.hypot(30, 24, 12) * 0.000001, 10);
+  });
+
+  it('不跨越锐边，也不连接空间上同平面但拓扑断开的三角面', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const preview = expandMeshPlanarRegion('修订-隔离', 0, [
+      face(0, [0, 0, 0], [10, 0, 0], [10, 10, 0]),
+      face(1, [0, 0, 0], [10, 10, 0], [0, 10, 0]),
+      face(2, [0, 0, 0], [10, 0, 0], [10, 0, 10]),
+      face(3, [20, 0, 0], [30, 0, 0], [20, 10, 0])
+    ], 50);
+    expect(preview.triangleIndexes).toEqual([0, 1]);
+  });
+
+  it('识别带孔平面区域的外环和孔洞环', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const outer = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]] as const;
+    const inner = [[4, 4, 0], [6, 4, 0], [6, 6, 0], [4, 6, 0]] as const;
+    const faces = outer.flatMap((point, index) => {
+      const next = (index + 1) % 4;
+      return [
+        face(index * 2, point, outer[next], inner[next]),
+        face(index * 2 + 1, point, inner[next], inner[index])
+      ];
+    });
+    const preview = expandMeshPlanarRegion('修订-带孔', 0, faces, 20);
+    expect(preview.affectedTriangleCount).toBe(8);
+    expect(preview.regionAreaMm2).toBeCloseTo(96, 8);
+    expect(preview.boundaryLoopCount).toBe(2);
+  });
+
+  it('遇到三个三角面共享同一无向边时用中文拒绝', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    expect(() => expandMeshPlanarRegion('修订-非流形', 0, [
+      face(0, [0, 0, 0], [10, 0, 0], [0, 10, 0]),
+      face(1, [10, 0, 0], [0, 0, 0], [0, -10, 0]),
+      face(2, [0, 0, 0], [10, 0, 0], [5, 5, 0])
+    ], 20)).toThrow('共面区域预览遇到非流形共享边，无法安全扩展');
+  });
+
+  it('动态平面距离公差限制在 0.00001 至 0.02 毫米', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const triangles = [face(0, [0, 0, 0], [1, 0, 0], [0, 1, 0])];
+    expect(expandMeshPlanarRegion('小模型', 0, triangles, 1).planeToleranceMm).toBe(0.00001);
+    expect(expandMeshPlanarRegion('大模型', 0, triangles, 1_000_000).planeToleranceMm).toBe(0.02);
+  });
+});

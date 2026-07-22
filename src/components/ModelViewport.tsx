@@ -37,11 +37,13 @@ import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '
 import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
+  expandMeshPlanarRegion,
   MAX_MESH_ELEMENT_SELECTIONS,
   nearestMeshElementIndex,
   selectedMeshElementPoints,
   type MeshElementSelection,
-  type MeshElementSelectionSet
+  type MeshElementSelectionSet,
+  type MeshPlanarRegionTriangle
 } from '../model/meshElementEdit';
 import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
@@ -472,6 +474,9 @@ function LoadedCadMesh({
   const meshElementEditMode = useModelStore((state) => state.meshElementEditMode);
   const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
   const meshElementSelection = useModelStore((state) => state.meshElementSelection);
+  const meshElementTransformKind = useModelStore((state) => state.meshElementTransformKind);
+  const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
+  const setMeshPlanarRegionPreview = useModelStore((state) => state.setMeshPlanarRegionPreview);
   const selectMeshElement = useModelStore((state) => state.selectMeshElement);
   const prepared = useMemo(() => {
     const normalized = sourceGeometry.clone();
@@ -523,10 +528,56 @@ function LoadedCadMesh({
       ? meshElementSelection
       : null
   ), [id, importedStlModel, meshElementSelection]);
+  const meshPlanarRegionTriangles = useMemo<MeshPlanarRegionTriangle[]>(() => {
+    if (id !== 'uploaded-model' || meshElementTransformKind !== 'extrude-face') return [];
+    const positions = geometry.getAttribute('position');
+    if (!positions) return [];
+    const index = geometry.getIndex();
+    const triangleCount = index ? Math.floor(index.count / 3) : Math.floor(positions.count / 3);
+    return Array.from({ length: triangleCount }, (_, triangleIndex) => {
+      const vertexIndexes = [0, 1, 2].map((corner) => (
+        index ? index.getX(triangleIndex * 3 + corner) : triangleIndex * 3 + corner
+      ));
+      return {
+        triangleIndex,
+        triangleMm: vertexIndexes.map((vertexIndex) => {
+          const point = new Vector3(
+            positions.getX(vertexIndex), positions.getY(vertexIndex), positions.getZ(vertexIndex)
+          ).applyMatrix4(inverseCoordinateTransform);
+          return { x: point.x, y: point.y, z: point.z };
+        }) as MeshElementSelection['triangleMm']
+      };
+    });
+  }, [geometry, id, inverseCoordinateTransform, meshElementTransformKind]);
+  useEffect(() => {
+    if (
+      meshElementTransformKind !== 'extrude-face'
+      || !importedStlModel
+      || currentMeshElementSelection?.kind !== 'face'
+      || currentMeshElementSelection.selectionMethod !== 'click'
+      || currentMeshElementSelection.elements.length !== 1
+    ) return;
+    const bounds = importedStlModel.metrics.boundsMm;
+    try {
+      setMeshPlanarRegionPreview(expandMeshPlanarRegion(
+        importedStlModel.revision,
+        currentMeshElementSelection.elements[0].triangleIndex,
+        meshPlanarRegionTriangles,
+        Math.hypot(bounds.x, bounds.y, bounds.z)
+      ));
+    } catch (error) {
+      setMeshPlanarRegionPreview(null, error instanceof Error ? error.message : '连续共面区域预览失败');
+    }
+  }, [currentMeshElementSelection, importedStlModel, meshElementTransformKind, meshPlanarRegionTriangles, setMeshPlanarRegionPreview]);
   const selectedMeshElementGeometries = useMemo(() => {
     if (!currentMeshElementSelection) return { vertices: null, edges: null, faces: null };
-    const transformed = currentMeshElementSelection.elements.map((selection) => (
-      selectedMeshElementPoints(selection).map((point) => (
+    const previewFaces = currentMeshElementSelection.kind === 'face'
+      && meshElementTransformKind === 'extrude-face'
+      && meshPlanarRegionPreview?.revision === currentMeshElementSelection.revision
+      ? meshPlanarRegionPreview.triangleIndexes.map((triangleIndex) => meshPlanarRegionTriangles[triangleIndex]?.triangleMm).filter(Boolean)
+      : null;
+    const transformed = (previewFaces ?? currentMeshElementSelection.elements.map(selectedMeshElementPoints)).map((points) => (
+      points.map((point) => (
         new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
       ))
     ));
@@ -539,7 +590,7 @@ function LoadedCadMesh({
       edges: currentMeshElementSelection.kind === 'edge' ? selectedGeometry : null,
       faces: currentMeshElementSelection.kind === 'face' ? selectedGeometry : null
     };
-  }, [coordinateTransform, currentMeshElementSelection]);
+  }, [coordinateTransform, currentMeshElementSelection, meshElementTransformKind, meshPlanarRegionPreview, meshPlanarRegionTriangles]);
   useEffect(() => () => {
     selectedMeshElementGeometries.vertices?.dispose();
     selectedMeshElementGeometries.edges?.dispose();

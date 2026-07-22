@@ -65,7 +65,10 @@ export function MeshElementEditPanel() {
   const createCadMeshBranch = useModelStore((state) => state.createCadMeshBranch);
   const clearManufacturingSplit = useModelStore((state) => state.clearManufacturingSplit);
   const [cadPartSelection, setCadPartSelection] = useState('');
-  const [transformKind, setTransformKind] = useState<MeshElementTransformKind>('move');
+  const transformKind = useModelStore((state) => state.meshElementTransformKind);
+  const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
+  const meshPlanarRegionPreviewError = useModelStore((state) => state.meshPlanarRegionPreviewError);
+  const setMeshElementTransformKind = useModelStore((state) => state.setMeshElementTransformKind);
   const [x, setX] = useState('0');
   const [y, setY] = useState('0');
   const [z, setZ] = useState('0');
@@ -102,7 +105,8 @@ export function MeshElementEditPanel() {
       ? rotationInvalid
       : transformKind === 'scale'
         ? scaleInvalid
-        : faceExtrusionDistanceInvalid || faceExtrusionSelectionInvalid;
+        : faceExtrusionDistanceInvalid || faceExtrusionSelectionInvalid
+          || !meshPlanarRegionPreview || Boolean(meshPlanarRegionPreviewError);
   const isEditing = meshElementEditStatus === 'editing';
   const selectionCurrent = Boolean(
     meshElementSelection
@@ -261,14 +265,7 @@ export function MeshElementEditPanel() {
                 key={kind}
                 type="button"
                 className={transformKind === kind ? 'is-active' : ''}
-                onClick={() => {
-                  setTransformKind(kind);
-                  if (kind === 'extrude-face') {
-                    setMeshElementEditMode('face');
-                    setMeshElementSelectionMethod('click');
-                    clearMeshElementSelection();
-                  }
-                }}
+                onClick={() => setMeshElementTransformKind(kind)}
                 disabled={isEditing}
               >
                 <Icon size={11} /> {label}
@@ -311,6 +308,7 @@ export function MeshElementEditPanel() {
             </div>
           )}
           {transformKind === 'extrude-face' && (
+            <>
             <div className="mesh-element-transform-grid">
               <label>
                 <span>法向操作</span>
@@ -324,6 +322,21 @@ export function MeshElementEditPanel() {
                 <div><input value={faceExtrusionDistance} onChange={(event) => setFaceExtrusionDistance(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>毫米</em></div>
               </label>
             </div>
+            {meshPlanarRegionPreview && meshPlanarRegionPreview.revision === importedStlModel.revision && (
+              <div className="mesh-planar-region-preview">
+                <strong>连续共面区域执行前预览</strong>
+                <div className="mesh-planar-region-preview-grid">
+                  <span>预计三角面<strong>{meshPlanarRegionPreview.affectedTriangleCount} 个</strong></span>
+                  <span>区域面积<strong>{meshPlanarRegionPreview.regionAreaMm2.toFixed(2)} 平方毫米</strong></span>
+                  <span>边界环<strong>{meshPlanarRegionPreview.boundaryLoopCount} 个</strong></span>
+                  <span>法线夹角公差<strong>{meshPlanarRegionPreview.normalToleranceDegrees.toFixed(1)}°</strong></span>
+                  <span>平面距离公差<strong>{meshPlanarRegionPreview.planeToleranceMm.toFixed(5)} 毫米</strong></span>
+                </div>
+                <small>这里只用于执行前反馈；桌面 Worker 仍会独立重新扩展区域并完成全部安全校验。</small>
+              </div>
+            )}
+            {meshPlanarRegionPreviewError && <div className="mesh-element-error">{meshPlanarRegionPreviewError}</div>}
+            </>
           )}
 
           {meshElementEditError && <div className="mesh-element-error">{meshElementEditError}</div>}

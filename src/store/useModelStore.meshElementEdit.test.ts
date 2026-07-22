@@ -145,6 +145,9 @@ describe('上传 STL 网格元素批量编辑', () => {
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshElementTransformKind: 'move',
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       meshElementEditStatus: 'idle',
       meshElementEditError: null,
       meshElementEditResult: null,
@@ -180,6 +183,27 @@ describe('上传 STL 网格元素批量编辑', () => {
 
     useModelStore.getState().setMeshElementEditMode('off');
     expect(useModelStore.getState().meshElementSelection).toBeNull();
+  });
+
+  it('切换元素、选择方式或变换操作时清除连续共面区域预览', () => {
+    const preview = {
+      revision: 'mesh-before', seedTriangleIndex: 4, triangleIndexes: [4, 5],
+      affectedTriangleCount: 2, regionAreaMm2: 100, boundaryLoopCount: 1,
+      normalToleranceDegrees: 0.5, planeToleranceMm: 0.00002
+    };
+    useModelStore.getState().setMeshPlanarRegionPreview(preview);
+    useModelStore.getState().setMeshElementEditMode('edge');
+    expect(useModelStore.getState().meshPlanarRegionPreview).toBeNull();
+
+    useModelStore.getState().setMeshPlanarRegionPreview(preview);
+    useModelStore.getState().setMeshElementSelectionMethod('box');
+    expect(useModelStore.getState().meshPlanarRegionPreview).toBeNull();
+
+    useModelStore.getState().setMeshPlanarRegionPreview(preview);
+    useModelStore.getState().setMeshElementTransformKind('extrude-face');
+    expect(useModelStore.getState().meshPlanarRegionPreview).toBeNull();
+    expect(useModelStore.getState().meshElementEditMode).toBe('face');
+    expect(useModelStore.getState().meshElementSelectionMethod).toBe('click');
   });
 
 

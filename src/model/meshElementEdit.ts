@@ -43,6 +43,24 @@ export interface MeshElementProjectionTriangle {
   triangleWorld: [MeshPointMm, MeshPointMm, MeshPointMm];
 }
 
+/** 视口从上传 STL 恢复出的单个源毫米三角面。 */
+export interface MeshPlanarRegionTriangle {
+  triangleIndex: number;
+  triangleMm: [MeshPointMm, MeshPointMm, MeshPointMm];
+}
+
+/** 连续共面区域在正式调用 Worker 前的只读预览和测量结果。 */
+export interface MeshPlanarRegionPreview {
+  revision: string;
+  seedTriangleIndex: number;
+  triangleIndexes: number[];
+  affectedTriangleCount: number;
+  regionAreaMm2: number;
+  boundaryLoopCount: number;
+  normalToleranceDegrees: number;
+  planeToleranceMm: number;
+}
+
 export interface MeshScreenProjection {
   x: number;
   y: number;
@@ -119,6 +137,9 @@ export const MESH_ELEMENT_LABELS: Record<MeshElementKind, string> = {
 
 export const MESH_EDGE_VERTEX_INDEXES = [[0, 1], [1, 2], [2, 0]] as const;
 export const MAX_MESH_ELEMENT_SELECTIONS = 512;
+export const MAX_PLANAR_REGION_TRIANGLES = 20_000;
+export const MAX_PLANAR_REGION_AREA_MM2 = 200_000;
+export const PLANAR_REGION_NORMAL_TOLERANCE_DEGREES = 0.5;
 
 function squaredDistance(left: MeshPointMm, right: MeshPointMm) {
   return (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2;
@@ -142,6 +163,154 @@ function squaredDistanceToSegment(point: MeshPointMm, start: MeshPointMm, end: M
 
 function coordinateKey(point: MeshPointMm) {
   return `${point.x.toFixed(6)},${point.y.toFixed(6)},${point.z.toFixed(6)}`;
+}
+
+function planarRegionEdgeKey(start: MeshPointMm, end: MeshPointMm) {
+  return [coordinateKey(start), coordinateKey(end)].sort().join('|');
+}
+
+function triangleArea(triangle: [MeshPointMm, MeshPointMm, MeshPointMm]) {
+  const [a, b, c] = triangle;
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  return Math.hypot(
+    ab.y * ac.z - ab.z * ac.y,
+    ab.z * ac.x - ab.x * ac.z,
+    ab.x * ac.y - ab.y * ac.x
+  ) / 2;
+}
+
+function triangleUnitNormal(triangle: [MeshPointMm, MeshPointMm, MeshPointMm]) {
+  const [a, b, c] = triangle;
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  const normal = {
+    x: ab.y * ac.z - ab.z * ac.y,
+    y: ab.z * ac.x - ab.x * ac.z,
+    z: ab.x * ac.y - ab.y * ac.x
+  };
+  const length = Math.hypot(normal.x, normal.y, normal.z);
+  if (length <= 1e-9) throw new Error('共面区域预览遇到退化三角面，请先修复网格');
+  return { x: normal.x / length, y: normal.y / length, z: normal.z / length };
+}
+
+/** 使用与桌面 Worker 一致的拓扑、公差和资源上限扩展连续共面区域。 */
+export function expandMeshPlanarRegion(
+  revision: string,
+  seedTriangleIndex: number,
+  triangles: Iterable<MeshPlanarRegionTriangle>,
+  modelDiagonalMm: number
+): MeshPlanarRegionPreview {
+  const triangleByIndex = new Map(Array.from(triangles, (triangle) => [triangle.triangleIndex, triangle]));
+  const seed = triangleByIndex.get(seedTriangleIndex);
+  if (!seed) throw new Error('没有找到种子三角面，请重新点击模型');
+  const seedNormal = triangleUnitNormal(seed.triangleMm);
+  const seedOrigin = seed.triangleMm[0];
+  const cosineLimit = Math.cos(PLANAR_REGION_NORMAL_TOLERANCE_DEGREES * Math.PI / 180);
+  const planeToleranceMm = Math.max(0.00001, Math.min(0.02, modelDiagonalMm * 0.000001));
+  const edgeOwners = new Map<string, number[]>();
+  for (const triangle of triangleByIndex.values()) {
+    for (const [start, end] of MESH_EDGE_VERTEX_INDEXES) {
+      const key = planarRegionEdgeKey(triangle.triangleMm[start], triangle.triangleMm[end]);
+      edgeOwners.set(key, [...(edgeOwners.get(key) ?? []), triangle.triangleIndex]);
+    }
+  }
+  const isCoplanar = (triangle: MeshPlanarRegionTriangle) => {
+    const normal = triangleUnitNormal(triangle.triangleMm);
+    const dot = Math.abs(normal.x * seedNormal.x + normal.y * seedNormal.y + normal.z * seedNormal.z);
+    if (dot < cosineLimit) return false;
+    return triangle.triangleMm.every((point) => Math.abs(
+      (point.x - seedOrigin.x) * seedNormal.x
+      + (point.y - seedOrigin.y) * seedNormal.y
+      + (point.z - seedOrigin.z) * seedNormal.z
+    ) <= planeToleranceMm);
+  };
+
+  const region = new Set([seedTriangleIndex]);
+  const pending = [seedTriangleIndex];
+  let regionAreaMm2 = triangleArea(seed.triangleMm);
+  if (regionAreaMm2 > MAX_PLANAR_REGION_AREA_MM2) {
+    throw new Error(`共面区域预览面积超过 ${MAX_PLANAR_REGION_AREA_MM2} 平方毫米上限，请先拆分模型`);
+  }
+  while (pending.length) {
+    const current = triangleByIndex.get(pending.pop()!)!;
+    for (const [start, end] of MESH_EDGE_VERTEX_INDEXES) {
+      const owners = edgeOwners.get(planarRegionEdgeKey(current.triangleMm[start], current.triangleMm[end])) ?? [];
+      if (owners.length > 2) throw new Error('共面区域预览遇到非流形共享边，无法安全扩展');
+      for (const neighborIndex of owners) {
+        const neighbor = triangleByIndex.get(neighborIndex);
+        if (!neighbor || region.has(neighborIndex) || !isCoplanar(neighbor)) continue;
+        const nextArea = regionAreaMm2 + triangleArea(neighbor.triangleMm);
+        if (region.size + 1 > MAX_PLANAR_REGION_TRIANGLES) {
+          throw new Error(`共面区域预览超过 ${MAX_PLANAR_REGION_TRIANGLES} 个三角面上限，请先简化网格或缩小平面区域`);
+        }
+        if (nextArea > MAX_PLANAR_REGION_AREA_MM2) {
+          throw new Error(`共面区域预览面积超过 ${MAX_PLANAR_REGION_AREA_MM2} 平方毫米上限，请先拆分模型`);
+        }
+        region.add(neighborIndex);
+        pending.push(neighborIndex);
+        regionAreaMm2 = nextArea;
+      }
+    }
+  }
+
+  const edgeCounts = new Map<string, number>();
+  for (const triangleIndex of region) {
+    const triangle = triangleByIndex.get(triangleIndex)!;
+    for (const [start, end] of MESH_EDGE_VERTEX_INDEXES) {
+      const key = planarRegionEdgeKey(triangle.triangleMm[start], triangle.triangleMm[end]);
+      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+    }
+  }
+  if ([...edgeCounts.values()].some((count) => count > 2)) {
+    throw new Error('共面区域预览包含非流形共享边，无法构造单一封闭工具体');
+  }
+  const boundaryEdges = [...edgeCounts].filter(([, count]) => count === 1).map(([key]) => key);
+  if (!boundaryEdges.length) throw new Error('共面区域预览没有可识别的闭合边界');
+  const adjacency = new Map<string, string[]>();
+  for (const edge of boundaryEdges) {
+    const [start, end] = edge.split('|');
+    adjacency.set(start, [...(adjacency.get(start) ?? []), end]);
+    adjacency.set(end, [...(adjacency.get(end) ?? []), start]);
+  }
+  if ([...adjacency.values()].some((neighbors) => neighbors.length !== 2)) {
+    throw new Error('共面区域预览边界存在分叉或开口');
+  }
+  const unused = new Set(boundaryEdges);
+  let boundaryLoopCount = 0;
+  while (unused.size) {
+    const firstEdge = unused.values().next().value as string;
+    const [start, first] = firstEdge.split('|');
+    let current = first;
+    let previous = start;
+    unused.delete(firstEdge);
+    let pointCount = 1;
+    while (current !== start) {
+      const following = (adjacency.get(current) ?? []).find((candidate) => {
+        const key = [current, candidate].sort().join('|');
+        return candidate !== previous && unused.has(key);
+      });
+      if (!following) throw new Error('共面区域预览边界未闭合');
+      unused.delete([current, following].sort().join('|'));
+      previous = current;
+      current = following;
+      pointCount += 1;
+      if (pointCount > boundaryEdges.length + 1) throw new Error('共面区域预览边界遍历异常');
+    }
+    if (pointCount < 3) throw new Error('共面区域预览边界退化');
+    boundaryLoopCount += 1;
+  }
+  const triangleIndexes = [...region].sort((left, right) => left - right);
+  return {
+    revision,
+    seedTriangleIndex,
+    triangleIndexes,
+    affectedTriangleCount: triangleIndexes.length,
+    regionAreaMm2,
+    boundaryLoopCount,
+    normalToleranceDegrees: PLANAR_REGION_NORMAL_TOLERANCE_DEGREES,
+    planeToleranceMm
+  };
 }
 
 /** 根据点击点在命中三角面内选择最近顶点或最近边。 */

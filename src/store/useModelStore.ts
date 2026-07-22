@@ -54,7 +54,9 @@ import {
   type MeshElementSelection,
   type MeshElementSelectionMethod,
   type MeshElementSelectionSet,
+  type MeshElementTransformKind,
   type MeshElementTransformOperation,
+  type MeshPlanarRegionPreview,
   type MeshPointMm
 } from '../model/meshElementEdit';
 import {
@@ -145,6 +147,9 @@ interface ModelStore {
   meshElementSelectionMethod: MeshElementSelectionMethod;
   meshElementSelection: MeshElementSelectionSet | null;
   meshElementBoxRequest: MeshElementBoxSelectionRequest | null;
+  meshElementTransformKind: MeshElementTransformKind;
+  meshPlanarRegionPreview: MeshPlanarRegionPreview | null;
+  meshPlanarRegionPreviewError: string | null;
   meshElementEditStatus: MeshElementEditStatus;
   meshElementEditError: string | null;
   meshElementEditResult: MeshElementEditResult | null;
@@ -203,6 +208,8 @@ interface ModelStore {
   selectMeshElements: (selection: MeshElementSelectionSet) => void;
   requestMeshElementBoxSelection: (request: MeshElementBoxSelectionRequest) => void;
   clearMeshElementSelection: () => void;
+  setMeshElementTransformKind: (kind: MeshElementTransformKind) => void;
+  setMeshPlanarRegionPreview: (preview: MeshPlanarRegionPreview | null, error?: string | null) => void;
   applyMeshElementTransform: (operation: MeshElementTransformOperation) => Promise<MeshElementEditResult | null>;
   applyMeshElementMove: (displacementMm: MeshPointMm) => Promise<MeshElementEditResult | null>;
   runManufacturingSplit: (request: ManufacturingSplitRequest) => Promise<ManufacturingSplitResult | null>;
@@ -390,6 +397,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   meshElementSelectionMethod: 'click',
   meshElementSelection: null,
   meshElementBoxRequest: null,
+  meshElementTransformKind: 'move',
+  meshPlanarRegionPreview: null,
+  meshPlanarRegionPreviewError: null,
   meshElementEditStatus: 'idle',
   meshElementEditError: null,
   meshElementEditResult: null,
@@ -575,6 +585,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         meshElementSelectionMethod: 'click',
         meshElementSelection: null,
         meshElementBoxRequest: null,
+        meshPlanarRegionPreview: null,
+        meshPlanarRegionPreviewError: null,
         meshElementEditStatus: 'idle',
         meshElementEditError: null,
         meshElementEditResult: null,
@@ -638,6 +650,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       versionGeometryComparisonMode: 'off',
       versionGeometryComparisonBaseId: null,
       versionGeometryComparisonSnapshot: null,
@@ -705,6 +719,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       versionGeometryComparisonMode: 'off',
       versionGeometryComparisonBaseId: null,
       versionGeometryComparisonSnapshot: null,
@@ -758,6 +774,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       meshElementEditStatus: 'idle',
       meshElementEditError: null,
       meshElementEditResult: null,
@@ -850,6 +868,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementEditMode: 'off',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       meshElementEditStatus: 'idle',
       meshElementEditError: null,
       meshElementEditResult: null
@@ -866,6 +886,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         meshElementSelectionMethod: 'click',
         meshElementSelection: null,
         meshElementBoxRequest: null,
+        meshPlanarRegionPreview: null,
+        meshPlanarRegionPreviewError: null,
         meshElementEditStatus: 'idle',
         meshElementEditError: null,
         meshElementEditResult: null,
@@ -935,6 +957,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       meshElementEditStatus: 'idle',
       meshElementEditError: null,
       meshElementEditResult: null
@@ -951,6 +975,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         meshElementSelectionMethod: 'click',
         meshElementSelection: null,
         meshElementBoxRequest: null,
+        meshPlanarRegionPreview: null,
+        meshPlanarRegionPreviewError: null,
         meshElementEditStatus: 'idle',
         meshElementEditError: null,
         meshElementEditResult: null,
@@ -1022,6 +1048,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     meshElementSelectionMethod: 'click',
     meshElementSelection: null,
     meshElementBoxRequest: null,
+    meshPlanarRegionPreview: null,
+    meshPlanarRegionPreviewError: null,
     meshElementEditStatus: 'idle',
     meshElementEditError: null,
     meshElementEditResult: null,
@@ -1047,6 +1075,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       ? state.meshElementSelection
       : null,
     meshElementBoxRequest: null,
+    meshPlanarRegionPreview: null,
+    meshPlanarRegionPreviewError: null,
     meshElementEditError: null,
     objectTransformMode: meshElementEditMode === 'off' ? state.objectTransformMode : 'select',
     wallThicknessPicking: meshElementEditMode === 'off' ? state.wallThicknessPicking : false,
@@ -1056,6 +1086,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     meshElementSelectionMethod,
     meshElementSelection: null,
     meshElementBoxRequest: null,
+    meshPlanarRegionPreview: null,
+    meshPlanarRegionPreviewError: null,
     meshElementEditError: null
   }),
   selectMeshElement: (selection) => {
@@ -1064,6 +1096,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     set({
       meshElementSelection,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       meshElementEditError: null,
       selectedObject: 'uploaded-model'
     });
@@ -1071,6 +1105,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   selectMeshElements: (meshElementSelection) => set({
     meshElementSelection,
     meshElementBoxRequest: null,
+    meshPlanarRegionPreview: null,
+    meshPlanarRegionPreviewError: null,
     meshElementEditError: null,
     selectedObject: 'uploaded-model'
   }),
@@ -1078,7 +1114,23 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   clearMeshElementSelection: () => set({
     meshElementSelection: null,
     meshElementBoxRequest: null,
+    meshPlanarRegionPreview: null,
+    meshPlanarRegionPreviewError: null,
     meshElementEditError: null
+  }),
+  setMeshElementTransformKind: (meshElementTransformKind) => set({
+    meshElementTransformKind,
+    meshElementEditMode: meshElementTransformKind === 'extrude-face' ? 'face' : 'off',
+    meshElementSelectionMethod: 'click',
+    meshElementSelection: null,
+    meshElementBoxRequest: null,
+    meshPlanarRegionPreview: null,
+    meshPlanarRegionPreviewError: null,
+    meshElementEditError: null
+  }),
+  setMeshPlanarRegionPreview: (meshPlanarRegionPreview, meshPlanarRegionPreviewError = null) => set({
+    meshPlanarRegionPreview,
+    meshPlanarRegionPreviewError
   }),
   applyMeshElementTransform: async (operation) => {
     const state = get();
@@ -1140,6 +1192,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         importedStlError: null,
         meshElementSelection: null,
         meshElementBoxRequest: null,
+        meshPlanarRegionPreview: null,
+        meshPlanarRegionPreviewError: null,
         meshElementEditStatus: 'idle',
         meshElementEditError: null,
         meshElementEditResult: result,
@@ -1281,6 +1335,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshPlanarRegionPreview: null,
+      meshPlanarRegionPreviewError: null,
       manufacturingStatus: 'idle',
       manufacturingResult: null,
       manufacturingError: null
@@ -1875,6 +1931,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           meshElementSelectionMethod: 'click',
           meshElementSelection: null,
           meshElementBoxRequest: null,
+          meshPlanarRegionPreview: null,
+          meshPlanarRegionPreviewError: null,
           versionGeometryComparisonMode: 'off',
           versionGeometryComparisonBaseId: null,
           versionGeometryComparisonSnapshot: null,
@@ -2037,6 +2095,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           meshElementSelectionMethod: 'click',
           meshElementSelection: null,
           meshElementBoxRequest: null,
+          meshPlanarRegionPreview: null,
+          meshPlanarRegionPreviewError: null,
           meshElementEditStatus: 'idle',
           meshElementEditError: null,
           meshElementEditResult: null,
