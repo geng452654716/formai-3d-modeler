@@ -1201,6 +1201,10 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-preview-grid span { display: flex; min-width: 0; flex-direction: column; gap: 2px; color: #7d938a; font-size: 7px; }
 .mesh-planar-region-preview-grid strong { overflow-wrap: anywhere; color: #c6e7da; font-size: 8px; }
 .mesh-planar-region-preview small { color: #6f877e; font-size: 7px; line-height: 1.4; }
+.mesh-planar-region-loop-navigation { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 5px; }
+.mesh-planar-region-loop-navigation button { min-height: 24px; padding: 0 7px; border-color: rgba(82, 224, 196, .32); color: #9cdcca; background: rgba(10, 27, 23, .64); font-size: 7px; white-space: nowrap; }
+.mesh-planar-region-loop-navigation button:hover { border-color: rgba(82, 224, 196, .58); background: rgba(18, 43, 36, .8); }
+.mesh-planar-region-loop-navigation span { min-width: 0; color: #d0e9e0; font-size: 7px; text-align: center; overflow-wrap: anywhere; }
 .mesh-planar-region-loop-list { display: flex; max-height: 86px; flex-direction: column; gap: 4px; overflow-y: auto; }
 .mesh-planar-region-loop-list button { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 6px; border: 1px solid transparent; border-radius: 4px; background: rgba(10, 27, 23, .55); text-align: left; }
 .mesh-planar-region-loop-list button:hover { border-color: rgba(82, 224, 196, .36); background: rgba(18, 43, 36, .72); }

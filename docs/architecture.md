@@ -574,3 +574,15 @@ nestingDepth: 二维包含深度
 `LoadedCadMesh` 仅在以下条件全部成立时创建聚焦表示：当前操作为共面区域、上传模型存在、预览修订等于当前模型修订、聚焦索引有效且环至少包含三个点。环点在渲染层应用当前 `coordinateTransform`，闭合后交给 Drei `Line` 以加粗线宽显示；原外环和孔洞 `LineSegments` 暂时降低透明度。标注锚点使用转换后环点中心，并通过 `Html` 显示全中文周长、宽度和高度。
 
 聚焦状态、Drei 线条和 HTML 标注都不持久化、不进入版本快照，也不发送给 `edit_mesh_element.py`。Worker 的区域扩展、Wire 判断、OpenCascade 布尔、安全校验和原子回滚协议保持不变。
+
+### 50. 共面边界环拾取与顺序导航架构（已实现）
+
+- `cycleMeshPlanarRegionLoopIndex` 是无 UI 依赖的纯函数，统一处理空列表、未聚焦、过期索引、正向/反向导航和首尾循环；组件不各自复制索引回绕规则。
+- `LoadedCadMesh` 仅在上传模型、共面区域操作、当前导入修订和有效预览同时成立时构造 `meshPlanarRegionLoopRenderData`。每项包含稳定 `loopIndex`、语义、中文名称、颜色、闭合视口点列和标注中心。
+- 可见外环/孔洞仍分别合并为两个 `BufferGeometry + lineSegments`，并通过 `useEffect` 清理；直接拾取另用 Drei `Line` 的透明宽线层，避免为聚合几何编写自定义逐线段命中算法。
+- 拾取层使用极低透明度而不是 `visible=false`，以保留射线检测；环命中调用 `stopPropagation()` 后写入 Store，因此模型面不会同时收到该次点击。非环区域没有拾取对象拦截，继续进入既有 `SelectableMesh` 选面流程。
+- 面板列表、顺序导航、视口强化线和 HTML 标注都读取 `meshPlanarRegionFocusedLoopIndex`；该索引仍由 Store 校验当前预览范围并在预览或修订变化时清除，不进入 Worker 请求和持久化层。
+
+2026-07-22 架构验证：新增纯函数测试后前端共 190/190 通过，生产构建通过；浏览器验证两种环的直接射线拾取、事件拦截和非线框选面路径均正常，控制台无错误。
+
+**下一阶段架构方向：**从聚焦环的种子平面二维基底和 `boundsMm` 派生宽高尺寸线几何，统一生成端点、延伸线与标签锚点；根据投影方向和轮廓外偏移选择标签位置，并继续只在渲染层消费预览数据。

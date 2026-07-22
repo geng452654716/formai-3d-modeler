@@ -285,6 +285,21 @@ describe('连续共面区域执行前预览', () => {
     ], 20)).toThrow('共面区域预览遇到非流形共享边，无法安全扩展');
   });
 
+  it('边界环顺序导航支持未聚焦起点和首尾循环', async () => {
+    const { cycleMeshPlanarRegionLoopIndex } = await import('./meshElementEdit');
+    expect(cycleMeshPlanarRegionLoopIndex(null, 3, 'next')).toBe(0);
+    expect(cycleMeshPlanarRegionLoopIndex(null, 3, 'previous')).toBe(2);
+    expect(cycleMeshPlanarRegionLoopIndex(2, 3, 'next')).toBe(0);
+    expect(cycleMeshPlanarRegionLoopIndex(0, 3, 'previous')).toBe(2);
+  });
+
+  it('边界环顺序导航对空列表和过期索引安全回落', async () => {
+    const { cycleMeshPlanarRegionLoopIndex } = await import('./meshElementEdit');
+    expect(cycleMeshPlanarRegionLoopIndex(0, 0, 'next')).toBeNull();
+    expect(cycleMeshPlanarRegionLoopIndex(8, 2, 'next')).toBe(0);
+    expect(cycleMeshPlanarRegionLoopIndex(-1, 2, 'previous')).toBe(1);
+  });
+
   it('动态平面距离公差限制在 0.00001 至 0.02 毫米', async () => {
     const { expandMeshPlanarRegion } = await import('./meshElementEdit');
     const triangles = [face(0, [0, 0, 0], [1, 0, 0], [0, 1, 0])];

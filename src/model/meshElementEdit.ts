@@ -163,6 +163,21 @@ export const MAX_PLANAR_REGION_TRIANGLES = 20_000;
 export const MAX_PLANAR_REGION_AREA_MM2 = 200_000;
 export const PLANAR_REGION_NORMAL_TOLERANCE_DEGREES = 0.5;
 
+/** 在当前边界环列表中按指定方向循环定位，空列表返回未聚焦。 */
+export function cycleMeshPlanarRegionLoopIndex(
+  currentIndex: number | null,
+  loopCount: number,
+  direction: 'previous' | 'next'
+) {
+  if (!Number.isInteger(loopCount) || loopCount <= 0) return null;
+  if (currentIndex === null || !Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= loopCount) {
+    return direction === 'next' ? 0 : loopCount - 1;
+  }
+  return direction === 'next'
+    ? (currentIndex + 1) % loopCount
+    : (currentIndex - 1 + loopCount) % loopCount;
+}
+
 function squaredDistance(left: MeshPointMm, right: MeshPointMm) {
   return (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2;
 }

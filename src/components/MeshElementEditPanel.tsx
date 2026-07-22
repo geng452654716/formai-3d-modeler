@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
+  cycleMeshPlanarRegionLoopIndex,
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
   type MeshElementEditMode,
@@ -101,6 +102,14 @@ export function MeshElementEditPanel() {
     || meshElementSelection.selectionMethod !== 'click'
     || meshElementSelection.elements.length !== 1
   );
+  const focusedPlanarRegionLoop = meshPlanarRegionFocusedLoopIndex === null
+    ? null
+    : meshPlanarRegionPreview?.boundaryLoops[meshPlanarRegionFocusedLoopIndex] ?? null;
+  const focusedPlanarRegionLoopLabel = focusedPlanarRegionLoop && meshPlanarRegionPreview
+    ? `${focusedPlanarRegionLoop.kind === 'outer' ? '外环' : '孔洞'} ${meshPlanarRegionPreview.boundaryLoops
+      .slice(0, meshPlanarRegionFocusedLoopIndex! + 1)
+      .filter((candidate) => candidate.kind === focusedPlanarRegionLoop.kind).length}`
+    : '尚未聚焦';
   const operationInvalid = transformKind === 'move'
     ? moveInvalid
     : transformKind === 'rotate'
@@ -336,6 +345,27 @@ export function MeshElementEditPanel() {
                   <span>法线夹角公差<strong>{meshPlanarRegionPreview.normalToleranceDegrees.toFixed(1)}°</strong></span>
                   <span>平面距离公差<strong>{meshPlanarRegionPreview.planeToleranceMm.toFixed(5)} 毫米</strong></span>
                 </div>
+                {meshPlanarRegionPreview.boundaryLoops.length > 1 && (
+                  <div className="mesh-planar-region-loop-navigation" role="group" aria-label="边界环顺序导航">
+                    <button
+                      type="button"
+                      onClick={() => setMeshPlanarRegionFocusedLoopIndex(cycleMeshPlanarRegionLoopIndex(
+                        meshPlanarRegionFocusedLoopIndex,
+                        meshPlanarRegionPreview.boundaryLoops.length,
+                        'previous'
+                      ))}
+                    >上一个环</button>
+                    <span>当前：{focusedPlanarRegionLoopLabel}</span>
+                    <button
+                      type="button"
+                      onClick={() => setMeshPlanarRegionFocusedLoopIndex(cycleMeshPlanarRegionLoopIndex(
+                        meshPlanarRegionFocusedLoopIndex,
+                        meshPlanarRegionPreview.boundaryLoops.length,
+                        'next'
+                      ))}
+                    >下一个环</button>
+                  </div>
+                )}
                 <div className="mesh-planar-region-loop-list">
                   {meshPlanarRegionPreview.boundaryLoops.map((loop, index) => {
                     const ordinal = meshPlanarRegionPreview.boundaryLoops

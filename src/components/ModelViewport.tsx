@@ -479,6 +479,7 @@ function LoadedCadMesh({
   const meshElementTransformKind = useModelStore((state) => state.meshElementTransformKind);
   const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
   const meshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.meshPlanarRegionFocusedLoopIndex);
+  const setMeshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.setMeshPlanarRegionFocusedLoopIndex);
   const setMeshPlanarRegionPreview = useModelStore((state) => state.setMeshPlanarRegionPreview);
   const selectMeshElement = useModelStore((state) => state.selectMeshElement);
   const prepared = useMemo(() => {
@@ -629,21 +630,39 @@ function LoadedCadMesh({
     selectedMeshElementGeometries.faces?.dispose();
   }, [selectedMeshElementGeometries]);
 
-  const meshPlanarRegionBoundaryGeometries = useMemo(() => {
+  const meshPlanarRegionLoopRenderData = useMemo(() => {
     if (
-      meshElementTransformKind !== 'extrude-face'
+      id !== 'uploaded-model'
+      || meshElementTransformKind !== 'extrude-face'
       || !importedStlModel
       || meshPlanarRegionPreview?.revision !== importedStlModel.revision
-      || !meshPlanarRegionPreview.boundaryLoops.length
-    ) return { outer: null, hole: null };
+    ) return [];
+    return meshPlanarRegionPreview.boundaryLoops.flatMap((loop, loopIndex) => {
+      if (loop.pointsMm.length < 3) return [];
+      const openPoints = loop.pointsMm.map((point) => (
+        new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
+      ));
+      const ordinal = meshPlanarRegionPreview.boundaryLoops
+        .slice(0, loopIndex + 1)
+        .filter((candidate) => candidate.kind === loop.kind).length;
+      return [{
+        loopIndex,
+        loop,
+        label: `${loop.kind === 'outer' ? '外环' : '孔洞'} ${ordinal}`,
+        color: loop.kind === 'outer' ? '#52e0c4' : '#ff8f70',
+        points: [...openPoints, openPoints[0]],
+        center: openPoints.reduce((sum, point) => sum.add(point), new Vector3()).multiplyScalar(1 / openPoints.length)
+      }];
+    });
+  }, [coordinateTransform, id, importedStlModel, meshElementTransformKind, meshPlanarRegionPreview]);
+
+  const meshPlanarRegionBoundaryGeometries = useMemo(() => {
     const createBoundaryGeometry = (kind: 'outer' | 'hole') => {
-      const positions = meshPlanarRegionPreview.boundaryLoops
-        .filter((loop) => loop.kind === kind)
-        .flatMap((loop) => loop.pointsMm.flatMap((point, index) => {
-          const next = loop.pointsMm[(index + 1) % loop.pointsMm.length];
-          const start = new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform);
-          const end = new Vector3(next.x, next.y, next.z).applyMatrix4(coordinateTransform);
-          return [start.x, start.y, start.z, end.x, end.y, end.z];
+      const positions = meshPlanarRegionLoopRenderData
+        .filter((candidate) => candidate.loop.kind === kind)
+        .flatMap((candidate) => candidate.points.slice(0, -1).flatMap((point, index) => {
+          const next = candidate.points[index + 1];
+          return [point.x, point.y, point.z, next.x, next.y, next.z];
         }));
       if (!positions.length) return null;
       const boundaryGeometry = new BufferGeometry();
@@ -654,42 +673,17 @@ function LoadedCadMesh({
       outer: createBoundaryGeometry('outer'),
       hole: createBoundaryGeometry('hole')
     };
-  }, [coordinateTransform, importedStlModel, meshElementTransformKind, meshPlanarRegionPreview]);
+  }, [meshPlanarRegionLoopRenderData]);
   useEffect(() => () => {
     meshPlanarRegionBoundaryGeometries.outer?.dispose();
     meshPlanarRegionBoundaryGeometries.hole?.dispose();
   }, [meshPlanarRegionBoundaryGeometries]);
 
-  const focusedMeshPlanarRegionLoop = useMemo(() => {
-    if (
-      meshElementTransformKind !== 'extrude-face'
-      || !importedStlModel
-      || meshPlanarRegionPreview?.revision !== importedStlModel.revision
-      || meshPlanarRegionFocusedLoopIndex === null
-    ) return null;
-    const loop = meshPlanarRegionPreview.boundaryLoops[meshPlanarRegionFocusedLoopIndex];
-    if (!loop || loop.pointsMm.length < 3) return null;
-    const points = loop.pointsMm.map((point) => (
-      new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
-    ));
-    const center = points.reduce((sum, point) => sum.add(point), new Vector3()).multiplyScalar(1 / points.length);
-    const ordinal = meshPlanarRegionPreview.boundaryLoops
-      .slice(0, meshPlanarRegionFocusedLoopIndex + 1)
-      .filter((candidate) => candidate.kind === loop.kind).length;
-    return {
-      loop,
-      label: `${loop.kind === 'outer' ? '外环' : '孔洞'} ${ordinal}`,
-      color: loop.kind === 'outer' ? '#52e0c4' : '#ff8f70',
-      points: [...points, points[0]],
-      center
-    };
-  }, [
-    coordinateTransform,
-    importedStlModel,
-    meshElementTransformKind,
-    meshPlanarRegionFocusedLoopIndex,
-    meshPlanarRegionPreview
-  ]);
+  const focusedMeshPlanarRegionLoop = meshPlanarRegionFocusedLoopIndex === null
+    ? null
+    : meshPlanarRegionLoopRenderData.find((candidate) => (
+      candidate.loopIndex === meshPlanarRegionFocusedLoopIndex
+    )) ?? null;
 
   const selectedMarker = useMemo(() => {
     if (
@@ -1081,6 +1075,26 @@ function LoadedCadMesh({
           />
         </lineSegments>
       )}
+
+      {meshPlanarRegionLoopRenderData.map((candidate) => (
+        <Line
+          key={`共面边界环拾取-${candidate.loopIndex}`}
+          points={candidate.points}
+          color={candidate.color}
+          lineWidth={9}
+          transparent
+          opacity={0.001}
+          depthTest={false}
+          depthWrite={false}
+          renderOrder={16}
+          onClick={(event) => {
+            event.stopPropagation();
+            setMeshPlanarRegionFocusedLoopIndex(
+              meshPlanarRegionFocusedLoopIndex === candidate.loopIndex ? null : candidate.loopIndex
+            );
+          }}
+        />
+      ))}
 
       {focusedMeshPlanarRegionLoop && (
         <>
