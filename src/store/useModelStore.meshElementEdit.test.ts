@@ -198,11 +198,25 @@ describe('上传 STL 网格元素批量编辑', () => {
       boundaryLoops: [{
         kind: 'outer' as const,
         pointsMm: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 0, y: 10, z: 0 }],
-        perimeterMm: 34.14, boundsMm: { widthMm: 10, heightMm: 10 }, nestingDepth: 0
+        perimeterMm: 34.14, boundsMm: { widthMm: 10, heightMm: 10 },
+        measurementFrame: {
+          originMm: { x: 0, y: 0, z: 0 },
+          axisU: { x: 1, y: 0, z: 0 },
+          axisV: { x: 0, y: 1, z: 0 },
+          minUMm: 0, maxUMm: 10, minVMm: 0, maxVMm: 10
+        },
+        nestingDepth: 0
       }, {
         kind: 'hole' as const,
         pointsMm: [{ x: 2, y: 2, z: 0 }, { x: 3, y: 2, z: 0 }, { x: 2, y: 3, z: 0 }],
-        perimeterMm: 3.41, boundsMm: { widthMm: 1, heightMm: 1 }, nestingDepth: 1
+        perimeterMm: 3.41, boundsMm: { widthMm: 1, heightMm: 1 },
+        measurementFrame: {
+          originMm: { x: 0, y: 0, z: 0 },
+          axisU: { x: 1, y: 0, z: 0 },
+          axisV: { x: 0, y: 1, z: 0 },
+          minUMm: 2, maxUMm: 3, minVMm: 2, maxVMm: 3
+        },
+        nestingDepth: 1
       }],
       normalToleranceDegrees: 0.5, planeToleranceMm: 0.00002
     };

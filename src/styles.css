@@ -1245,7 +1245,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 
 .mesh-planar-region-dimension-label {
   display: flex;
-  min-width: 112px;
+  min-width: 88px;
   flex-direction: column;
   gap: 2px;
   padding: 7px 9px;
@@ -1262,3 +1262,21 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-dimension-label strong { margin-bottom: 1px; color: #52e0c4; font-size: 9px; }
 .mesh-planar-region-dimension-label.hole { border-color: rgba(255, 143, 112, .72); box-shadow: 0 6px 22px rgba(0, 0, 0, .38), 0 0 14px rgba(255, 143, 112, .14); }
 .mesh-planar-region-dimension-label.hole strong { color: #ff8f70; }
+.mesh-planar-region-axis-dimension-label {
+  padding: 4px 6px;
+  border: 1px solid rgba(82, 224, 196, .62);
+  border-radius: 4px;
+  background: rgba(8, 20, 18, .9);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .32);
+  color: #70ead2;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.mesh-planar-region-axis-dimension-label.hole {
+  border-color: rgba(255, 143, 112, .68);
+  background: rgba(28, 13, 10, .9);
+  color: #ff9f85;
+}

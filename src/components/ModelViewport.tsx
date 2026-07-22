@@ -37,6 +37,7 @@ import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '
 import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
+  createMeshPlanarRegionDimensionGuides,
   createMeshPlanarRegionTopology,
   expandMeshPlanarRegion,
   MAX_MESH_ELEMENT_SELECTIONS,
@@ -639,9 +640,31 @@ function LoadedCadMesh({
     ) return [];
     return meshPlanarRegionPreview.boundaryLoops.flatMap((loop, loopIndex) => {
       if (loop.pointsMm.length < 3) return [];
-      const openPoints = loop.pointsMm.map((point) => (
+      const transformPoint = (point: { x: number; y: number; z: number }) => (
         new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
-      ));
+      );
+      const transformSegment = (segment: [{ x: number; y: number; z: number }, { x: number; y: number; z: number }]) => (
+        segment.map(transformPoint) as [Vector3, Vector3]
+      );
+      const openPoints = loop.pointsMm.map(transformPoint);
+      const dimensionGuidesMm = createMeshPlanarRegionDimensionGuides(loop);
+      const dimensionGuides = {
+        width: {
+          valueMm: dimensionGuidesMm.width.valueMm,
+          dimensionLine: transformSegment(dimensionGuidesMm.width.dimensionLineMm),
+          extensionLines: dimensionGuidesMm.width.extensionLinesMm.map(transformSegment),
+          capLines: dimensionGuidesMm.width.capLinesMm.map(transformSegment),
+          label: transformPoint(dimensionGuidesMm.width.labelMm)
+        },
+        height: {
+          valueMm: dimensionGuidesMm.height.valueMm,
+          dimensionLine: transformSegment(dimensionGuidesMm.height.dimensionLineMm),
+          extensionLines: dimensionGuidesMm.height.extensionLinesMm.map(transformSegment),
+          capLines: dimensionGuidesMm.height.capLinesMm.map(transformSegment),
+          label: transformPoint(dimensionGuidesMm.height.labelMm)
+        },
+        summaryLabel: transformPoint(dimensionGuidesMm.summaryLabelMm)
+      };
       const ordinal = meshPlanarRegionPreview.boundaryLoops
         .slice(0, loopIndex + 1)
         .filter((candidate) => candidate.kind === loop.kind).length;
@@ -651,7 +674,7 @@ function LoadedCadMesh({
         label: `${loop.kind === 'outer' ? '外环' : '孔洞'} ${ordinal}`,
         color: loop.kind === 'outer' ? '#52e0c4' : '#ff8f70',
         points: [...openPoints, openPoints[0]],
-        center: openPoints.reduce((sum, point) => sum.add(point), new Vector3()).multiplyScalar(1 / openPoints.length)
+        dimensionGuides
       }];
     });
   }, [coordinateTransform, id, importedStlModel, meshElementTransformKind, meshPlanarRegionPreview]);
@@ -1108,12 +1131,63 @@ function LoadedCadMesh({
             depthWrite={false}
             renderOrder={15}
           />
-          <Html position={focusedMeshPlanarRegionLoop.center} center distanceFactor={9}>
+          {[focusedMeshPlanarRegionLoop.dimensionGuides.width, focusedMeshPlanarRegionLoop.dimensionGuides.height].map((axisGuide, axisIndex) => (
+            <Line
+              key={`共面尺寸主线-${axisIndex}`}
+              points={axisGuide.dimensionLine}
+              color={focusedMeshPlanarRegionLoop.color}
+              lineWidth={1.7}
+              transparent
+              opacity={0.96}
+              depthTest={false}
+              depthWrite={false}
+              renderOrder={17}
+            />
+          ))}
+          {[focusedMeshPlanarRegionLoop.dimensionGuides.width, focusedMeshPlanarRegionLoop.dimensionGuides.height].flatMap((axisGuide, axisIndex) => (
+            axisGuide.extensionLines.map((points, lineIndex) => (
+              <Line
+                key={`共面尺寸延伸线-${axisIndex}-${lineIndex}`}
+                points={points}
+                color={focusedMeshPlanarRegionLoop.color}
+                lineWidth={1}
+                transparent
+                opacity={0.52}
+                depthTest={false}
+                depthWrite={false}
+                renderOrder={17}
+              />
+            ))
+          ))}
+          {[focusedMeshPlanarRegionLoop.dimensionGuides.width, focusedMeshPlanarRegionLoop.dimensionGuides.height].flatMap((axisGuide, axisIndex) => (
+            axisGuide.capLines.map((points, lineIndex) => (
+              <Line
+                key={`共面尺寸端点线-${axisIndex}-${lineIndex}`}
+                points={points}
+                color={focusedMeshPlanarRegionLoop.color}
+                lineWidth={1.4}
+                transparent
+                opacity={0.88}
+                depthTest={false}
+                depthWrite={false}
+                renderOrder={17}
+              />
+            ))
+          ))}
+          <Html position={focusedMeshPlanarRegionLoop.dimensionGuides.width.label} center distanceFactor={9}>
+            <div className={`mesh-planar-region-axis-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
+              宽度 {focusedMeshPlanarRegionLoop.dimensionGuides.width.valueMm.toFixed(2)} 毫米
+            </div>
+          </Html>
+          <Html position={focusedMeshPlanarRegionLoop.dimensionGuides.height.label} center distanceFactor={9}>
+            <div className={`mesh-planar-region-axis-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
+              高度 {focusedMeshPlanarRegionLoop.dimensionGuides.height.valueMm.toFixed(2)} 毫米
+            </div>
+          </Html>
+          <Html position={focusedMeshPlanarRegionLoop.dimensionGuides.summaryLabel} center distanceFactor={9}>
             <div className={`mesh-planar-region-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
               <strong>{focusedMeshPlanarRegionLoop.label}</strong>
               <span>周长 {focusedMeshPlanarRegionLoop.loop.perimeterMm.toFixed(2)} 毫米</span>
-              <span>宽度 {focusedMeshPlanarRegionLoop.loop.boundsMm.widthMm.toFixed(2)} 毫米</span>
-              <span>高度 {focusedMeshPlanarRegionLoop.loop.boundsMm.heightMm.toFixed(2)} 毫米</span>
             </div>
           </Html>
         </>

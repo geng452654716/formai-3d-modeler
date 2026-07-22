@@ -172,7 +172,7 @@ describe('连续共面区域执行前预览', () => {
   });
 
   it('从长方体顶面种子扩展两个三角面并测量闭合外环', async () => {
-    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const { createMeshPlanarRegionDimensionGuides, expandMeshPlanarRegion } = await import('./meshElementEdit');
     const preview = expandMeshPlanarRegion('修订-顶面', 0, [
       face(0, [0, 0, 12], [30, 0, 12], [30, 24, 12]),
       face(1, [0, 0, 12], [30, 24, 12], [0, 24, 12]),
@@ -192,6 +192,40 @@ describe('连续共面区域执行前预览', () => {
       boundsMm: { widthMm: 30, heightMm: 24 }
     });
     expect(preview.boundaryLoops[0].perimeterMm).toBeCloseTo(108, 8);
+    expect(preview.boundaryLoops[0].measurementFrame).toMatchObject({
+      minUMm: 0,
+      maxUMm: 30,
+      minVMm: 0,
+      maxVMm: 24
+    });
+    const guides = createMeshPlanarRegionDimensionGuides(preview.boundaryLoops[0]);
+    expect(guides.width.valueMm).toBeCloseTo(30, 8);
+    expect(guides.height.valueMm).toBeCloseTo(24, 8);
+    expect(Math.hypot(
+      guides.width.dimensionLineMm[1].x - guides.width.dimensionLineMm[0].x,
+      guides.width.dimensionLineMm[1].y - guides.width.dimensionLineMm[0].y,
+      guides.width.dimensionLineMm[1].z - guides.width.dimensionLineMm[0].z
+    )).toBeCloseTo(30, 8);
+    expect(Math.hypot(
+      guides.height.dimensionLineMm[1].x - guides.height.dimensionLineMm[0].x,
+      guides.height.dimensionLineMm[1].y - guides.height.dimensionLineMm[0].y,
+      guides.height.dimensionLineMm[1].z - guides.height.dimensionLineMm[0].z
+    )).toBeCloseTo(24, 8);
+    expect(guides.width.dimensionLineMm.every((point) => point.y < 0)).toBe(true);
+    expect(guides.height.dimensionLineMm.every((point) => point.x > 30)).toBe(true);
+    expect(guides.summaryLabelMm.y).toBeGreaterThan(24);
+    const guideCoordinates = [
+      ...guides.width.dimensionLineMm,
+      ...guides.width.extensionLinesMm.flat(),
+      ...guides.width.capLinesMm.flat(),
+      guides.width.labelMm,
+      ...guides.height.dimensionLineMm,
+      ...guides.height.extensionLinesMm.flat(),
+      ...guides.height.capLinesMm.flat(),
+      guides.height.labelMm,
+      guides.summaryLabelMm
+    ].flatMap((point) => [point.x, point.y, point.z]);
+    expect(guideCoordinates.every(Number.isFinite)).toBe(true);
     expect(preview.normalToleranceDegrees).toBe(0.5);
     expect(preview.planeToleranceMm).toBeCloseTo(Math.hypot(30, 24, 12) * 0.000001, 10);
   });
@@ -208,7 +242,7 @@ describe('连续共面区域执行前预览', () => {
   });
 
   it('识别带孔平面区域的外环和孔洞环', async () => {
-    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const { createMeshPlanarRegionDimensionGuides, expandMeshPlanarRegion } = await import('./meshElementEdit');
     const outer = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]] as const;
     const inner = [[4, 4, 0], [6, 4, 0], [6, 6, 0], [4, 6, 0]] as const;
     const faces = outer.flatMap((point, index) => {
@@ -232,6 +266,21 @@ describe('连续共面区域执行前预览', () => {
     expect(outerLoop?.perimeterMm).toBeCloseTo(40, 8);
     expect(holeLoop).toMatchObject({ nestingDepth: 1, boundsMm: { widthMm: 2, heightMm: 2 } });
     expect(holeLoop?.perimeterMm).toBeCloseTo(8, 8);
+    if (!holeLoop) throw new Error('测试模型应包含孔洞环');
+    const holeGuides = createMeshPlanarRegionDimensionGuides(holeLoop);
+    expect(holeGuides.offsetMm).toBe(1.5);
+    const segmentLengths = [
+      holeGuides.width.dimensionLineMm,
+      ...holeGuides.width.extensionLinesMm,
+      ...holeGuides.width.capLinesMm,
+      holeGuides.height.dimensionLineMm,
+      ...holeGuides.height.extensionLinesMm,
+      ...holeGuides.height.capLinesMm
+    ].map(([start, end]) => Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z));
+    expect(segmentLengths.every((length) => Number.isFinite(length) && length > 0)).toBe(true);
+    expect(holeGuides.width.labelMm.y).toBeLessThan(4);
+    expect(holeGuides.height.labelMm.x).toBeGreaterThan(6);
+    expect(holeGuides.summaryLabelMm.y).toBeGreaterThan(6);
   });
 
   it('反转三角面绕序后仍按包含关系识别外环和孔洞', async () => {

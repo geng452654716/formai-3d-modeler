@@ -59,12 +59,40 @@ export interface MeshPlanarRegionTopology {
 export type MeshPlanarRegionBoundaryKind = 'outer' | 'hole';
 
 /** 单个平面边界环的语义和二维测量结果。 */
+export interface MeshPlanarRegionMeasurementFrame {
+  originMm: MeshPointMm;
+  axisU: MeshPointMm;
+  axisV: MeshPointMm;
+  minUMm: number;
+  maxUMm: number;
+  minVMm: number;
+  maxVMm: number;
+}
+
 export interface MeshPlanarRegionBoundaryLoop {
   kind: MeshPlanarRegionBoundaryKind;
   pointsMm: MeshPointMm[];
   perimeterMm: number;
   boundsMm: { widthMm: number; heightMm: number };
+  measurementFrame: MeshPlanarRegionMeasurementFrame;
   nestingDepth: number;
+}
+
+export type MeshPlanarDimensionSegmentMm = [MeshPointMm, MeshPointMm];
+
+export interface MeshPlanarDimensionAxisGuide {
+  valueMm: number;
+  dimensionLineMm: MeshPlanarDimensionSegmentMm;
+  extensionLinesMm: [MeshPlanarDimensionSegmentMm, MeshPlanarDimensionSegmentMm];
+  capLinesMm: [MeshPlanarDimensionSegmentMm, MeshPlanarDimensionSegmentMm];
+  labelMm: MeshPointMm;
+}
+
+export interface MeshPlanarRegionDimensionGuides {
+  offsetMm: number;
+  width: MeshPlanarDimensionAxisGuide;
+  height: MeshPlanarDimensionAxisGuide;
+  summaryLabelMm: MeshPointMm;
 }
 
 /** 连续共面区域在正式调用 Worker 前的只读预览和测量结果。 */
@@ -267,6 +295,98 @@ function createMeshPlanarBasis(normal: MeshPointMm) {
   return { u, v };
 }
 
+function meshPlanarFramePoint(
+  frame: MeshPlanarRegionMeasurementFrame,
+  uMm: number,
+  vMm: number
+): MeshPointMm {
+  return {
+    x: frame.originMm.x + frame.axisU.x * uMm + frame.axisV.x * vMm,
+    y: frame.originMm.y + frame.axisU.y * uMm + frame.axisV.y * vMm,
+    z: frame.originMm.z + frame.axisU.z * uMm + frame.axisV.z * vMm
+  };
+}
+
+/** 为聚焦边界环生成轮廓外的宽高尺寸线、延伸线、端点短线与标签锚点。 */
+export function createMeshPlanarRegionDimensionGuides(
+  loop: MeshPlanarRegionBoundaryLoop
+): MeshPlanarRegionDimensionGuides {
+  const frame = loop.measurementFrame;
+  const widthMm = frame.maxUMm - frame.minUMm;
+  const heightMm = frame.maxVMm - frame.minVMm;
+  if (![widthMm, heightMm].every((value) => Number.isFinite(value) && value > 0)) {
+    throw new Error('共面边界环尺寸无效，无法生成尺寸辅助线');
+  }
+  const offsetMm = Math.max(1.5, Math.min(6, Math.max(widthMm, heightMm) * 0.08));
+  const extensionOverrunMm = Math.max(0.45, Math.min(1.5, offsetMm * 0.24));
+  const capHalfLengthMm = Math.max(0.45, Math.min(1.25, offsetMm * 0.32));
+  const labelClearanceMm = Math.max(0.75, Math.min(2.2, offsetMm * 0.45));
+  const centerUMm = (frame.minUMm + frame.maxUMm) / 2;
+  const centerVMm = (frame.minVMm + frame.maxVMm) / 2;
+  const widthLineVMm = frame.minVMm - offsetMm;
+  const heightLineUMm = frame.maxUMm + offsetMm;
+  return {
+    offsetMm,
+    width: {
+      valueMm: widthMm,
+      dimensionLineMm: [
+        meshPlanarFramePoint(frame, frame.minUMm, widthLineVMm),
+        meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm)
+      ],
+      extensionLinesMm: [
+        [
+          meshPlanarFramePoint(frame, frame.minUMm, frame.minVMm),
+          meshPlanarFramePoint(frame, frame.minUMm, widthLineVMm - extensionOverrunMm)
+        ],
+        [
+          meshPlanarFramePoint(frame, frame.maxUMm, frame.minVMm),
+          meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm - extensionOverrunMm)
+        ]
+      ],
+      capLinesMm: [
+        [
+          meshPlanarFramePoint(frame, frame.minUMm, widthLineVMm - capHalfLengthMm),
+          meshPlanarFramePoint(frame, frame.minUMm, widthLineVMm + capHalfLengthMm)
+        ],
+        [
+          meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm - capHalfLengthMm),
+          meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm + capHalfLengthMm)
+        ]
+      ],
+      labelMm: meshPlanarFramePoint(frame, centerUMm, widthLineVMm - labelClearanceMm)
+    },
+    height: {
+      valueMm: heightMm,
+      dimensionLineMm: [
+        meshPlanarFramePoint(frame, heightLineUMm, frame.minVMm),
+        meshPlanarFramePoint(frame, heightLineUMm, frame.maxVMm)
+      ],
+      extensionLinesMm: [
+        [
+          meshPlanarFramePoint(frame, frame.maxUMm, frame.minVMm),
+          meshPlanarFramePoint(frame, heightLineUMm + extensionOverrunMm, frame.minVMm)
+        ],
+        [
+          meshPlanarFramePoint(frame, frame.maxUMm, frame.maxVMm),
+          meshPlanarFramePoint(frame, heightLineUMm + extensionOverrunMm, frame.maxVMm)
+        ]
+      ],
+      capLinesMm: [
+        [
+          meshPlanarFramePoint(frame, heightLineUMm - capHalfLengthMm, frame.minVMm),
+          meshPlanarFramePoint(frame, heightLineUMm + capHalfLengthMm, frame.minVMm)
+        ],
+        [
+          meshPlanarFramePoint(frame, heightLineUMm - capHalfLengthMm, frame.maxVMm),
+          meshPlanarFramePoint(frame, heightLineUMm + capHalfLengthMm, frame.maxVMm)
+        ]
+      ],
+      labelMm: meshPlanarFramePoint(frame, heightLineUMm + labelClearanceMm, centerVMm)
+    },
+    summaryLabelMm: meshPlanarFramePoint(frame, centerUMm, frame.maxVMm + offsetMm + labelClearanceMm)
+  };
+}
+
 function projectMeshPlanarPoint(
   point: MeshPointMm,
   origin: MeshPointMm,
@@ -308,6 +428,10 @@ function measureMeshPlanarBoundaryLoops(
     if (nestingDepth > 1) throw new Error('共面区域预览暂不支持嵌套岛结构，请先拆分平面区域');
     const xs = projected.map((point) => point.x);
     const ys = projected.map((point) => point.y);
+    const minUMm = Math.min(...xs);
+    const maxUMm = Math.max(...xs);
+    const minVMm = Math.min(...ys);
+    const maxVMm = Math.max(...ys);
     const perimeterMm = pointsMm.reduce((sum, point, index) => {
       const next = pointsMm[(index + 1) % pointsMm.length];
       return sum + Math.hypot(next.x - point.x, next.y - point.y, next.z - point.z);
@@ -317,8 +441,17 @@ function measureMeshPlanarBoundaryLoops(
       pointsMm: pointsMm.map((point) => ({ ...point })),
       perimeterMm,
       boundsMm: {
-        widthMm: Math.max(...xs) - Math.min(...xs),
-        heightMm: Math.max(...ys) - Math.min(...ys)
+        widthMm: maxUMm - minUMm,
+        heightMm: maxVMm - minVMm
+      },
+      measurementFrame: {
+        originMm: { ...origin },
+        axisU: { ...basis.u },
+        axisV: { ...basis.v },
+        minUMm,
+        maxUMm,
+        minVMm,
+        maxVMm
       },
       nestingDepth
     };
