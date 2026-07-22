@@ -8,6 +8,7 @@ import {
 import type { EnclosureParameters } from '../model/types';
 import { useModelStore } from '../store/useModelStore';
 import { ObjectTransformSection } from './ObjectTransformSection';
+import { PrintOrientationPanel, type PrintOrientationSource } from './PrintOrientationPanel';
 
 interface ParameterControlProps {
   parameterKey: keyof EnclosureParameters;
@@ -67,6 +68,14 @@ function UploadedModelPanel() {
 
   if (!importedStlModel) return null;
 
+  const printOrientationSource: PrintOrientationSource = {
+    identity: `uploaded-stl:${importedStlModel.revision}:${importedStlModel.sourceFile}`,
+    fileName: importedStlModel.sourceFile,
+    revision: importedStlModel.revision,
+    label: importedStlModel.name,
+    buildVolumeMm: [256, 256, 256]
+  };
+
   const { metrics } = importedStlModel;
   const { boundsMm } = metrics;
   const splitValidation = manufacturingResult?.sourceKind === 'uploaded-stl'
@@ -93,6 +102,8 @@ function UploadedModelPanel() {
       </div>
 
       <ObjectTransformSection />
+
+      <PrintOrientationPanel source={printOrientationSource} />
 
       <section className="parameter-section">
         <h3>
@@ -182,9 +193,23 @@ export function ParameterPanel() {
   const parameters = useModelStore((state) => state.parameters);
   const interfaceOpenings = useModelStore((state) => state.interfaceOpenings);
   const cadResult = useModelStore((state) => state.cadResult);
+  const selectedObject = useModelStore((state) => state.selectedObject);
   const setParameter = useModelStore((state) => state.setParameter);
   const commitVersion = useModelStore((state) => state.commitVersion);
   const dimensions = getOuterDimensions(parameters);
+  const selectedCadPart = cadResult?.parts.find((part) => part.id === selectedObject)
+    ?? cadResult?.parts.find((part) => part.role === 'primary')
+    ?? cadResult?.parts[0]
+    ?? null;
+  const printOrientationSource: PrintOrientationSource | null = viewportModelSource === 'cad' && cadResult && selectedCadPart
+    ? {
+        identity: `cad:${cadResult.revision}:${selectedCadPart.id}:${selectedCadPart.stlFile}`,
+        fileName: selectedCadPart.stlFile,
+        revision: cadResult.revision,
+        label: selectedCadPart.label,
+        buildVolumeMm: cadResult.printer.buildVolumeMm
+      }
+    : null;
 
   const resetParameters = () => {
     (Object.entries(DEFAULT_PARAMETERS) as Array<[keyof EnclosureParameters, number]>).forEach(
@@ -217,6 +242,13 @@ export function ParameterPanel() {
       </div>
 
       <ObjectTransformSection />
+
+      <PrintOrientationPanel
+        source={printOrientationSource}
+        unavailableReason={viewportModelSource === 'preview'
+          ? '请先切换到 OpenCascade 精确实体，再分析当前封闭 CAD 零件。'
+          : '当前精确 CAD 尚未生成完成。'}
+      />
 
       <section className="parameter-section">
         <h3>

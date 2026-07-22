@@ -1373,3 +1373,28 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   color: #ffc0b2;
 }
 .mesh-planar-region-extrusion-label.cut strong { color: #ff8f76; }
+
+.print-orientation-section { gap: 8px; }
+.print-orientation-note, .print-orientation-unavailable, .print-orientation-error { margin: 0; font-size: 10px; line-height: 1.5; }
+.print-orientation-note { color: #9aa6a1; }
+.print-orientation-unavailable { color: #8c9692; }
+.print-orientation-error { color: #f2a69a; }
+.print-orientation-analyze-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 1px solid rgba(83, 199, 180, .35); border-radius: 5px; color: #c6e8df; background: rgba(25, 74, 67, .3); }
+.print-orientation-analyze-button:hover:not(:disabled) { border-color: rgba(83, 199, 180, .68); background: rgba(31, 92, 82, .4); }
+.print-orientation-analyze-button:disabled { cursor: not-allowed; opacity: .48; }
+.print-orientation-result { display: grid; gap: 7px; }
+.print-orientation-recommendation { display: flex; align-items: flex-start; gap: 7px; padding: 7px; border: 1px solid rgba(222, 164, 55, .3); border-radius: 5px; color: #e5d5ac; background: rgba(69, 49, 18, .26); }
+.print-orientation-recommendation.available { border-color: rgba(83, 199, 180, .34); color: #c8e8e1; background: rgba(22, 70, 63, .27); }
+.print-orientation-recommendation svg { flex: 0 0 auto; margin-top: 1px; }
+.print-orientation-recommendation div { display: grid; gap: 2px; min-width: 0; }
+.print-orientation-recommendation strong { font-size: 11px; }
+.print-orientation-recommendation span { font-size: 9px; line-height: 1.45; color: #aab8b3; }
+.print-orientation-candidate-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.print-orientation-candidate-list li { display: grid; gap: 2px; padding: 6px 7px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 4px; background: rgba(255, 255, 255, .018); }
+.print-orientation-candidate-list li.recommended { border-color: rgba(83, 199, 180, .42); background: rgba(27, 86, 77, .2); }
+.print-orientation-candidate-list li.unavailable { opacity: .58; }
+.print-orientation-candidate-list li > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.print-orientation-candidate-list strong { font-size: 10px; color: #d9dfdc; }
+.print-orientation-candidate-list b { font-size: 8px; font-weight: 650; color: #79cdbc; }
+.print-orientation-candidate-list li.unavailable b { color: #d8a16e; }
+.print-orientation-candidate-list span, .print-orientation-result > small { font-size: 8px; line-height: 1.45; color: #8f9c97; font-variant-numeric: tabular-nums; }
