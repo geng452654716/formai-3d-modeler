@@ -165,6 +165,18 @@ export interface MeshPlanarRegionExtrusionPreviewProfile {
   labelPointMm: MeshPointMm;
 }
 
+export interface MeshPlanarRegionExtrusionPreviewLoopGuide {
+  kind: MeshPlanarRegionBoundaryKind;
+  startLoopMm: MeshPointMm[];
+  endLoopMm: MeshPointMm[];
+}
+
+export interface MeshPlanarRegionExtrusionPreviewGuides {
+  loops: MeshPlanarRegionExtrusionPreviewLoopGuide[];
+  directionEndMm: MeshPointMm;
+  endpointMarkerSegmentsMm: [MeshPlanarDimensionSegmentMm, MeshPlanarDimensionSegmentMm];
+}
+
 export interface MeshScreenProjection {
   x: number;
   y: number;
@@ -403,6 +415,86 @@ export function createMeshPlanarRegionExtrusionPreviewProfile(
     directionStartMm,
     directionEndMm,
     labelPointMm: meshPointAlong(directionEndMm, directionNormalMm, labelClearanceMm)
+  };
+}
+
+/** 从二维 profile 派生工具体起止端闭合轮廓和只读方向端点十字，不参与布尔计算。 */
+export function createMeshPlanarRegionExtrusionPreviewGuides(
+  profile: MeshPlanarRegionExtrusionPreviewProfile
+): MeshPlanarRegionExtrusionPreviewGuides | null {
+  const loops2d = [profile.outer, ...profile.holes];
+  const allPlanePoints = loops2d.flat();
+  const sourceBasisPoints = [
+    profile.originMm,
+    profile.axisU,
+    profile.axisV,
+    profile.directionNormalMm,
+    profile.directionEndMm
+  ];
+  const signedAreaTwice = (loop: { x: number; y: number }[]) => loop.reduce((area, point, index) => {
+    const next = loop[(index + 1) % loop.length];
+    return area + point.x * next.y - next.x * point.y;
+  }, 0);
+  if (
+    !Number.isFinite(profile.distanceMm)
+    || profile.distanceMm <= 0
+    || loops2d.some((loop) => loop.length < 3 || Math.abs(signedAreaTwice(loop)) <= 1e-9)
+    || allPlanePoints.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))
+    || sourceBasisPoints.some((point) => (
+      !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)
+    ))
+    || Math.hypot(profile.axisU.x, profile.axisU.y, profile.axisU.z) <= 1e-9
+    || Math.hypot(profile.axisV.x, profile.axisV.y, profile.axisV.z) <= 1e-9
+    || Math.hypot(
+      profile.directionNormalMm.x,
+      profile.directionNormalMm.y,
+      profile.directionNormalMm.z
+    ) <= 1e-9
+  ) return null;
+  const planePointToSource = (point: { x: number; y: number }, depthMm: number) => ({
+    x: profile.originMm.x
+      + profile.axisU.x * point.x
+      + profile.axisV.x * point.y
+      + profile.directionNormalMm.x * depthMm,
+    y: profile.originMm.y
+      + profile.axisU.y * point.x
+      + profile.axisV.y * point.y
+      + profile.directionNormalMm.y * depthMm,
+    z: profile.originMm.z
+      + profile.axisU.z * point.x
+      + profile.axisV.z * point.y
+      + profile.directionNormalMm.z * depthMm
+  });
+  const closeLoop = (points: { x: number; y: number }[], depthMm: number) => {
+    const sourcePoints = points.map((point) => planePointToSource(point, depthMm));
+    return [...sourcePoints, { ...sourcePoints[0] }];
+  };
+  const loops: MeshPlanarRegionExtrusionPreviewLoopGuide[] = [{
+    kind: 'outer',
+    startLoopMm: closeLoop(profile.outer, 0),
+    endLoopMm: closeLoop(profile.outer, profile.distanceMm)
+  }, ...profile.holes.map((hole) => ({
+    kind: 'hole' as const,
+    startLoopMm: closeLoop(hole, 0),
+    endLoopMm: closeLoop(hole, profile.distanceMm)
+  }))];
+  const minX = Math.min(...profile.outer.map((point) => point.x));
+  const maxX = Math.max(...profile.outer.map((point) => point.x));
+  const minY = Math.min(...profile.outer.map((point) => point.y));
+  const maxY = Math.max(...profile.outer.map((point) => point.y));
+  const markerHalfMm = Math.max(0.35, Math.min(2, Math.min(maxX - minX, maxY - minY) * 0.08));
+  const markerPoint = (axis: MeshPointMm, sign: number) => ({
+    x: profile.directionEndMm.x + axis.x * markerHalfMm * sign,
+    y: profile.directionEndMm.y + axis.y * markerHalfMm * sign,
+    z: profile.directionEndMm.z + axis.z * markerHalfMm * sign
+  });
+  return {
+    loops,
+    directionEndMm: { ...profile.directionEndMm },
+    endpointMarkerSegmentsMm: [
+      [markerPoint(profile.axisU, -1), markerPoint(profile.axisU, 1)],
+      [markerPoint(profile.axisV, -1), markerPoint(profile.axisV, 1)]
+    ]
   };
 }
 

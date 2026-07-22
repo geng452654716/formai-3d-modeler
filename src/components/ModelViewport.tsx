@@ -37,6 +37,7 @@ import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '
 import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
+  createMeshPlanarRegionExtrusionPreviewGuides,
   createMeshPlanarRegionExtrusionPreviewProfile,
   createMeshPlanarRegionDimensionGuides,
   createMeshPlanarRegionTopology,
@@ -89,6 +90,7 @@ function createMeshPlanarDimensionHtmlPosition(labelWidthPx: number, labelHeight
 
 const calculateMeshPlanarAxisLabelPosition = createMeshPlanarDimensionHtmlPosition(104, 20);
 const calculateMeshPlanarSummaryLabelPosition = createMeshPlanarDimensionHtmlPosition(104, 38);
+const calculateMeshPlanarExtrusionLabelPosition = createMeshPlanarDimensionHtmlPosition(118, 24);
 
 interface FeaturePreviewGeometryProps {
   profile: 'circle' | 'rectangle' | 'slot';
@@ -747,6 +749,8 @@ function LoadedCadMesh({
       Number(meshFaceExtrusionDistanceText)
     );
     if (!profile) return null;
+    const guides = createMeshPlanarRegionExtrusionPreviewGuides(profile);
+    if (!guides) return null;
     const shape = new Shape();
     shape.moveTo(profile.outer[0].x, profile.outer[0].y);
     profile.outer.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
@@ -780,7 +784,21 @@ function LoadedCadMesh({
       distanceMm: profile.distanceMm,
       color: meshFaceExtrusionMode === 'add' ? '#2dd4bf' : '#ff8066',
       directionLine: [transformPoint(profile.directionStartMm), transformPoint(profile.directionEndMm)] as [Vector3, Vector3],
-      labelPoint: transformPoint(profile.labelPointMm)
+      labelPoint: transformPoint(profile.labelPointMm),
+      endpointMarkerSegments: guides.endpointMarkerSegmentsMm.map((segment) => (
+        segment.map(transformPoint) as [Vector3, Vector3]
+      )),
+      outlineLoops: guides.loops.flatMap((loop, loopIndex) => ([{
+        key: `${loop.kind}-${loopIndex}-起始端`,
+        kind: loop.kind,
+        end: false,
+        points: loop.startLoopMm.map(transformPoint)
+      }, {
+        key: `${loop.kind}-${loopIndex}-末端`,
+        kind: loop.kind,
+        end: true,
+        points: loop.endLoopMm.map(transformPoint)
+      }]))
     };
   }, [
     coordinateTransform,
@@ -1242,7 +1260,42 @@ function LoadedCadMesh({
             renderOrder={15}
             raycast={() => undefined}
           />
-          <Html position={meshPlanarRegionExtrusionPreview.labelPoint} center distanceFactor={9}>
+          {meshPlanarRegionExtrusionPreview.outlineLoops.map((loop) => (
+            <Line
+              key={`工具体轮廓-${loop.key}`}
+              points={loop.points}
+              color={loop.kind === 'outer'
+                ? meshPlanarRegionExtrusionPreview.color
+                : meshPlanarRegionExtrusionPreview.mode === 'add' ? '#b8fff3' : '#ffd2c8'}
+              lineWidth={loop.end ? 2.4 : 1.2}
+              transparent
+              opacity={loop.end ? 0.96 : 0.48}
+              depthTest={false}
+              depthWrite={false}
+              renderOrder={15}
+              raycast={() => undefined}
+            />
+          ))}
+          {meshPlanarRegionExtrusionPreview.endpointMarkerSegments.map((points, index) => (
+            <Line
+              key={`工具体方向端点-${index}`}
+              points={points}
+              color={meshPlanarRegionExtrusionPreview.color}
+              lineWidth={2.6}
+              transparent
+              opacity={1}
+              depthTest={false}
+              depthWrite={false}
+              renderOrder={16}
+              raycast={() => undefined}
+            />
+          ))}
+          <Html
+            position={meshPlanarRegionExtrusionPreview.labelPoint}
+            center
+            distanceFactor={9}
+            calculatePosition={calculateMeshPlanarExtrusionLabelPosition}
+          >
             <div
               className={`mesh-planar-region-extrusion-label ${meshPlanarRegionExtrusionPreview.mode}`}
               data-mesh-planar-extrusion-preview={meshPlanarRegionExtrusionPreview.mode}

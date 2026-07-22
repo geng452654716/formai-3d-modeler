@@ -244,6 +244,7 @@ describe('连续共面区域执行前预览', () => {
   it('识别带孔平面区域的外环和孔洞环，并生成顺序无关的法向工具体轮廓', async () => {
     const {
       createMeshPlanarRegionDimensionGuides,
+      createMeshPlanarRegionExtrusionPreviewGuides,
       createMeshPlanarRegionExtrusionPreviewProfile,
       expandMeshPlanarRegion
     } = await import('./meshElementEdit');
@@ -306,6 +307,55 @@ describe('连续共面区域执行前预览', () => {
     }, 'add', 2);
     expect(reorderedProfile?.outer).toEqual(addProfile?.outer);
     expect(reorderedProfile?.holes).toEqual(addProfile?.holes);
+
+    const guides = createMeshPlanarRegionExtrusionPreviewGuides(addProfile!);
+    expect(guides?.loops).toHaveLength(2);
+    expect(guides?.loops.map((loop) => loop.kind)).toEqual(['outer', 'hole']);
+    expect(guides?.loops[0].startLoopMm).toHaveLength(5);
+    expect(guides?.loops[0].endLoopMm).toHaveLength(5);
+    expect(guides?.loops[1].startLoopMm).toHaveLength(5);
+    expect(guides?.loops[1].endLoopMm).toHaveLength(5);
+    for (const loop of guides!.loops) {
+      expect(loop.startLoopMm.at(-1)).toEqual(loop.startLoopMm[0]);
+      expect(loop.endLoopMm.at(-1)).toEqual(loop.endLoopMm[0]);
+      loop.startLoopMm.forEach((startPoint, pointIndex) => {
+        const endPoint = loop.endLoopMm[pointIndex];
+        const normalDistanceMm = (endPoint.x - startPoint.x) * addProfile!.directionNormalMm.x
+          + (endPoint.y - startPoint.y) * addProfile!.directionNormalMm.y
+          + (endPoint.z - startPoint.z) * addProfile!.directionNormalMm.z;
+        expect(normalDistanceMm).toBeCloseTo(addProfile!.distanceMm, 8);
+      });
+    }
+    const guideCoordinates = [
+      ...guides!.loops.flatMap((loop) => [...loop.startLoopMm, ...loop.endLoopMm]),
+      guides!.directionEndMm,
+      ...guides!.endpointMarkerSegmentsMm.flat()
+    ].flatMap((point) => [point.x, point.y, point.z]);
+    expect(guideCoordinates.every(Number.isFinite)).toBe(true);
+    for (const [startPoint, endPoint] of guides!.endpointMarkerSegmentsMm) {
+      expect(Math.hypot(
+        endPoint.x - startPoint.x,
+        endPoint.y - startPoint.y,
+        endPoint.z - startPoint.z
+      )).toBeGreaterThan(0);
+    }
+
+    expect(createMeshPlanarRegionExtrusionPreviewGuides({
+      ...addProfile!,
+      outer: addProfile!.outer.slice(0, 2)
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewGuides({
+      ...addProfile!,
+      holes: [[{ x: Number.NaN, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }]]
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewGuides({
+      ...addProfile!,
+      holes: [[{ x: 0, y: 0 }, { x: 1, y: 0 }]]
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewGuides({
+      ...addProfile!,
+      axisU: { x: 0, y: 0, z: 0 }
+    })).toBeNull();
   });
 
   it('使用闭合网格有符号体积把反向绕序种子法线修正为外法线', async () => {
