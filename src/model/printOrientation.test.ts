@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createPrintBedPlacementPresentation,
   createPrintOrientationPresentation,
+  createPrintPlatformCenterPresentation,
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
   evaluatePrintPlatformBoundary,
@@ -274,6 +275,55 @@ describe('六向打印方向评估', () => {
       expect(preview.overflowMm[side]).toBeCloseTo(overflow);
       expect(preview.fitsPlatform).toBe(false);
     });
+  });
+
+  it('平台居中展示状态只替换 X/Z 并保留 Y、旋转、缩放和颜色', () => {
+    const preview = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 12, y: 7, z: -9 },
+      normalizationSpace: 'object-local'
+    });
+    const presentation = createPrintPlatformCenterPresentation({
+      transform: {
+        positionMm: { x: 12, y: 7, z: -9 },
+        rotationDeg: { x: 90, y: -45, z: 180 },
+        scale: 1.25
+      },
+      color: '#123456'
+    }, preview);
+
+    expect(preview.targetHorizontalPositionMm).toEqual({ x: 0, z: 0 });
+    expect(presentation).toEqual({
+      transform: {
+        positionMm: { x: 0, y: 7, z: 0 },
+        rotationDeg: { x: 90, y: -45, z: 180 },
+        scale: 1.25
+      },
+      color: '#123456'
+    });
+  });
+
+  it('已居中目标不会改变展示状态，并拒绝非有限水平目标', () => {
+    const preview = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 4, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const current = {
+      transform: {
+        positionMm: { x: 0, y: 4, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 1
+      },
+      color: '#abcdef'
+    };
+
+    expect(preview.alreadyCentered).toBe(true);
+    expect(createPrintPlatformCenterPresentation(current, preview)).toEqual(current);
+    expect(() => createPrintPlatformCenterPresentation(current, {
+      ...preview,
+      targetHorizontalPositionMm: { x: Number.NaN, z: 0 }
+    })).toThrow('打印平台居中目标位置必须是两个有限毫米值');
   });
 
   it('拒绝无效平台尺寸和平台边界分析输入', () => {

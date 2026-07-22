@@ -1433,3 +1433,6 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .print-platform-center-preview { display: grid; gap: 3px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, .08); }
 .print-platform-center-preview > strong { color: #d7e3df; font-size: 9px; }
 .print-platform-center-preview > span { color: #aebfba; font-size: 8px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+
+.print-platform-center-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 1px solid rgba(83, 199, 180, .5); border-radius: 5px; color: #d7eee8; background: rgba(31, 92, 80, .36); }
+.print-platform-center-button:hover { border-color: rgba(83, 199, 180, .78); background: rgba(38, 111, 96, .48); }

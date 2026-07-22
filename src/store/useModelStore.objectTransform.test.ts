@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMETERS } from '../model/defaults';
-import { createPrintBedPlacementPresentation, createPrintOrientationPresentation } from '../model/printOrientation';
+import { createPrintBedPlacementPresentation, createPrintOrientationPresentation, createPrintPlatformCenterPresentation } from '../model/printOrientation';
 import { normalizeObjectPresentation } from '../model/objectTransform';
 import type { ModelVersion } from '../model/types';
 import { useModelStore } from './useModelStore';
@@ -214,6 +214,65 @@ describe('对象变换、颜色与版本历史', () => {
     expect(state.objectPresentations.body.transform.positionMm).toEqual({ x: 8, y: 5, z: 3 });
     expect(state.objectPresentations.body.transform.rotationDeg).toEqual(initialPresentation.transform.rotationDeg);
     expect(state.objectPresentations.body.transform.scale).toBe(1.25);
+    expect(state.objectPresentations.body.color).toBe('#123456');
+  });
+
+  it('平台居中只提交水平位置版本并支持撤销和重做', () => {
+    const initialPresentation = {
+      transform: {
+        positionMm: { x: 18, y: 5, z: -12 },
+        rotationDeg: { x: 0, y: 90, z: 0 },
+        scale: 1.5
+      },
+      color: '#123456'
+    };
+    const initialVersion = version('已落到打印平台', { body: initialPresentation });
+    useModelStore.setState({
+      objectPresentations: { body: initialPresentation },
+      versions: [initialVersion],
+      versionIndex: 0
+    });
+    const store = useModelStore.getState();
+    const next = createPrintPlatformCenterPresentation(initialPresentation, {
+      boundsMm: { minimumX: 8, maximumX: 28, minimumZ: -17, maximumZ: -7, width: 20, depth: 10 },
+      platformBoundsMm: { minimumX: -128, maximumX: 128, minimumZ: -128, maximumZ: 128 },
+      marginsMm: { left: 136, right: 100, front: 135, back: 111 },
+      overflowMm: { left: 0, right: 0, front: 0, back: 0 },
+      fitsPlatform: true,
+      minimumMarginMm: 100,
+      centerDeltaMm: { x: -18, z: 12 },
+      targetHorizontalPositionMm: { x: 0, z: 0 },
+      alreadyCentered: false
+    }, '#d9d4c8');
+
+    store.beginObjectPresentationEdit('body', '#d9d4c8');
+    store.updateObjectPresentation('body', next, '#d9d4c8');
+    store.finishObjectPresentationEdit('body', '将“模型主体”移动到打印平台中心', '#d9d4c8');
+
+    let state = useModelStore.getState();
+    expect(state.versions).toHaveLength(2);
+    expect(state.versions.at(-1)).toMatchObject({
+      label: '将“模型主体”移动到打印平台中心',
+      changeKind: 'presentation'
+    });
+    expect(state.objectPresentations.body).toEqual({
+      transform: {
+        positionMm: { x: 0, y: 5, z: 0 },
+        rotationDeg: { x: 0, y: 90, z: 0 },
+        scale: 1.5
+      },
+      color: '#123456'
+    });
+
+    state.undo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body).toEqual(initialPresentation);
+
+    state.redo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body.transform.positionMm).toEqual({ x: 0, y: 5, z: 0 });
+    expect(state.objectPresentations.body.transform.rotationDeg).toEqual(initialPresentation.transform.rotationDeg);
+    expect(state.objectPresentations.body.transform.scale).toBe(1.5);
     expect(state.objectPresentations.body.color).toBe('#123456');
   });
 

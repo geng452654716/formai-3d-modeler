@@ -6,6 +6,7 @@ import { normalizeObjectPresentation, type ObjectVector3 } from '../model/object
 import {
   createPrintBedPlacementPresentation,
   createPrintOrientationPresentation,
+  createPrintPlatformCenterPresentation,
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
   evaluatePrintPlatformBoundary,
@@ -58,6 +59,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
   const [analysisState, setAnalysisState] = useState<AnalysisState>({ status: 'idle' });
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [bedConfirmationOpen, setBedConfirmationOpen] = useState(false);
+  const [centerConfirmationOpen, setCenterConfirmationOpen] = useState(false);
   const [applicationNotice, setApplicationNotice] = useState<string | null>(null);
   const requestSerial = useRef(0);
   const pendingPresentationNotice = useRef<string | null>(null);
@@ -67,6 +69,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     setAnalysisState({ status: 'idle' });
     setConfirmationOpen(false);
     setBedConfirmationOpen(false);
+    setCenterConfirmationOpen(false);
     setApplicationNotice(pendingPresentationNotice.current);
     pendingPresentationNotice.current = null;
     return () => {
@@ -81,6 +84,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     setAnalysisState({ status: 'loading' });
     setConfirmationOpen(false);
     setBedConfirmationOpen(false);
+    setCenterConfirmationOpen(false);
     setApplicationNotice(null);
     let sourceUrl: string | null = null;
     try {
@@ -149,6 +153,16 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     recommended.id
   ));
 
+  /** 写入前核对 Store 中的实时对象变换仍与本次分析来源严格一致。 */
+  function sourceTransformStillCurrent(current: ReturnType<typeof normalizeObjectPresentation>) {
+    if (!source) return false;
+    return current.transform.scale === source.uniformScale
+      && (['x', 'y', 'z'] as const).every((axis) => (
+        current.transform.positionMm[axis] === source.currentPositionMm[axis]
+        && current.transform.rotationDeg[axis] === source.currentRotationDeg[axis]
+      ));
+  }
+
   /** 二次确认后复用对象展示状态版本链，只写当前对象的绝对旋转。 */
   function applyRecommendedOrientation() {
     if (!source || !recommended || analysisState.status !== 'ready' || analysisState.sourceIdentity !== source.identity) {
@@ -186,6 +200,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
       requestSerial.current += 1;
       setAnalysisState({ status: 'idle' });
       setConfirmationOpen(false);
+      setCenterConfirmationOpen(false);
       setApplicationNotice(successNotice);
     } catch (error) {
       pendingPresentationNotice.current = null;
@@ -211,12 +226,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
 
     const store = useModelStore.getState();
     const current = normalizeObjectPresentation(store.objectPresentations[source.objectId], source.fallbackColor);
-    const sourceTransformStillCurrent = current.transform.scale === source.uniformScale
-      && (['x', 'y', 'z'] as const).every((axis) => (
-        current.transform.positionMm[axis] === source.currentPositionMm[axis]
-        && current.transform.rotationDeg[axis] === source.currentRotationDeg[axis]
-      ));
-    if (!sourceTransformStillCurrent) {
+    if (!sourceTransformStillCurrent(current)) {
       setBedConfirmationOpen(false);
       setApplicationNotice('当前对象变换已经变化，请重新分析后再落床。');
       return;
@@ -253,11 +263,91 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
       requestSerial.current += 1;
       setAnalysisState({ status: 'idle' });
       setBedConfirmationOpen(false);
+      setCenterConfirmationOpen(false);
       setApplicationNotice(successNotice);
     } catch (error) {
       pendingPresentationNotice.current = null;
       setBedConfirmationOpen(false);
       setApplicationNotice(`自动落床失败：${errorMessage(error)}`);
+    }
+  }
+
+  /** 用户确认后只写视口 X/Z 位置，使当前对象水平包围范围中心对齐平台中心。 */
+  function applyPrintPlatformCenter() {
+    if (
+      !source
+      || !recommended
+      || !bedPlacement?.alreadyOnBed
+      || !platformBoundary
+      || !alreadyApplied
+      || analysisState.status !== 'ready'
+      || analysisState.sourceIdentity !== source.identity
+    ) {
+      setCenterConfirmationOpen(false);
+      setApplicationNotice('当前居中预览已经失效，请重新分析后再应用。');
+      return;
+    }
+
+    const store = useModelStore.getState();
+    const current = normalizeObjectPresentation(store.objectPresentations[source.objectId], source.fallbackColor);
+    if (!sourceTransformStillCurrent(current)) {
+      setCenterConfirmationOpen(false);
+      setApplicationNotice('当前对象变换已经变化，请重新分析后再居中。');
+      return;
+    }
+    if (platformBoundary.alreadyCentered) {
+      setCenterConfirmationOpen(false);
+      setApplicationNotice('当前对象已经水平居中，无需重复移动。');
+      return;
+    }
+    const target = platformBoundary.targetHorizontalPositionMm;
+    const targetMatchesPreview = Number.isFinite(target.x)
+      && Number.isFinite(target.z)
+      && Math.abs(current.transform.positionMm.x + platformBoundary.centerDeltaMm.x - target.x) <= 1e-6
+      && Math.abs(current.transform.positionMm.z + platformBoundary.centerDeltaMm.z - target.z) <= 1e-6;
+    if (!targetMatchesPreview) {
+      setCenterConfirmationOpen(false);
+      setApplicationNotice('当前居中目标无效，请重新分析后再应用。');
+      return;
+    }
+
+    const successNotice = '已将当前对象移动到打印平台中心，可使用撤销或重做恢复。';
+    pendingPresentationNotice.current = successNotice;
+    try {
+      const next = createPrintPlatformCenterPresentation(current, platformBoundary, source.fallbackColor);
+      if (
+        Math.abs(next.transform.positionMm.x - target.x) > 1e-6
+        || Math.abs(next.transform.positionMm.z - target.z) > 1e-6
+      ) {
+        throw new Error('目标水平位置超出对象变换允许范围');
+      }
+      store.beginObjectPresentationEdit(source.objectId, source.fallbackColor);
+      store.updateObjectPresentation(source.objectId, next, source.fallbackColor);
+      const written = normalizeObjectPresentation(
+        useModelStore.getState().objectPresentations[source.objectId],
+        source.fallbackColor
+      );
+      if (
+        Math.abs(written.transform.positionMm.x - target.x) > 1e-6
+        || Math.abs(written.transform.positionMm.z - target.z) > 1e-6
+      ) {
+        store.updateObjectPresentation(source.objectId, current, source.fallbackColor);
+        store.finishObjectPresentationEdit(source.objectId, '取消无效平台居中', source.fallbackColor);
+        throw new Error('对象水平位置写入后校验失败');
+      }
+      store.finishObjectPresentationEdit(
+        source.objectId,
+        `将“${source.label}”移动到打印平台中心`,
+        source.fallbackColor
+      );
+      requestSerial.current += 1;
+      setAnalysisState({ status: 'idle' });
+      setCenterConfirmationOpen(false);
+      setApplicationNotice(successNotice);
+    } catch (error) {
+      pendingPresentationNotice.current = null;
+      setCenterConfirmationOpen(false);
+      setApplicationNotice(`平台居中失败：${errorMessage(error)}`);
     }
   }
 
@@ -430,7 +520,37 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
                   目标位置：X {platformBoundary.targetHorizontalPositionMm.x.toFixed(2)}，Z {platformBoundary.targetHorizontalPositionMm.z.toFixed(2)} 毫米
                 </span>
               </div>
-              <small>本预览不会移动对象、创建版本、排列其他零件或修改几何文件。</small>
+              {platformBoundary.alreadyCentered ? (
+                <p className="print-orientation-applied-state"><CheckCircle2 size={14} /> 当前对象已位于打印平台中心</p>
+              ) : !centerConfirmationOpen ? (
+                <button
+                  type="button"
+                  className="print-platform-center-button"
+                  onClick={() => {
+                    setCenterConfirmationOpen(true);
+                    setApplicationNotice(null);
+                  }}
+                >
+                  <Move size={14} /> 应用居中位置
+                </button>
+              ) : (
+                <div className="print-orientation-confirmation" role="group" aria-label="确认应用打印平台居中">
+                  <strong>确认居中“{source.label}”</strong>
+                  <span>当前位置：X {source.currentPositionMm.x.toFixed(2)}，Z {source.currentPositionMm.z.toFixed(2)} 毫米</span>
+                  <span>水平位移：{centerMoveXDescription}；{centerMoveZDescription}</span>
+                  <span>目标位置：X {platformBoundary.targetHorizontalPositionMm.x.toFixed(2)}，Z {platformBoundary.targetHorizontalPositionMm.z.toFixed(2)} 毫米</span>
+                  <small>本操作只修改当前对象 X/Z 位置，并生成可撤销、可重做的中文版本。</small>
+                  <div>
+                    <button type="button" className="confirm" onClick={applyPrintPlatformCenter}>
+                      <CheckCircle2 size={13} /> 确认居中
+                    </button>
+                    <button type="button" className="cancel" onClick={() => setCenterConfirmationOpen(false)}>
+                      <X size={13} /> 取消
+                    </button>
+                  </div>
+                </div>
+              )}
+              <small>预览本身不会移动对象、排列其他零件或修改几何文件；只有确认后才写入当前对象的水平位置。</small>
             </div>
           )}
           <ul className="print-orientation-candidate-list" aria-label="六向打印方向候选">

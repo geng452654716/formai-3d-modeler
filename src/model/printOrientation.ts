@@ -622,3 +622,27 @@ export function createPrintBedPlacementPresentation(
     }
   };
 }
+
+/** 只修改视口水平 X/Z 位置，使当前对象的包围范围中心对齐打印平台中心。 */
+export function createPrintPlatformCenterPresentation(
+  current: Partial<ObjectPresentation> | undefined,
+  preview: PrintPlatformBoundaryPreview,
+  fallbackColor = '#d9d4c8'
+): ObjectPresentation {
+  const target = preview.targetHorizontalPositionMm;
+  if (!Number.isFinite(target.x) || !Number.isFinite(target.z)) {
+    throw new Error('打印平台居中目标位置必须是两个有限毫米值');
+  }
+  const normalized = normalizeObjectPresentation(current, fallbackColor);
+  return {
+    ...normalized,
+    transform: {
+      ...normalized.transform,
+      positionMm: {
+        ...normalized.transform.positionMm,
+        x: target.x,
+        z: target.z
+      }
+    }
+  };
+}
