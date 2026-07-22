@@ -788,4 +788,15 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 6/6、前端 26 个测试文件 246/246、生产构建和差异检查通过。自动测试覆盖索引与非索引等价、整体反向绕序、非对称悬垂、六向超出 P1S、退化与非有限输入。真实浏览器验证 CAD 主体、上盖、快速预览和任意上传 STL 四条状态路径，上传 STL 输出六个候选且 Console 无错误或警告。
 
-**下一阶段架构方向：**把推荐候选转换为确定性的对象欧拉旋转增量，并通过用户确认调用现有对象变换和版本提交接口；必须保持 CAD 零件与上传 STL 的对象身份隔离，记录应用前变换以支持撤销/重做，且不得在分析完成或候选切换时自动写回。
+### 71. 六向打印方向建议一键应用架构（已实现）
+
+- `PRINT_ORIENTATION_ROTATIONS_DEG` 把六个候选映射为绝对 Three.js XYZ 欧拉角；`getPrintOrientationRotationDeg` 返回副本，`isPrintOrientationRotationApplied` 使用模 360° 和有限容差判断等价角度，避免累计旋转与重复版本。
+- `createPrintOrientationPresentation` 先通过 `normalizeObjectPresentation` 取得完整对象展示状态，再只替换 `rotationDeg`；位置、均匀缩放、颜色和其他对象状态不会被重新构造或丢失。
+- `PrintOrientationSource` 增加真实 `objectId`、回退颜色、均匀缩放和当前旋转。CAD 使用零件 ID，任意上传 STL 固定使用视口对象 `uploaded-model`；来源身份包含缩放值，缩放变化会卸载旧分析与确认状态。
+- `PrintOrientationPanel` 的确认操作复用 `beginObjectPresentationEdit`、`updateObjectPresentation` 和 `finishObjectPresentationEdit`，生成“应用‘对象名称’的打印方向：方向名称”中文展示版本；成功后递增请求序号、清除旧结果并显示重新分析提示。
+- 六向纯计算接收 `uniformScale`，读取顶点时应用缩放，因此尺寸、面积和体积自然按一次、平方和立方缩放；非法缩放在进入几何计算前以中文错误拒绝。
+- 确认卡与成功提示只存在于组件本地，不增加新的持久化协议、Tauri 命令或 Python Worker；版本、撤销和重做继续由既有对象展示快照负责。
+
+2026-07-22 架构验证：针对性测试 18/18、前端 26 个测试文件 253/253、生产构建和差异检查通过。真实浏览器覆盖 CAD 取消、确认、撤销、重做、角度等价保护、1.5 倍缩放和任意上传 STL 对象写入，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**先核对 `ModelViewport` 中业务 `positionMm` 与 Three.js 场景垂直轴的映射，再增加无副作用的旋转后包围盒最低点计算。落床预览必须绑定当前来源、绝对旋转、均匀缩放和位置身份；确认后只通过现有对象展示编辑链更新垂直位置，并继续支持版本、撤销和重做。

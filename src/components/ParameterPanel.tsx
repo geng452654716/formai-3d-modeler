@@ -1,6 +1,7 @@
 import { CheckCircle2, ChevronDown, Info, RotateCcw, Scissors } from 'lucide-react';
 import { DEFAULT_PARAMETERS, PARAMETER_LIMITS, getOuterDimensions } from '../model/defaults';
 import { describeMeshRepair } from '../model/importedModel';
+import { normalizeObjectPresentation } from '../model/objectTransform';
 import {
   INTERFACE_OPENING_FACE_LABELS,
   INTERFACE_OPENING_SHAPE_LABELS
@@ -65,15 +66,21 @@ function UploadedModelPanel() {
   const manufacturingResult = useModelStore((state) => state.manufacturingResult);
   const localStlEditResult = useModelStore((state) => state.localStlEditResult);
   const selectedObject = useModelStore((state) => state.selectedObject);
+  const storedPresentation = useModelStore((state) => state.objectPresentations['uploaded-model']);
 
   if (!importedStlModel) return null;
 
+  const presentation = normalizeObjectPresentation(storedPresentation, '#d7dde4');
   const printOrientationSource: PrintOrientationSource = {
-    identity: `uploaded-stl:${importedStlModel.revision}:${importedStlModel.sourceFile}`,
+    identity: `uploaded-stl:${importedStlModel.revision}:${importedStlModel.sourceFile}:scale-${presentation.transform.scale}`,
     fileName: importedStlModel.sourceFile,
     revision: importedStlModel.revision,
     label: importedStlModel.name,
-    buildVolumeMm: [256, 256, 256]
+    buildVolumeMm: [256, 256, 256],
+    objectId: 'uploaded-model',
+    fallbackColor: '#d7dde4',
+    uniformScale: presentation.transform.scale,
+    currentRotationDeg: presentation.transform.rotationDeg
   };
 
   const { metrics } = importedStlModel;
@@ -194,6 +201,7 @@ export function ParameterPanel() {
   const interfaceOpenings = useModelStore((state) => state.interfaceOpenings);
   const cadResult = useModelStore((state) => state.cadResult);
   const selectedObject = useModelStore((state) => state.selectedObject);
+  const objectPresentations = useModelStore((state) => state.objectPresentations);
   const setParameter = useModelStore((state) => state.setParameter);
   const commitVersion = useModelStore((state) => state.commitVersion);
   const dimensions = getOuterDimensions(parameters);
@@ -201,13 +209,22 @@ export function ParameterPanel() {
     ?? cadResult?.parts.find((part) => part.role === 'primary')
     ?? cadResult?.parts[0]
     ?? null;
+  const selectedCadFallbackColor = selectedCadPart?.role === 'cover' ? '#eeeae1' : '#d9d4c8';
+  const selectedCadPresentation = normalizeObjectPresentation(
+    selectedCadPart ? objectPresentations[selectedCadPart.id] : undefined,
+    selectedCadFallbackColor
+  );
   const printOrientationSource: PrintOrientationSource | null = viewportModelSource === 'cad' && cadResult && selectedCadPart
     ? {
-        identity: `cad:${cadResult.revision}:${selectedCadPart.id}:${selectedCadPart.stlFile}`,
+        identity: `cad:${cadResult.revision}:${selectedCadPart.id}:${selectedCadPart.stlFile}:scale-${selectedCadPresentation.transform.scale}`,
         fileName: selectedCadPart.stlFile,
         revision: cadResult.revision,
         label: selectedCadPart.label,
-        buildVolumeMm: cadResult.printer.buildVolumeMm
+        buildVolumeMm: cadResult.printer.buildVolumeMm,
+        objectId: selectedCadPart.id,
+        fallbackColor: selectedCadFallbackColor,
+        uniformScale: selectedCadPresentation.transform.scale,
+        currentRotationDeg: selectedCadPresentation.transform.rotationDeg
       }
     : null;
 

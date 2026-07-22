@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMETERS } from '../model/defaults';
+import { createPrintOrientationPresentation } from '../model/printOrientation';
+import { normalizeObjectPresentation } from '../model/objectTransform';
 import type { ModelVersion } from '../model/types';
 import { useModelStore } from './useModelStore';
 
@@ -93,6 +95,70 @@ describe('对象变换、颜色与版本历史', () => {
     store.beginObjectPresentationEdit('body', '#d9d4c8');
     store.updateObjectPresentation('body', { color: '#d9d4c8' }, '#d9d4c8');
     store.finishObjectPresentationEdit('body', '调整模型主体颜色', '#d9d4c8');
+    expect(useModelStore.getState().versions).toHaveLength(1);
+  });
+
+
+  it('应用推荐打印方向生成一个中文展示版本并可撤销和重做', () => {
+    const initialPresentation = {
+      transform: {
+        positionMm: { x: 8, y: -2, z: 3 },
+        rotationDeg: { x: 30, y: 15, z: -10 },
+        scale: 1.25
+      },
+      color: '#123456'
+    };
+    const initialVersion = version('旋转后的模型', { body: initialPresentation });
+    useModelStore.setState({
+      objectPresentations: { body: initialPresentation },
+      versions: [initialVersion],
+      versionIndex: 0
+    });
+    const store = useModelStore.getState();
+    const current = normalizeObjectPresentation(store.objectPresentations.body, '#d9d4c8');
+    const next = createPrintOrientationPresentation(current, 'positive-z', '#d9d4c8');
+
+    store.beginObjectPresentationEdit('body', '#d9d4c8');
+    store.updateObjectPresentation('body', next, '#d9d4c8');
+    store.finishObjectPresentationEdit('body', '应用“模型主体”的打印方向：Z 正方向朝上', '#d9d4c8');
+
+    let state = useModelStore.getState();
+    expect(state.versions).toHaveLength(2);
+    expect(state.versions.at(-1)).toMatchObject({
+      label: '应用“模型主体”的打印方向：Z 正方向朝上',
+      changeKind: 'presentation'
+    });
+    expect(state.objectPresentations.body).toEqual({
+      transform: {
+        positionMm: { x: 8, y: -2, z: 3 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 1.25
+      },
+      color: '#123456'
+    });
+
+    state.undo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body).toEqual(initialPresentation);
+    expect(state.cadStatus).toBe('ready');
+
+    state.redo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body.transform.rotationDeg).toEqual({ x: 0, y: 0, z: 0 });
+    expect(state.objectPresentations.body.transform.positionMm).toEqual(initialPresentation.transform.positionMm);
+    expect(state.objectPresentations.body.transform.scale).toBe(1.25);
+    expect(state.objectPresentations.body.color).toBe('#123456');
+    expect(state.cadStatus).toBe('ready');
+  });
+
+  it('目标绝对旋转没有变化时不会为推荐方向创建重复版本', () => {
+    const store = useModelStore.getState();
+    const current = normalizeObjectPresentation(store.objectPresentations.body, '#d9d4c8');
+    const next = createPrintOrientationPresentation(current, 'positive-z', '#d9d4c8');
+    store.beginObjectPresentationEdit('body', '#d9d4c8');
+    store.updateObjectPresentation('body', next, '#d9d4c8');
+    store.finishObjectPresentationEdit('body', '应用“模型主体”的打印方向：Z 正方向朝上', '#d9d4c8');
+
     expect(useModelStore.getState().versions).toHaveLength(1);
   });
 

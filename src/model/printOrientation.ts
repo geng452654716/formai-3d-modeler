@@ -1,3 +1,5 @@
+import { normalizeObjectPresentation, type ObjectPresentation, type ObjectVector3 } from './objectTransform';
+
 export type PrintOrientationId = 'positive-x' | 'negative-x' | 'positive-y' | 'negative-y' | 'positive-z' | 'negative-z';
 
 export interface PrintOrientationMeshInput {
@@ -27,6 +29,7 @@ export interface PrintOrientationAnalysis {
   volumeMm3: number;
   buildVolumeMm: [number, number, number];
   overhangAngleDeg: number;
+  uniformScale: number;
   recommendedId: PrintOrientationId | null;
   recommendedReason: string;
   candidates: PrintOrientationCandidate[];
@@ -66,6 +69,16 @@ const ORIENTATIONS: OrientationDefinition[] = [
 const DEFAULT_BUILD_VOLUME_MM: [number, number, number] = [256, 256, 256];
 const DEFAULT_OVERHANG_ANGLE_DEG = 45;
 const MIN_TRIANGLE_AREA_MM2 = 1e-9;
+const ROTATION_EQUIVALENCE_TOLERANCE_DEG = 1e-6;
+
+const PRINT_ORIENTATION_ROTATIONS_DEG: Record<PrintOrientationId, ObjectVector3> = {
+  'positive-z': { x: 0, y: 0, z: 0 },
+  'negative-z': { x: 180, y: 0, z: 0 },
+  'positive-y': { x: 90, y: 0, z: 0 },
+  'negative-y': { x: -90, y: 0, z: 0 },
+  'positive-x': { x: 0, y: 0, z: 90 },
+  'negative-x': { x: 0, y: 0, z: -90 }
+};
 
 function subtract(a: Vec3, b: Vec3): Vec3 {
   return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
@@ -103,12 +116,12 @@ function axisValue(point: Vec3, axis: 'x' | 'y' | 'z') {
   return point[axis];
 }
 
-function readPoint(positions: ArrayLike<number>, vertexIndex: number): Vec3 {
+function readPoint(positions: ArrayLike<number>, vertexIndex: number, uniformScale: number): Vec3 {
   const offset = vertexIndex * 3;
   return {
-    x: Number(positions[offset]),
-    y: Number(positions[offset + 1]),
-    z: Number(positions[offset + 2])
+    x: Number(positions[offset]) * uniformScale,
+    y: Number(positions[offset + 1]) * uniformScale,
+    z: Number(positions[offset + 2]) * uniformScale
   };
 }
 
@@ -119,7 +132,7 @@ function validateBuildVolume(buildVolumeMm: [number, number, number]) {
 }
 
 /** 把索引或非索引三角网格转换为有限几何指标，并用封闭体有向体积统一整体绕序。 */
-function collectTriangleMetrics(input: PrintOrientationMeshInput) {
+function collectTriangleMetrics(input: PrintOrientationMeshInput, uniformScale: number) {
   const positions = input.positions;
   if (positions.length < 12 || positions.length % 3 !== 0) {
     throw new Error('打印方向分析至少需要 4 个有效三角面顶点');
@@ -146,7 +159,7 @@ function collectTriangleMetrics(input: PrintOrientationMeshInput) {
       }
       return value;
     });
-    const points = vertexIndices.map((vertexIndex) => readPoint(positions, vertexIndex)) as [Vec3, Vec3, Vec3];
+    const points = vertexIndices.map((vertexIndex) => readPoint(positions, vertexIndex, uniformScale)) as [Vec3, Vec3, Vec3];
     if (points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z))) {
       throw new Error('打印方向分析发现非有限毫米坐标');
     }
@@ -212,16 +225,21 @@ export function evaluateAxisAlignedPrintOrientations(
   options: {
     buildVolumeMm?: [number, number, number];
     overhangAngleDeg?: number;
+    uniformScale?: number;
   } = {}
 ): PrintOrientationAnalysis {
   const buildVolumeMm = options.buildVolumeMm ?? DEFAULT_BUILD_VOLUME_MM;
   validateBuildVolume(buildVolumeMm);
   const overhangAngleDeg = options.overhangAngleDeg ?? DEFAULT_OVERHANG_ANGLE_DEG;
+  const uniformScale = options.uniformScale ?? 1;
+  if (!Number.isFinite(uniformScale) || uniformScale <= 0) {
+    throw new Error('打印方向分析的均匀缩放必须是大于 0 的有限值');
+  }
   if (!Number.isFinite(overhangAngleDeg) || overhangAngleDeg <= 0 || overhangAngleDeg >= 90) {
     throw new Error('悬垂阈值必须大于 0° 且小于 90°');
   }
 
-  const mesh = collectTriangleMetrics(input);
+  const mesh = collectTriangleMetrics(input, uniformScale);
   const overhangNormalThreshold = -Math.cos(overhangAngleDeg * Math.PI / 180);
   const contactNormalThreshold = -Math.cos(10 * Math.PI / 180);
   const rawCandidates = ORIENTATIONS.map((orientation) => {
@@ -296,10 +314,54 @@ export function evaluateAxisAlignedPrintOrientations(
     volumeMm3: mesh.volumeMm3,
     buildVolumeMm,
     overhangAngleDeg,
+    uniformScale,
     recommendedId: recommended?.id ?? null,
     recommendedReason: recommended
       ? `${recommended.label}：需要支撑的悬垂面积约 ${recommended.supportAreaMm2.toFixed(2)} 平方毫米（${(recommended.supportRatio * 100).toFixed(1)}%），底面接触约 ${recommended.contactAreaMm2.toFixed(2)} 平方毫米，打印高度 ${recommended.heightMm.toFixed(2)} 毫米。`
       : `六个轴向候选均超出 ${buildVolumeMm.join(' × ')} 毫米成型空间，建议先拆件或缩小模型。`,
     candidates
+  };
+}
+
+
+/** 返回六个轴向朝上候选在 Three.js XYZ 欧拉角语义下的绝对对象旋转。 */
+export function getPrintOrientationRotationDeg(id: PrintOrientationId): ObjectVector3 {
+  return { ...PRINT_ORIENTATION_ROTATIONS_DEG[id] };
+}
+
+function normalizedAngleDeg(value: number) {
+  const normalized = value % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
+}
+
+function equivalentAngleDeg(left: number, right: number) {
+  const difference = Math.abs(normalizedAngleDeg(left) - normalizedAngleDeg(right));
+  return Math.min(difference, 360 - difference) <= ROTATION_EQUIVALENCE_TOLERANCE_DEG;
+}
+
+/** 按 360° 模等价判断当前对象是否已经应用指定打印方向，防止重复累计旋转。 */
+export function isPrintOrientationRotationApplied(
+  rotationDeg: ObjectVector3,
+  id: PrintOrientationId
+) {
+  const target = PRINT_ORIENTATION_ROTATIONS_DEG[id];
+  return (['x', 'y', 'z'] as const).every((axis) => (
+    Number.isFinite(rotationDeg[axis]) && equivalentAngleDeg(rotationDeg[axis], target[axis])
+  ));
+}
+
+/** 只替换对象旋转，完整保留当前毫米位置、均匀缩放和颜色。 */
+export function createPrintOrientationPresentation(
+  current: Partial<ObjectPresentation> | undefined,
+  id: PrintOrientationId,
+  fallbackColor = '#d9d4c8'
+): ObjectPresentation {
+  const normalized = normalizeObjectPresentation(current, fallbackColor);
+  return {
+    ...normalized,
+    transform: {
+      ...normalized.transform,
+      rotationDeg: getPrintOrientationRotationDeg(id)
+    }
   };
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateAxisAlignedPrintOrientations } from './printOrientation';
+import {
+  createPrintOrientationPresentation,
+  evaluateAxisAlignedPrintOrientations,
+  getPrintOrientationRotationDeg,
+  isPrintOrientationRotationApplied
+} from './printOrientation';
 
 function boxMesh(width: number, depth: number, height: number) {
   const positions = [
@@ -49,6 +54,64 @@ function triangularPrismMesh() {
 }
 
 describe('六向打印方向评估', () => {
+
+  it('把六个候选映射为确定性的绝对 90 度对象旋转', () => {
+    expect(getPrintOrientationRotationDeg('positive-z')).toEqual({ x: 0, y: 0, z: 0 });
+    expect(getPrintOrientationRotationDeg('negative-z')).toEqual({ x: 180, y: 0, z: 0 });
+    expect(getPrintOrientationRotationDeg('positive-y')).toEqual({ x: 90, y: 0, z: 0 });
+    expect(getPrintOrientationRotationDeg('negative-y')).toEqual({ x: -90, y: 0, z: 0 });
+    expect(getPrintOrientationRotationDeg('positive-x')).toEqual({ x: 0, y: 0, z: 90 });
+    expect(getPrintOrientationRotationDeg('negative-x')).toEqual({ x: 0, y: 0, z: -90 });
+  });
+
+  it('按 360 度模等价识别已应用方向并拒绝其他旋转', () => {
+    expect(isPrintOrientationRotationApplied({ x: 360, y: -720, z: 0 }, 'positive-z')).toBe(true);
+    expect(isPrintOrientationRotationApplied({ x: -270, y: 360, z: 720 }, 'positive-y')).toBe(true);
+    expect(isPrintOrientationRotationApplied({ x: 0, y: 0, z: 270 }, 'negative-x')).toBe(true);
+    expect(isPrintOrientationRotationApplied({ x: 1, y: 0, z: 0 }, 'positive-z')).toBe(false);
+  });
+
+  it('创建推荐方向展示状态时只替换旋转并保留位置、缩放和颜色', () => {
+    const result = createPrintOrientationPresentation({
+      transform: {
+        positionMm: { x: 12, y: -3, z: 4 },
+        rotationDeg: { x: 17, y: 23, z: 42 },
+        scale: 1.5
+      },
+      color: '#123456'
+    }, 'positive-x');
+
+    expect(result).toEqual({
+      transform: {
+        positionMm: { x: 12, y: -3, z: 4 },
+        rotationDeg: { x: 0, y: 0, z: 90 },
+        scale: 1.5
+      },
+      color: '#123456'
+    });
+  });
+
+  it('均匀缩放同步作用于尺寸、面积和体积', () => {
+    const normal = evaluateAxisAlignedPrintOrientations(boxMesh(20, 10, 5));
+    const scaled = evaluateAxisAlignedPrintOrientations(boxMesh(20, 10, 5), { uniformScale: 2 });
+    const normalPositiveZ = normal.candidates.find((candidate) => candidate.id === 'positive-z')!;
+    const scaledPositiveZ = scaled.candidates.find((candidate) => candidate.id === 'positive-z')!;
+
+    expect(scaled.uniformScale).toBe(2);
+    expect(scaledPositiveZ.widthMm).toBeCloseTo(normalPositiveZ.widthMm * 2);
+    expect(scaledPositiveZ.depthMm).toBeCloseTo(normalPositiveZ.depthMm * 2);
+    expect(scaledPositiveZ.heightMm).toBeCloseTo(normalPositiveZ.heightMm * 2);
+    expect(scaledPositiveZ.contactAreaMm2).toBeCloseTo(normalPositiveZ.contactAreaMm2 * 4);
+    expect(scaled.surfaceAreaMm2).toBeCloseTo(normal.surfaceAreaMm2 * 4);
+    expect(scaled.volumeMm3).toBeCloseTo(normal.volumeMm3 * 8);
+  });
+
+  it('拒绝非有限、零或负数均匀缩放', () => {
+    expect(() => evaluateAxisAlignedPrintOrientations(boxMesh(20, 10, 5), { uniformScale: 0 })).toThrow('均匀缩放必须是大于 0 的有限值');
+    expect(() => evaluateAxisAlignedPrintOrientations(boxMesh(20, 10, 5), { uniformScale: -1 })).toThrow('均匀缩放必须是大于 0 的有限值');
+    expect(() => evaluateAxisAlignedPrintOrientations(boxMesh(20, 10, 5), { uniformScale: Number.NaN })).toThrow('均匀缩放必须是大于 0 的有限值');
+  });
+
   it('为长方体比较六向尺寸并推荐低高度大接触底面', () => {
     const result = evaluateAxisAlignedPrintOrientations(boxMesh(200, 100, 20));
     const positiveZ = result.candidates.find((candidate) => candidate.id === 'positive-z');
