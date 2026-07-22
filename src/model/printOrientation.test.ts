@@ -3,12 +3,14 @@ import {
   createPrintBedPlacementPresentation,
   createPrintOrientationPresentation,
   createPrintPlatformCenterPresentation,
+  createPrintPlatformSafetyCorrectionPresentation,
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
   evaluatePrintPlatformBoundary,
   evaluatePrintPlatformSafetyArea,
   getPrintOrientationRotationDeg,
-  isPrintOrientationRotationApplied
+  isPrintOrientationRotationApplied,
+  translatePrintPlatformBoundaryPreview
 } from './printOrientation';
 
 function boxMesh(width: number, depth: number, height: number) {
@@ -377,6 +379,111 @@ describe('六向打印方向评估', () => {
     expect(() => evaluatePrintPlatformSafetyArea(boundary, -1)).toThrow('平台安全边距必须是大于或等于 0 的有限毫米值');
     expect(() => evaluatePrintPlatformSafetyArea(boundary, Number.NaN)).toThrow('平台安全边距必须是大于或等于 0 的有限毫米值');
     expect(() => evaluatePrintPlatformSafetyArea(boundary, 128)).toThrow('平台安全边距过大，必须保留大于 0 的有效可打印区域');
+  });
+
+  it('安全区域单轴修正只更新 X 并保留其他展示状态', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 120, y: 7, z: -9 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+    const presentation = createPrintPlatformSafetyCorrectionPresentation({
+      transform: {
+        positionMm: { x: 120, y: 7, z: -9 },
+        rotationDeg: { x: 90, y: -45, z: 180 },
+        scale: 1.25
+      },
+      color: '#123456'
+    }, safety);
+
+    expect(safety.correctionDeltaMm).toEqual({ x: -7, z: 0 });
+    expect(presentation).toEqual({
+      transform: {
+        positionMm: { x: 113, y: 7, z: -9 },
+        rotationDeg: { x: 90, y: -45, z: 180 },
+        scale: 1.25
+      },
+      color: '#123456'
+    });
+  });
+
+  it('安全区域双轴最小修正后重新评估为适配且不会强制居中', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: -120, y: 3, z: 120 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+    const presentation = createPrintPlatformSafetyCorrectionPresentation({
+      transform: {
+        positionMm: { x: -120, y: 3, z: 120 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 1
+      },
+      color: '#abcdef'
+    }, safety);
+    const correctedBoundary = translatePrintPlatformBoundaryPreview(boundary, safety.correctionDeltaMm);
+    const correctedSafety = evaluatePrintPlatformSafetyArea(correctedBoundary, 5);
+
+    expect(safety.correctionDeltaMm).toEqual({ x: 7, z: -2 });
+    expect(presentation.transform.positionMm).toEqual({ x: -113, y: 3, z: 118 });
+    expect(presentation.transform.positionMm.x).not.toBe(0);
+    expect(presentation.transform.positionMm.z).not.toBe(0);
+    expect(correctedBoundary.fitsPlatform).toBe(true);
+    expect(correctedSafety.fitsEffectiveArea).toBe(true);
+    expect(correctedSafety.minimumMarginMm).toBeCloseTo(0);
+  });
+
+  it('平台预览平移会更新四边余量并拒绝非有限位移', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 120, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const shifted = translatePrintPlatformBoundaryPreview(boundary, { x: -7, z: 2 });
+
+    expect(shifted.boundsMm).toMatchObject({ minimumX: 103, maximumX: 123, minimumZ: -3, maximumZ: 7 });
+    expect(shifted.marginsMm).toEqual({ left: 231, right: 5, front: 121, back: 125 });
+    expect(shifted.centerDeltaMm).toEqual({ x: -113, z: -2 });
+    expect(shifted.targetHorizontalPositionMm).toEqual(boundary.targetHorizontalPositionMm);
+    expect(boundary.boundsMm.minimumX).toBe(110);
+    expect(() => translatePrintPlatformBoundaryPreview(boundary, { x: Number.NaN, z: 0 }))
+      .toThrow('打印平台预览平移量必须是两个有限毫米值');
+  });
+
+  it('安全区域修正拒绝对象过大、已适配、零修正和非有限修正量', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 120, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+    const current = {
+      transform: {
+        positionMm: { x: 120, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 1
+      },
+      color: '#abcdef'
+    };
+
+    expect(() => createPrintPlatformSafetyCorrectionPresentation(current, {
+      ...safety,
+      canFitEffectiveArea: false
+    })).toThrow('当前对象无法仅靠平移进入安全有效区域');
+    expect(() => createPrintPlatformSafetyCorrectionPresentation(current, {
+      ...safety,
+      fitsEffectiveArea: true
+    })).toThrow('当前对象已经位于安全有效区域');
+    expect(() => createPrintPlatformSafetyCorrectionPresentation(current, {
+      ...safety,
+      correctionDeltaMm: { x: 0, z: 0 }
+    })).toThrow('当前安全区域没有可应用的修正量');
+    expect(() => createPrintPlatformSafetyCorrectionPresentation(current, {
+      ...safety,
+      correctionDeltaMm: { x: Number.POSITIVE_INFINITY, z: 0 }
+    })).toThrow('安全区域修正量必须是两个有限毫米值');
   });
 
   it('平台居中展示状态只替换 X/Z 并保留 Y、旋转、缩放和颜色', () => {

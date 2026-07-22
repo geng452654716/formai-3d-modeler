@@ -705,6 +705,51 @@ export function evaluatePrintPlatformSafetyArea(
   };
 }
 
+/** 按水平位移更新物理平台预览，用于在写入对象前重新验证平台和安全区域。 */
+export function translatePrintPlatformBoundaryPreview(
+  preview: PrintPlatformBoundaryPreview,
+  deltaMm: { x: number; z: number }
+): PrintPlatformBoundaryPreview {
+  if (!Number.isFinite(deltaMm.x) || !Number.isFinite(deltaMm.z)) {
+    throw new Error('打印平台预览平移量必须是两个有限毫米值');
+  }
+  const boundsMm = {
+    ...preview.boundsMm,
+    minimumX: preview.boundsMm.minimumX + deltaMm.x,
+    maximumX: preview.boundsMm.maximumX + deltaMm.x,
+    minimumZ: preview.boundsMm.minimumZ + deltaMm.z,
+    maximumZ: preview.boundsMm.maximumZ + deltaMm.z
+  };
+  const marginsMm = {
+    left: boundsMm.minimumX - preview.platformBoundsMm.minimumX,
+    right: preview.platformBoundsMm.maximumX - boundsMm.maximumX,
+    front: preview.platformBoundsMm.maximumZ - boundsMm.maximumZ,
+    back: boundsMm.minimumZ - preview.platformBoundsMm.minimumZ
+  };
+  const overflowMm = {
+    left: Math.max(0, -marginsMm.left),
+    right: Math.max(0, -marginsMm.right),
+    front: Math.max(0, -marginsMm.front),
+    back: Math.max(0, -marginsMm.back)
+  };
+  const centerDeltaMm = {
+    x: preview.centerDeltaMm.x - deltaMm.x,
+    z: preview.centerDeltaMm.z - deltaMm.z
+  };
+  const minimumMarginMm = Math.min(...Object.values(marginsMm));
+  return {
+    ...preview,
+    boundsMm,
+    marginsMm,
+    overflowMm,
+    fitsPlatform: minimumMarginMm >= -PLATFORM_BOUNDARY_TOLERANCE_MM,
+    minimumMarginMm,
+    centerDeltaMm,
+    alreadyCentered: Math.abs(centerDeltaMm.x) <= PLATFORM_BOUNDARY_TOLERANCE_MM
+      && Math.abs(centerDeltaMm.z) <= PLATFORM_BOUNDARY_TOLERANCE_MM
+  };
+}
+
 /** 只修改视口垂直位置，使当前最低点落到平台 0 毫米。 */
 export function createPrintBedPlacementPresentation(
   current: Partial<ObjectPresentation> | undefined,
@@ -746,6 +791,42 @@ export function createPrintPlatformCenterPresentation(
         ...normalized.transform.positionMm,
         x: target.x,
         z: target.z
+      }
+    }
+  };
+}
+
+/** 只应用安全区域建议的最小 X/Z 平移，并保留对象的其余展示状态。 */
+export function createPrintPlatformSafetyCorrectionPresentation(
+  current: Partial<ObjectPresentation> | undefined,
+  preview: PrintPlatformSafetyAreaPreview,
+  fallbackColor = '#d9d4c8'
+): ObjectPresentation {
+  if (!preview.canFitEffectiveArea) {
+    throw new Error('当前对象无法仅靠平移进入安全有效区域');
+  }
+  if (preview.fitsEffectiveArea) {
+    throw new Error('当前对象已经位于安全有效区域');
+  }
+  const delta = preview.correctionDeltaMm;
+  if (!Number.isFinite(delta.x) || !Number.isFinite(delta.z)) {
+    throw new Error('安全区域修正量必须是两个有限毫米值');
+  }
+  if (
+    Math.abs(delta.x) <= PLATFORM_BOUNDARY_TOLERANCE_MM
+    && Math.abs(delta.z) <= PLATFORM_BOUNDARY_TOLERANCE_MM
+  ) {
+    throw new Error('当前安全区域没有可应用的修正量');
+  }
+  const normalized = normalizeObjectPresentation(current, fallbackColor);
+  return {
+    ...normalized,
+    transform: {
+      ...normalized.transform,
+      positionMm: {
+        ...normalized.transform.positionMm,
+        x: normalized.transform.positionMm.x + delta.x,
+        z: normalized.transform.positionMm.z + delta.z
       }
     }
   };

@@ -7,11 +7,13 @@ import {
   createPrintBedPlacementPresentation,
   createPrintOrientationPresentation,
   createPrintPlatformCenterPresentation,
+  createPrintPlatformSafetyCorrectionPresentation,
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
   evaluatePrintPlatformBoundary,
   evaluatePrintPlatformSafetyArea,
   isPrintOrientationRotationApplied,
+  translatePrintPlatformBoundaryPreview,
   type PrintBedNormalizationSpace,
   type PrintBedPlacementPreview,
   type PrintOrientationAnalysis,
@@ -39,6 +41,12 @@ interface PrintOrientationPanelProps {
   unavailableReason?: string;
 }
 
+interface SafetyCorrectionConfirmation {
+  safetyMarginMm: number;
+  correctionDeltaMm: { x: number; z: number };
+  targetPositionMm: { x: number; z: number };
+}
+
 type AnalysisState =
   | { status: 'idle' }
   | { status: 'loading' }
@@ -61,6 +69,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [bedConfirmationOpen, setBedConfirmationOpen] = useState(false);
   const [centerConfirmationOpen, setCenterConfirmationOpen] = useState(false);
+  const [safetyCorrectionConfirmation, setSafetyCorrectionConfirmation] = useState<SafetyCorrectionConfirmation | null>(null);
   const [safetyMarginInput, setSafetyMarginInput] = useState('5');
   const [applicationNotice, setApplicationNotice] = useState<string | null>(null);
   const requestSerial = useRef(0);
@@ -72,6 +81,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     setConfirmationOpen(false);
     setBedConfirmationOpen(false);
     setCenterConfirmationOpen(false);
+    setSafetyCorrectionConfirmation(null);
     setApplicationNotice(pendingPresentationNotice.current);
     pendingPresentationNotice.current = null;
     return () => {
@@ -87,6 +97,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     setConfirmationOpen(false);
     setBedConfirmationOpen(false);
     setCenterConfirmationOpen(false);
+    setSafetyCorrectionConfirmation(null);
     setApplicationNotice(null);
     let sourceUrl: string | null = null;
     try {
@@ -364,6 +375,146 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     }
   }
 
+  /** 冻结当前安全边距、最小修正量和目标位置，避免确认期间输入变化导致误写。 */
+  function openSafetyCorrectionConfirmation() {
+    if (
+      !source
+      || !recommended
+      || !alreadyApplied
+      || !bedPlacement?.alreadyOnBed
+      || !platformBoundary
+      || !safetyArea
+      || safetyArea.fitsEffectiveArea
+      || !safetyArea.canFitEffectiveArea
+      || (
+        Math.abs(safetyArea.correctionDeltaMm.x) <= 1e-4
+        && Math.abs(safetyArea.correctionDeltaMm.z) <= 1e-4
+      )
+    ) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice('当前没有可应用的安全区域修正建议。');
+      return;
+    }
+    setSafetyCorrectionConfirmation({
+      safetyMarginMm: safetyArea.safetyMarginMm,
+      correctionDeltaMm: { ...safetyArea.correctionDeltaMm },
+      targetPositionMm: {
+        x: source.currentPositionMm.x + safetyArea.correctionDeltaMm.x,
+        z: source.currentPositionMm.z + safetyArea.correctionDeltaMm.z
+      }
+    });
+    setCenterConfirmationOpen(false);
+    setApplicationNotice(null);
+  }
+
+  /** 确认后重新验证实时来源与安全区域，只提交进入有效区域所需的最小 X/Z 平移。 */
+  function applyPrintPlatformSafetyCorrection() {
+    const confirmation = safetyCorrectionConfirmation;
+    if (
+      !source
+      || !recommended
+      || !alreadyApplied
+      || !bedPlacement?.alreadyOnBed
+      || !platformBoundary
+      || !safetyArea
+      || !confirmation
+      || analysisState.status !== 'ready'
+      || analysisState.sourceIdentity !== source.identity
+    ) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice('当前安全区域修正预览已经失效，请重新分析后再应用。');
+      return;
+    }
+
+    const store = useModelStore.getState();
+    const current = normalizeObjectPresentation(store.objectPresentations[source.objectId], source.fallbackColor);
+    if (!sourceTransformStillCurrent(current)) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice('当前对象变换已经变化，请重新分析后再修正安全区域。');
+      return;
+    }
+
+    const deltaStillCurrent = Math.abs(safetyArea.correctionDeltaMm.x - confirmation.correctionDeltaMm.x) <= 1e-6
+      && Math.abs(safetyArea.correctionDeltaMm.z - confirmation.correctionDeltaMm.z) <= 1e-6;
+    const targetStillCurrent = Math.abs(current.transform.positionMm.x + confirmation.correctionDeltaMm.x - confirmation.targetPositionMm.x) <= 1e-6
+      && Math.abs(current.transform.positionMm.z + confirmation.correctionDeltaMm.z - confirmation.targetPositionMm.z) <= 1e-6;
+    if (
+      Math.abs(safetyArea.safetyMarginMm - confirmation.safetyMarginMm) > 1e-6
+      || !deltaStillCurrent
+      || !targetStillCurrent
+    ) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice('安全边距或修正目标已经变化，请重新确认后再应用。');
+      return;
+    }
+    if (!safetyArea.canFitEffectiveArea || safetyArea.fitsEffectiveArea) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice(safetyArea.fitsEffectiveArea
+        ? '当前对象已经位于安全有效区域，无需重复移动。'
+        : '当前对象尺寸大于安全有效区域，无法仅靠平移修正。');
+      return;
+    }
+    if (
+      Math.abs(confirmation.correctionDeltaMm.x) <= 1e-4
+      && Math.abs(confirmation.correctionDeltaMm.z) <= 1e-4
+    ) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice('当前安全区域没有可应用的修正量。');
+      return;
+    }
+
+    const correctedBoundary = translatePrintPlatformBoundaryPreview(
+      platformBoundary,
+      confirmation.correctionDeltaMm
+    );
+    const correctedSafetyArea = evaluatePrintPlatformSafetyArea(correctedBoundary, confirmation.safetyMarginMm);
+    if (!correctedBoundary.fitsPlatform || !correctedSafetyArea.fitsEffectiveArea) {
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice('修正后的对象仍未完整进入安全有效区域，请重新分析。');
+      return;
+    }
+
+    const successNotice = '已将当前对象移动到平台安全区域，可使用撤销或重做恢复；请重新分析确认安全余量。';
+    pendingPresentationNotice.current = successNotice;
+    try {
+      const next = createPrintPlatformSafetyCorrectionPresentation(current, safetyArea, source.fallbackColor);
+      if (
+        Math.abs(next.transform.positionMm.x - confirmation.targetPositionMm.x) > 1e-6
+        || Math.abs(next.transform.positionMm.z - confirmation.targetPositionMm.z) > 1e-6
+      ) {
+        throw new Error('安全区域目标位置超出对象变换允许范围');
+      }
+      store.beginObjectPresentationEdit(source.objectId, source.fallbackColor);
+      store.updateObjectPresentation(source.objectId, next, source.fallbackColor);
+      const written = normalizeObjectPresentation(
+        useModelStore.getState().objectPresentations[source.objectId],
+        source.fallbackColor
+      );
+      if (
+        Math.abs(written.transform.positionMm.x - confirmation.targetPositionMm.x) > 1e-6
+        || Math.abs(written.transform.positionMm.z - confirmation.targetPositionMm.z) > 1e-6
+      ) {
+        store.updateObjectPresentation(source.objectId, current, source.fallbackColor);
+        store.finishObjectPresentationEdit(source.objectId, '取消无效安全区域修正', source.fallbackColor);
+        throw new Error('对象安全区域位置写入后校验失败');
+      }
+      store.finishObjectPresentationEdit(
+        source.objectId,
+        `将“${source.label}”移动到平台安全区域`,
+        source.fallbackColor
+      );
+      requestSerial.current += 1;
+      setAnalysisState({ status: 'idle' });
+      setSafetyCorrectionConfirmation(null);
+      setCenterConfirmationOpen(false);
+      setApplicationNotice(successNotice);
+    } catch (error) {
+      pendingPresentationNotice.current = null;
+      setSafetyCorrectionConfirmation(null);
+      setApplicationNotice(`安全区域修正失败：${errorMessage(error)}`);
+    }
+  }
+
   const bedMoveDescription = bedPlacement
     ? bedPlacement.requiredVerticalDeltaMm > 0
       ? `向上移动 ${Math.abs(bedPlacement.requiredVerticalDeltaMm).toFixed(2)} 毫米`
@@ -529,7 +680,10 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
                     step="0.5"
                     value={safetyMarginInput}
                     aria-label="平台安全边距 毫米"
-                    onChange={(event) => setSafetyMarginInput(event.target.value)}
+                    onChange={(event) => {
+                      setSafetyMarginInput(event.target.value);
+                      setSafetyCorrectionConfirmation(null);
+                    }}
                   />
                   <small>毫米</small>
                 </label>
@@ -563,6 +717,37 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
                       <strong>只读修正建议</strong>
                       <span>{correctionDescription('X', safetyArea.correctionDeltaMm.x)}</span>
                       <span>{correctionDescription('Z', safetyArea.correctionDeltaMm.z)}</span>
+                      {!safetyCorrectionConfirmation ? (
+                        <button
+                          type="button"
+                          className="print-platform-safety-correction-button"
+                          onClick={openSafetyCorrectionConfirmation}
+                        >
+                          <Move size={14} /> 应用安全区域修正
+                        </button>
+                      ) : (
+                        <div className="print-orientation-confirmation" role="group" aria-label="确认应用平台安全区域修正">
+                          <strong>确认修正“{source.label}”</strong>
+                          <span>安全边距：{safetyCorrectionConfirmation.safetyMarginMm.toFixed(2)} 毫米</span>
+                          <span>当前位置：X {source.currentPositionMm.x.toFixed(2)}，Z {source.currentPositionMm.z.toFixed(2)} 毫米</span>
+                          <span>
+                            最小修正：{correctionDescription('X', safetyCorrectionConfirmation.correctionDeltaMm.x)}；
+                            {correctionDescription('Z', safetyCorrectionConfirmation.correctionDeltaMm.z)}
+                          </span>
+                          <span>
+                            修正后位置：X {safetyCorrectionConfirmation.targetPositionMm.x.toFixed(2)}，Z {safetyCorrectionConfirmation.targetPositionMm.z.toFixed(2)} 毫米
+                          </span>
+                          <small>本操作只修改当前对象 X/Z 位置，不强制居中，并生成可撤销、可重做的中文版本。</small>
+                          <div>
+                            <button type="button" className="confirm" onClick={applyPrintPlatformSafetyCorrection}>
+                              <CheckCircle2 size={13} /> 确认修正
+                            </button>
+                            <button type="button" className="cancel" onClick={() => setSafetyCorrectionConfirmation(null)}>
+                              <X size={13} /> 取消
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <p className="print-platform-safety-error">当前对象尺寸大于安全有效区域，单纯移动无法完全进入。</p>

@@ -1451,4 +1451,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .print-platform-safety-correction { display: grid !important; justify-content: stretch !important; gap: 3px !important; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .08); }
 .print-platform-safety-correction > strong { color: #f0c09f; font-size: 8px; }
 .print-platform-safety-correction > span { color: #d4b49e; font-size: 8px; font-variant-numeric: tabular-nums; }
+.print-platform-safety-correction-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 29px; margin-top: 3px; border: 1px solid rgba(227, 146, 91, .46); border-radius: 5px; color: #f2ccb1; background: rgba(102, 57, 28, .3); }
+.print-platform-safety-correction-button:hover { border-color: rgba(227, 146, 91, .74); background: rgba(118, 65, 31, .42); }
+.print-platform-safety-correction > .print-orientation-confirmation { margin-top: 3px; }
 .print-platform-safety-error { margin: 0; color: #f3b184; font-size: 8px; line-height: 1.4; }

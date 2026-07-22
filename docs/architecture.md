@@ -839,4 +839,13 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 39/39、前端 26 个测试文件 274/274、生产构建和差异检查通过。自动测试覆盖默认值、零边距、接近上限、非法输入、单轴/双轴越界、对象大于有效区域和物理预览不可变；真实浏览器覆盖 CAD 与任意上传 STL，确认边距变化不清除分析、不创建版本且不改变物理居中目标，独立页面 Console 为 0 个错误、0 个警告。
 
-**下一阶段架构方向：**新增基于 `correctionDeltaMm` 的安全区域最小平移状态转换与确认门禁；只在 `canFitEffectiveArea=true`、`fitsEffectiveArea=false`、建议非零、来源和安全边距快照仍一致时写入 X/Z，保留其他展示状态并复用对象展示版本、撤销和重做。
+### 76. 安全区域修正建议确认应用架构（已实现）
+
+- `createPrintPlatformSafetyCorrectionPresentation` 是无副作用状态转换：先规范化对象展示状态，再只把 `correctionDeltaMm.x/z` 累加到 `positionMm.x/z`；对象过大、已适配、建议为零或修正量非有限时抛出全中文错误。
+- `translatePrintPlatformBoundaryPreview` 按候选 X/Z 位移重算对象边界、物理四边余量、越界量、最小余量、居中差值和适配状态；组件在写入前把结果再次交给 `evaluatePrintPlatformSafetyArea`，确保候选位置同时位于物理平台和安全有效区域内。
+- `SafetyCorrectionConfirmation` 冻结安全边距、两轴修正量和目标 X/Z。输入变化立即清除快照；确认时再次核对来源身份、推荐方向、落床状态、Store 实时变换、边距、修正量和目标一致性，避免陈旧确认写入。
+- 成功路径复用 `beginObjectPresentationEdit`、`updateObjectPresentation` 和 `finishObjectPresentationEdit`，生成“将‘对象名称’移动到平台安全区域”展示版本；写入后读取 Store 校验目标，旧分析失效并保留中文成功提示。
+
+2026-07-22 架构验证：针对性测试 44/44、前端 26 个测试文件 279/279、生产构建和差异检查通过。自动测试覆盖单轴、双轴、状态保留、修正后复验、非居中目标、对象过大、已适配、零值、非有限值、中文版本及撤销重做；真实浏览器覆盖 CAD、任意上传 STL、取消、边距快照失效、确认和重新分析，独立页面 Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**把 `PrintPlatformBoundaryPreview` 与 `PrintPlatformSafetyAreaPreview` 转换为独立只读视口叠加协议，在打印平台平面绘制物理轮廓、安全有效轮廓和越界方向提示；叠加层不得进入对象版本或几何导出。
