@@ -169,6 +169,7 @@ export interface MeshPlanarRegionExtrusionPreviewLoopGuide {
   kind: MeshPlanarRegionBoundaryKind;
   startLoopMm: MeshPointMm[];
   endLoopMm: MeshPointMm[];
+  sideSegmentsMm: MeshPlanarDimensionSegmentMm[];
 }
 
 export interface MeshPlanarRegionExtrusionPreviewGuides {
@@ -469,15 +470,27 @@ export function createMeshPlanarRegionExtrusionPreviewGuides(
     const sourcePoints = points.map((point) => planePointToSource(point, depthMm));
     return [...sourcePoints, { ...sourcePoints[0] }];
   };
-  const loops: MeshPlanarRegionExtrusionPreviewLoopGuide[] = [{
-    kind: 'outer',
-    startLoopMm: closeLoop(profile.outer, 0),
-    endLoopMm: closeLoop(profile.outer, profile.distanceMm)
-  }, ...profile.holes.map((hole) => ({
-    kind: 'hole' as const,
-    startLoopMm: closeLoop(hole, 0),
-    endLoopMm: closeLoop(hole, profile.distanceMm)
-  }))];
+  /** 为每个唯一环顶点建立一条起止端连接线，不重复闭合点。 */
+  const createLoopGuide = (
+    kind: MeshPlanarRegionBoundaryKind,
+    points: { x: number; y: number }[]
+  ): MeshPlanarRegionExtrusionPreviewLoopGuide => {
+    const startLoopMm = closeLoop(points, 0);
+    const endLoopMm = closeLoop(points, profile.distanceMm);
+    return {
+      kind,
+      startLoopMm,
+      endLoopMm,
+      sideSegmentsMm: points.map((_, pointIndex) => [
+        { ...startLoopMm[pointIndex] },
+        { ...endLoopMm[pointIndex] }
+      ])
+    };
+  };
+  const loops: MeshPlanarRegionExtrusionPreviewLoopGuide[] = [
+    createLoopGuide('outer', profile.outer),
+    ...profile.holes.map((hole) => createLoopGuide('hole', hole))
+  ];
   const minX = Math.min(...profile.outer.map((point) => point.x));
   const maxX = Math.max(...profile.outer.map((point) => point.x));
   const minY = Math.min(...profile.outer.map((point) => point.y));

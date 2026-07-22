@@ -778,6 +778,27 @@ function LoadedCadMesh({
     const transformPoint = (point: { x: number; y: number; z: number }) => (
       new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
     );
+    /** 将任意数量环的侧边连接线合并为两份轻量 LineSegments 几何，避免逐边创建组件。 */
+    const createSideConnectionGeometry = (kind: 'outer' | 'hole') => {
+      const positions = guides.loops
+        .filter((loop) => loop.kind === kind)
+        .flatMap((loop) => loop.sideSegmentsMm.flatMap(([start, end]) => {
+          const transformedStart = transformPoint(start);
+          const transformedEnd = transformPoint(end);
+          return [
+            transformedStart.x,
+            transformedStart.y,
+            transformedStart.z,
+            transformedEnd.x,
+            transformedEnd.y,
+            transformedEnd.z
+          ];
+        }));
+      if (!positions.length) return null;
+      const sideGeometry = new BufferGeometry();
+      sideGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+      return sideGeometry;
+    };
     return {
       geometry: extrusionGeometry,
       mode: meshFaceExtrusionMode,
@@ -788,6 +809,10 @@ function LoadedCadMesh({
       endpointMarkerSegments: guides.endpointMarkerSegmentsMm.map((segment) => (
         segment.map(transformPoint) as [Vector3, Vector3]
       )),
+      sideConnectionGeometries: {
+        outer: createSideConnectionGeometry('outer'),
+        hole: createSideConnectionGeometry('hole')
+      },
       outlineLoops: guides.loops.flatMap((loop, loopIndex) => ([{
         key: `${loop.kind}-${loopIndex}-起始端`,
         kind: loop.kind,
@@ -809,7 +834,11 @@ function LoadedCadMesh({
     meshFaceExtrusionMode,
     meshPlanarRegionPreview
   ]);
-  useEffect(() => () => meshPlanarRegionExtrusionPreview?.geometry.dispose(), [meshPlanarRegionExtrusionPreview]);
+  useEffect(() => () => {
+    meshPlanarRegionExtrusionPreview?.geometry.dispose();
+    meshPlanarRegionExtrusionPreview?.sideConnectionGeometries.outer?.dispose();
+    meshPlanarRegionExtrusionPreview?.sideConnectionGeometries.hole?.dispose();
+  }, [meshPlanarRegionExtrusionPreview]);
 
   const focusedMeshPlanarRegionLoopBase = meshPlanarRegionFocusedLoopIndex === null
     ? null
@@ -1276,6 +1305,36 @@ function LoadedCadMesh({
               raycast={() => undefined}
             />
           ))}
+          {meshPlanarRegionExtrusionPreview.sideConnectionGeometries.outer && (
+            <lineSegments
+              geometry={meshPlanarRegionExtrusionPreview.sideConnectionGeometries.outer}
+              renderOrder={14}
+              raycast={() => undefined}
+            >
+              <lineBasicMaterial
+                color={meshPlanarRegionExtrusionPreview.color}
+                transparent
+                opacity={0.78}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </lineSegments>
+          )}
+          {meshPlanarRegionExtrusionPreview.sideConnectionGeometries.hole && (
+            <lineSegments
+              geometry={meshPlanarRegionExtrusionPreview.sideConnectionGeometries.hole}
+              renderOrder={14}
+              raycast={() => undefined}
+            >
+              <lineBasicMaterial
+                color={meshPlanarRegionExtrusionPreview.mode === 'add' ? '#b8fff3' : '#ffd2c8'}
+                transparent
+                opacity={0.44}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </lineSegments>
+          )}
           {meshPlanarRegionExtrusionPreview.endpointMarkerSegments.map((points, index) => (
             <Line
               key={`工具体方向端点-${index}`}

@@ -313,8 +313,10 @@ describe('连续共面区域执行前预览', () => {
     expect(guides?.loops.map((loop) => loop.kind)).toEqual(['outer', 'hole']);
     expect(guides?.loops[0].startLoopMm).toHaveLength(5);
     expect(guides?.loops[0].endLoopMm).toHaveLength(5);
+    expect(guides?.loops[0].sideSegmentsMm).toHaveLength(4);
     expect(guides?.loops[1].startLoopMm).toHaveLength(5);
     expect(guides?.loops[1].endLoopMm).toHaveLength(5);
+    expect(guides?.loops[1].sideSegmentsMm).toHaveLength(4);
     for (const loop of guides!.loops) {
       expect(loop.startLoopMm.at(-1)).toEqual(loop.startLoopMm[0]);
       expect(loop.endLoopMm.at(-1)).toEqual(loop.endLoopMm[0]);
@@ -325,9 +327,23 @@ describe('连续共面区域执行前预览', () => {
           + (endPoint.z - startPoint.z) * addProfile!.directionNormalMm.z;
         expect(normalDistanceMm).toBeCloseTo(addProfile!.distanceMm, 8);
       });
+      loop.sideSegmentsMm.forEach(([startPoint, endPoint], pointIndex) => {
+        expect(startPoint).toEqual(loop.startLoopMm[pointIndex]);
+        expect(endPoint).toEqual(loop.endLoopMm[pointIndex]);
+        const sideLengthMm = Math.hypot(
+          endPoint.x - startPoint.x,
+          endPoint.y - startPoint.y,
+          endPoint.z - startPoint.z
+        );
+        expect(sideLengthMm).toBeCloseTo(addProfile!.distanceMm, 8);
+      });
     }
     const guideCoordinates = [
-      ...guides!.loops.flatMap((loop) => [...loop.startLoopMm, ...loop.endLoopMm]),
+      ...guides!.loops.flatMap((loop) => [
+        ...loop.startLoopMm,
+        ...loop.endLoopMm,
+        ...loop.sideSegmentsMm.flat()
+      ]),
       guides!.directionEndMm,
       ...guides!.endpointMarkerSegmentsMm.flat()
     ].flatMap((point) => [point.x, point.y, point.z]);
@@ -339,6 +355,19 @@ describe('连续共面区域执行前预览', () => {
         endPoint.z - startPoint.z
       )).toBeGreaterThan(0);
     }
+
+    const multipleHoleGuides = createMeshPlanarRegionExtrusionPreviewGuides({
+      ...addProfile!,
+      holes: [
+        ...addProfile!.holes,
+        [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 1.5, y: 2 }]
+      ]
+    });
+    expect(multipleHoleGuides?.loops.map((loop) => loop.kind)).toEqual(['outer', 'hole', 'hole']);
+    expect(multipleHoleGuides?.loops.map((loop) => loop.sideSegmentsMm.length)).toEqual([4, 4, 3]);
+    expect(multipleHoleGuides?.loops.flatMap((loop) => loop.sideSegmentsMm).every(([start, end]) => (
+      [start.x, start.y, start.z, end.x, end.y, end.z].every(Number.isFinite)
+    ))).toBe(true);
 
     expect(createMeshPlanarRegionExtrusionPreviewGuides({
       ...addProfile!,
