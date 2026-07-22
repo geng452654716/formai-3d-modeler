@@ -1455,3 +1455,36 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .print-platform-safety-correction-button:hover { border-color: rgba(227, 146, 91, .74); background: rgba(118, 65, 31, .42); }
 .print-platform-safety-correction > .print-orientation-confirmation { margin-top: 3px; }
 .print-platform-safety-error { margin: 0; color: #f3b184; font-size: 8px; line-height: 1.4; }
+
+.print-platform-overlay-legend {
+  position: absolute;
+  top: 62px;
+  left: 14px;
+  z-index: 4;
+  width: min(238px, calc(100% - 28px));
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid rgba(104, 197, 139, .42);
+  border-radius: 7px;
+  background: rgba(23, 25, 29, .91);
+  color: #aeb4b8;
+  pointer-events: none;
+}
+.print-platform-overlay-legend.is-overflow { border-color: rgba(255, 158, 69, .58); }
+.print-platform-overlay-legend.is-too-large { border-color: rgba(255, 95, 112, .62); }
+.print-platform-overlay-legend > strong { color: #e3e5e2; font-size: 10px; }
+.print-platform-overlay-source { color: #76d7a0; font-size: 9px; line-height: 1.45; }
+.print-platform-overlay-legend.is-overflow .print-platform-overlay-source { color: #ffb76f; }
+.print-platform-overlay-legend.is-too-large .print-platform-overlay-source { color: #ff8491; }
+.print-platform-overlay-legend-row { display: flex; align-items: center; gap: 7px; font-size: 9px; line-height: 1.35; }
+.print-platform-overlay-legend-row i { width: 18px; height: 0; flex: 0 0 auto; border-top: 2px solid currentColor; }
+.print-platform-overlay-legend-row i.is-platform { color: #7e96aa; border-top-style: dashed; }
+.print-platform-overlay-legend-row i.is-effective { color: #68c58b; border-top-style: dashed; }
+.print-platform-overlay-legend-row i.is-object { color: #35d2cb; }
+.print-platform-overlay-legend.is-overflow i.is-object { color: #ff9e45; }
+.print-platform-overlay-legend.is-too-large i.is-object { color: #ff5f70; }
+.print-platform-overlay-overflow { padding-left: 25px; color: #ff9e64; font-size: 9px; font-variant-numeric: tabular-nums; }
+.print-platform-overlay-legend.is-too-large .print-platform-overlay-overflow { color: #ff7d89; }
+.print-platform-overlay-legend small { color: #737980; font-size: 8px; line-height: 1.45; }

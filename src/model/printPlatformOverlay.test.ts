@@ -1,0 +1,147 @@
+import { describe, expect, it } from 'vitest';
+import {
+  createPrintPlatformBoundarySegment,
+  createPrintPlatformOverlay,
+  createPrintPlatformRectanglePoints
+} from './printPlatformOverlay';
+import type {
+  PrintPlatformBoundaryPreview,
+  PrintPlatformSafetyAreaPreview
+} from './printOrientation';
+
+function boundary(): PrintPlatformBoundaryPreview {
+  return {
+    boundsMm: { minimumX: 90, maximumX: 140, minimumZ: -20, maximumZ: 30, width: 50, depth: 50 },
+    platformBoundsMm: { minimumX: -128, maximumX: 128, minimumZ: -128, maximumZ: 128 },
+    marginsMm: { left: 218, right: -12, front: 98, back: 108 },
+    overflowMm: { left: 0, right: 12, front: 0, back: 0 },
+    fitsPlatform: false,
+    minimumMarginMm: -12,
+    centerDeltaMm: { x: -115, z: -5 },
+    targetHorizontalPositionMm: { x: -115, z: -5 },
+    alreadyCentered: false
+  };
+}
+
+function safety(overrides: Partial<PrintPlatformSafetyAreaPreview> = {}): PrintPlatformSafetyAreaPreview {
+  return {
+    safetyMarginMm: 10,
+    effectivePlatformBoundsMm: {
+      minimumX: -118,
+      maximumX: 118,
+      minimumZ: -118,
+      maximumZ: 118,
+      width: 236,
+      depth: 236
+    },
+    marginsMm: { left: 208, right: -22, front: 88, back: 98 },
+    overflowMm: { left: 0, right: 22, front: 0, back: 0 },
+    fitsEffectiveArea: false,
+    canFitEffectiveArea: true,
+    minimumMarginMm: -22,
+    correctionDeltaMm: { x: -22, z: 0 },
+    ...overrides
+  };
+}
+
+const genericSource = {
+  identity: 'uploaded-stl:revision-7:position-90',
+  objectId: 'uploaded-model-42',
+  objectLabel: '任意上传模型'
+};
+
+describe('打印平台三维视口叠加协议', () => {
+  it('完整复制物理平台、安全区域和对象占地且不修改来源预览', () => {
+    const originalBoundary = boundary();
+    const originalSafety = safety();
+    const boundarySnapshot = structuredClone(originalBoundary);
+    const safetySnapshot = structuredClone(originalSafety);
+
+    const overlay = createPrintPlatformOverlay(genericSource, originalBoundary, originalSafety);
+
+    expect(overlay).toMatchObject({
+      sourceIdentity: genericSource.identity,
+      objectId: genericSource.objectId,
+      objectLabel: genericSource.objectLabel,
+      safetyMarginMm: 10,
+      status: 'overflow',
+      overflow: { left: false, right: true, front: false, back: false }
+    });
+    expect(overlay.platformBoundsMm).toEqual(originalBoundary.platformBoundsMm);
+    expect(overlay.effectiveBoundsMm).toEqual({ minimumX: -118, maximumX: 118, minimumZ: -118, maximumZ: 118 });
+    expect(overlay.objectBoundsMm).toEqual({ minimumX: 90, maximumX: 140, minimumZ: -20, maximumZ: 30 });
+    expect(originalBoundary).toEqual(boundarySnapshot);
+    expect(originalSafety).toEqual(safetySnapshot);
+  });
+
+  it('区分位于安全区域、单轴越界、双轴越界和对象过大', () => {
+    const inside = createPrintPlatformOverlay(genericSource, boundary(), safety({
+      marginsMm: { left: 20, right: 30, front: 25, back: 25 },
+      overflowMm: { left: 0, right: 0, front: 0, back: 0 },
+      fitsEffectiveArea: true,
+      minimumMarginMm: 20,
+      correctionDeltaMm: { x: 0, z: 0 }
+    }));
+    expect(inside.status).toBe('inside');
+    expect(inside.overflow).toEqual({ left: false, right: false, front: false, back: false });
+
+    const doubleAxis = createPrintPlatformOverlay(genericSource, boundary(), safety({
+      overflowMm: { left: 3, right: 0, front: 7, back: 0 }
+    }));
+    expect(doubleAxis.status).toBe('overflow');
+    expect(doubleAxis.overflow).toEqual({ left: true, right: false, front: true, back: false });
+
+    const tooLarge = createPrintPlatformOverlay(genericSource, boundary(), safety({
+      overflowMm: { left: 9, right: 12, front: 0, back: 0 },
+      fitsEffectiveArea: false,
+      canFitEffectiveArea: false,
+      correctionDeltaMm: { x: 0, z: 0 }
+    }));
+    expect(tooLarge.status).toBe('too-large');
+    expect(tooLarge.canFitEffectiveArea).toBe(false);
+  });
+
+  it('安全边距变化会生成新的安全区域边界', () => {
+    const first = createPrintPlatformOverlay(genericSource, boundary(), safety());
+    const second = createPrintPlatformOverlay(genericSource, boundary(), safety({
+      safetyMarginMm: 20,
+      effectivePlatformBoundsMm: {
+        minimumX: -108,
+        maximumX: 108,
+        minimumZ: -108,
+        maximumZ: 108,
+        width: 216,
+        depth: 216
+      }
+    }));
+
+    expect(first.effectiveBoundsMm.maximumX).toBe(118);
+    expect(second.effectiveBoundsMm.maximumX).toBe(108);
+    expect(second.safetyMarginMm).toBe(20);
+  });
+
+  it('使用通用来源身份并拒绝空身份或非有限边界', () => {
+    expect(createPrintPlatformOverlay(genericSource, boundary(), safety()).objectLabel).toBe('任意上传模型');
+    expect(() => createPrintPlatformOverlay({ ...genericSource, objectId: '' }, boundary(), safety()))
+      .toThrow('打印平台叠加对象身份不能为空');
+    expect(() => createPrintPlatformOverlay(genericSource, {
+      ...boundary(),
+      boundsMm: { ...boundary().boundsMm, maximumX: Number.NaN }
+    }, safety())).toThrow('当前对象占地边界maximumX必须是有限毫米数值');
+  });
+
+  it('按真实毫米坐标生成闭合矩形和四个方向的高亮边段', () => {
+    const bounds = { minimumX: -8, maximumX: 12, minimumZ: -6, maximumZ: 14 };
+    expect(createPrintPlatformRectanglePoints(bounds, 0.08)).toEqual([
+      [-8, 0.08, -6],
+      [12, 0.08, -6],
+      [12, 0.08, 14],
+      [-8, 0.08, 14],
+      [-8, 0.08, -6]
+    ]);
+    expect(createPrintPlatformBoundarySegment(bounds, 'left', 0.1)).toEqual([[-8, 0.1, -6], [-8, 0.1, 14]]);
+    expect(createPrintPlatformBoundarySegment(bounds, 'right', 0.1)).toEqual([[12, 0.1, -6], [12, 0.1, 14]]);
+    expect(createPrintPlatformBoundarySegment(bounds, 'front', 0.1)).toEqual([[-8, 0.1, 14], [12, 0.1, 14]]);
+    expect(createPrintPlatformBoundarySegment(bounds, 'back', 0.1)).toEqual([[-8, 0.1, -6], [12, 0.1, -6]]);
+  });
+});

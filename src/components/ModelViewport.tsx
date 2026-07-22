@@ -35,6 +35,11 @@ import { getOuterDimensions } from '../model/defaults';
 import { degreesToRadians, describeObjectTransformChange, normalizeObjectPresentation } from '../model/objectTransform';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
 import {
+  createPrintPlatformBoundarySegment,
+  createPrintPlatformRectanglePoints,
+  type PrintPlatformOverlay
+} from '../model/printPlatformOverlay';
+import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
   createMeshPlanarRegionExtrusionPreviewGuides,
@@ -2009,6 +2014,95 @@ function MeshElementBoxSelectionController() {
   return null;
 }
 
+const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
+  platform: 0.05,
+  effective: 0.09,
+  object: 0.13,
+  highlight: 0.17
+} as const;
+
+/** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
+function PrintPlatformOverlayLayer() {
+  const overlay = useModelStore((state) => state.printPlatformOverlay);
+  if (!overlay) return null;
+
+  const objectColor = overlay.status === 'inside'
+    ? '#35d2cb'
+    : overlay.status === 'too-large'
+      ? '#ff5f70'
+      : '#ff9e45';
+  const highlightedSides = (Object.entries(overlay.overflow) as Array<[
+    keyof PrintPlatformOverlay['overflow'],
+    boolean
+  ]>).filter(([, active]) => active);
+
+  return (
+    <group>
+      <Line
+        points={createPrintPlatformRectanglePoints(overlay.platformBoundsMm, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.platform)}
+        color="#7e96aa"
+        lineWidth={1.25}
+        dashed
+        dashSize={3}
+        gapSize={2}
+        depthTest={false}
+        renderOrder={20}
+      />
+      <Line
+        points={createPrintPlatformRectanglePoints(overlay.effectiveBoundsMm, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.effective)}
+        color="#68c58b"
+        lineWidth={1.8}
+        dashed
+        dashSize={7}
+        gapSize={2.5}
+        depthTest={false}
+        renderOrder={21}
+      />
+      <Line
+        points={createPrintPlatformRectanglePoints(overlay.objectBoundsMm, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.object)}
+        color={objectColor}
+        lineWidth={2.5}
+        depthTest={false}
+        renderOrder={22}
+      />
+      {highlightedSides.map(([side]) => (
+        <Line
+          key={side}
+          points={createPrintPlatformBoundarySegment(
+            overlay.effectiveBoundsMm,
+            side,
+            PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.highlight
+          )}
+          color={overlay.status === 'too-large' ? '#ff475d' : '#ff7b3e'}
+          lineWidth={4}
+          depthTest={false}
+          renderOrder={23}
+        />
+      ))}
+    </group>
+  );
+}
+
+function printPlatformOverlayStatusText(overlay: PrintPlatformOverlay) {
+  if (overlay.status === 'inside') return `“${overlay.objectLabel}”位于安全有效区域`;
+  if (overlay.status === 'too-large') {
+    return `“${overlay.objectLabel}”尺寸大于安全有效区域，无法仅靠平移修正`;
+  }
+  return `“${overlay.objectLabel}”超出安全有效区域`;
+}
+
+function printPlatformOverflowDescriptions(overlay: PrintPlatformOverlay) {
+  const labels: Array<[keyof PrintPlatformOverlay['overflow'], string]> = [
+    ['left', '左侧'],
+    ['right', '右侧'],
+    ['front', '前侧'],
+    ['back', '后侧']
+  ];
+  return labels
+    .filter(([side]) => overlay.overflow[side])
+    .map(([side, label]) => `${label}越界 ${overlay.overflowMm[side].toFixed(2)} 毫米`);
+}
+
 function ModelScene() {
   const parameters = useModelStore((state) => state.parameters);
   const exploded = useModelStore((state) => state.exploded);
@@ -2364,6 +2458,7 @@ function ModelScene() {
         fadeStrength={1}
         infiniteGrid
       />
+      <PrintPlatformOverlayLayer />
       <ContactShadows position={[0, 0.02, 0]} opacity={0.5} scale={150} blur={2.6} far={80} />
     </>
   );
@@ -2402,6 +2497,7 @@ export function ModelViewport() {
   const versionGeometryComparisonStatus = useModelStore((state) => state.versionGeometryComparisonStatus);
   const versionGeometryDifferenceResult = useModelStore((state) => state.versionGeometryDifferenceResult);
   const versionGeometryComparisonSnapshot = useModelStore((state) => state.versionGeometryComparisonSnapshot);
+  const printPlatformOverlay = useModelStore((state) => state.printPlatformOverlay);
   const setVersionGeometryComparisonMode = useModelStore((state) => state.setVersionGeometryComparisonMode);
   const closeVersionGeometryComparison = useModelStore((state) => state.closeVersionGeometryComparison);
   const primaryPart = findCadPartByRole(cadResult, 'primary') ?? cadResult?.parts[0] ?? null;
@@ -2484,6 +2580,22 @@ export function ModelViewport() {
       <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, preserveDrawingBuffer: true }}>
         <ModelScene />
       </Canvas>
+      {printPlatformOverlay && (
+        <aside
+          className={`print-platform-overlay-legend is-${printPlatformOverlay.status}`}
+          aria-label="打印平台三维视口图例"
+        >
+          <strong>打印平台预览</strong>
+          <span className="print-platform-overlay-source">{printPlatformOverlayStatusText(printPlatformOverlay)}</span>
+          <div className="print-platform-overlay-legend-row"><i className="is-platform" />物理平台边界</div>
+          <div className="print-platform-overlay-legend-row"><i className="is-effective" />安全有效区域 · 边距 {printPlatformOverlay.safetyMarginMm.toFixed(2)} 毫米</div>
+          <div className="print-platform-overlay-legend-row"><i className="is-object" />当前对象占地</div>
+          {printPlatformOverflowDescriptions(printPlatformOverlay).map((description) => (
+            <span key={description} className="print-platform-overlay-overflow">{description}</span>
+          ))}
+          <small>只读叠加，不移动对象、不创建版本，也不参与选择。</small>
+        </aside>
+      )}
       {boxSelecting && (
         <div
           className="cad-face-box-capture"

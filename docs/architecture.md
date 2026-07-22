@@ -848,4 +848,14 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 44/44、前端 26 个测试文件 279/279、生产构建和差异检查通过。自动测试覆盖单轴、双轴、状态保留、修正后复验、非居中目标、对象过大、已适配、零值、非有限值、中文版本及撤销重做；真实浏览器覆盖 CAD、任意上传 STL、取消、边距快照失效、确认和重新分析，独立页面 Console 为 0 个错误、0 个警告。
 
-**下一阶段架构方向：**把 `PrintPlatformBoundaryPreview` 与 `PrintPlatformSafetyAreaPreview` 转换为独立只读视口叠加协议，在打印平台平面绘制物理轮廓、安全有效轮廓和越界方向提示；叠加层不得进入对象版本或几何导出。
+### 77. 平台安全区域边界三维视口可视化架构（已实现）
+
+- `src/model/printPlatformOverlay.ts` 定义独立 `PrintPlatformOverlay` 协议和 `createPrintPlatformOverlay` 纯转换，复制来源身份、对象身份、平台/有效区/对象水平边界、四边越界量及 `inside / overflow / too-large` 状态；所有身份、边界、高度和越界输入均进行有限值与顺序校验。
+- `createPrintPlatformRectanglePoints` 和 `createPrintPlatformBoundarySegment` 只生成真实 X/Z 毫米坐标的闭合折线或指定边段。左/右映射 `minimumX/maximumX`，前/后映射 `maximumZ/minimumZ`，渲染层无需重复推导业务方向。
+- Zustand Store 只保存 `printPlatformOverlay` 临时状态与来源核对清理动作，不把它加入 `ModelVersion`。模型来源切换、新建画布、开始导入 STL 和清除上传 STL 会同步清理；带旧身份的组件 cleanup 不会删除新来源叠加。
+- `PrintOrientationPanel` 仅在分析来源仍有效、推荐方向已应用、对象已经落床、物理平台与合法安全区域都存在时写入叠加；来源或对象变换变化使旧分析和旧叠加失效，安全边距变化则在当前来源上同步重建。
+- `PrintPlatformOverlayLayer` 使用 Drei `Line` 分层绘制平台、安全区域、对象占地和越界边段，通过轻微 Y 偏移、`depthTest=false` 与固定 `renderOrder` 避免 Z-fighting。DOM 图例 `pointer-events:none`，三维线框无指针处理，不进入选择与操控链路。
+
+2026-07-22 架构验证：针对性测试 53/53、前端 28 个测试文件 288/288、生产构建和差异检查通过。自动测试覆盖 CAD 与通用上传模型身份、区域内外、单轴/双轴越界、对象过大、边距变化、无效输入、矩形坐标、四边映射、Store 非版本状态、旧来源保护和模型切换清理；真实浏览器覆盖安全边距刷新、视口旋转/缩放/平移、图例事件穿透、任意 STL 与安全修正后状态，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**新增独立的打印平台相机适配请求和纯相机目标计算，把物理平台与对象占地并集转换为俯视中心、相机距离和控制器目标；请求保持临时且可重复消费，不进入模型版本、导出或打印分析来源身份。

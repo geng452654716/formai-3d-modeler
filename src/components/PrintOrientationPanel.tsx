@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, LoaderCircle, Move, MoveDown, Printer, Rotate3D, RotateCcw, X } from 'lucide-react';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { resolveGeneratedModelUrl } from '../model/cad';
@@ -19,6 +19,7 @@ import {
   type PrintOrientationAnalysis,
   type PrintPlatformBoundaryPreview
 } from '../model/printOrientation';
+import { createPrintPlatformOverlay } from '../model/printPlatformOverlay';
 import { useModelStore } from '../store/useModelStore';
 
 export interface PrintOrientationSource {
@@ -167,15 +168,41 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
   ));
 
   const safetyMarginValue = safetyMarginInput.trim() ? Number(safetyMarginInput) : Number.NaN;
-  let safetyArea: ReturnType<typeof evaluatePrintPlatformSafetyArea> | null = null;
-  let safetyMarginError: string | null = null;
-  if (platformBoundary) {
+  const safetyEvaluation = useMemo(() => {
+    if (!platformBoundary) return { safetyArea: null, safetyMarginError: null };
     try {
-      safetyArea = evaluatePrintPlatformSafetyArea(platformBoundary, safetyMarginValue);
+      return {
+        safetyArea: evaluatePrintPlatformSafetyArea(platformBoundary, safetyMarginValue),
+        safetyMarginError: null
+      };
     } catch (error) {
-      safetyMarginError = errorMessage(error);
+      return { safetyArea: null, safetyMarginError: errorMessage(error) };
     }
-  }
+  }, [platformBoundary, safetyMarginValue]);
+  const { safetyArea, safetyMarginError } = safetyEvaluation;
+
+  useEffect(() => {
+    const store = useModelStore.getState();
+    if (!source || !bedPlacement?.alreadyOnBed || !platformBoundary || !safetyArea) {
+      store.clearPrintPlatformOverlay(source?.identity);
+      return;
+    }
+
+    try {
+      store.setPrintPlatformOverlay(createPrintPlatformOverlay({
+        identity: source.identity,
+        objectId: source.objectId,
+        objectLabel: source.label
+      }, platformBoundary, safetyArea));
+    } catch {
+      store.clearPrintPlatformOverlay(source.identity);
+      return;
+    }
+
+    return () => {
+      useModelStore.getState().clearPrintPlatformOverlay(source.identity);
+    };
+  }, [bedPlacement?.alreadyOnBed, platformBoundary, safetyArea, source]);
 
   /** 写入前核对 Store 中的实时对象变换仍与本次分析来源严格一致。 */
   function sourceTransformStillCurrent(current: ReturnType<typeof normalizeObjectPresentation>) {

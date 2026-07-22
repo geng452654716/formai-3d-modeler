@@ -84,6 +84,7 @@ import {
 import type { VersionGeometryComparisonMode } from '../model/versionGeometryComparison';
 import type { VersionGeometryDifferenceResult } from '../model/versionGeometryDifference';
 import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
+import type { PrintPlatformOverlay } from '../model/printPlatformOverlay';
 import type {
   ManufacturingSplitRequest,
   ManufacturingSplitResult
@@ -180,6 +181,8 @@ interface ModelStore {
   versionGeometryComparisonError: string | null;
   versionRestoreStatus: VersionRestoreStatus;
   versionRestoreError: string | null;
+  /** 独立于模型版本的只读打印平台视口叠加，仅反映最近一次仍有效的分析结果。 */
+  printPlatformOverlay: PrintPlatformOverlay | null;
   setParameter: (key: keyof EnclosureParameters, value: number) => void;
   commitVersion: (label: string, changeKind?: ModelVersion['changeKind']) => void;
   undo: () => Promise<boolean>;
@@ -193,6 +196,8 @@ interface ModelStore {
   resetObjectPresentation: (id: SceneObjectId, label: string, fallbackColor?: string) => void;
   setExploded: (value: boolean) => void;
   setShowBoard: (value: boolean) => void;
+  setPrintPlatformOverlay: (overlay: PrintPlatformOverlay) => void;
+  clearPrintPlatformOverlay: (sourceIdentity?: string) => void;
   setViewportModelSource: (source: ViewportModelSource) => void;
   resetProject: () => void;
   addAssistantMessage: (content: string) => void;
@@ -435,6 +440,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   versionGeometryComparisonError: null,
   versionRestoreStatus: 'idle',
   versionRestoreError: null,
+  printPlatformOverlay: null,
   messages: [
     {
       id: crypto.randomUUID(),
@@ -718,10 +724,18 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
   setExploded: (exploded) => set({ exploded }),
   setShowBoard: (showBoard) => set({ showBoard }),
+  setPrintPlatformOverlay: (printPlatformOverlay) => set({ printPlatformOverlay }),
+  clearPrintPlatformOverlay: (sourceIdentity) => set((state) => (
+    !state.printPlatformOverlay
+    || (sourceIdentity && state.printPlatformOverlay.sourceIdentity !== sourceIdentity)
+      ? state
+      : { printPlatformOverlay: null }
+  )),
   setViewportModelSource: (viewportModelSource) => {
     versionComparisonSerial += 1;
     set({
       viewportModelSource,
+      printPlatformOverlay: null,
       wallThicknessVisible: false,
       wallThicknessPicking: false,
       wallThicknessSelection: null,
@@ -771,6 +785,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       exploded: false,
       showBoard: true,
       viewportModelSource: 'cad',
+      printPlatformOverlay: null,
       cadStatus: 'stale',
       cadResult: null,
       cadError: null,
@@ -967,6 +982,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     set({
       importedStlStatus: 'importing',
       importedStlError: null,
+      printPlatformOverlay: null,
       cadFaceSelectionMode: 'off',
       cadFaceSelection: null,
       localCadFeaturePreview: null,
@@ -1061,6 +1077,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
   clearImportedStlModel: () => set({
     importedStlModel: null,
+    printPlatformOverlay: null,
     importedStlStatus: 'idle',
     importedStlError: null,
     localStlEditResult: null,
