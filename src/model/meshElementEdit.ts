@@ -268,6 +268,15 @@ export interface MeshPlanarRegionExtrusionToolVolumeComparison {
   direction: 'equal' | 'higher' | 'lower';
 }
 
+export interface MeshPlanarRegionExtrusionDirectionConsistency {
+  mode: MeshFaceExtrusionMode;
+  status: 'consistent' | 'inconsistent' | 'unchanged';
+  expectedDirection: 'increase' | 'decrease';
+  actualDirection: 'increase' | 'decrease' | 'unchanged';
+  volumeDeltaMm3: number;
+  zeroToleranceMm3: number;
+}
+
 export const MESH_ELEMENT_LABELS: Record<MeshElementKind, string> = {
   vertex: '顶点',
   edge: '边',
@@ -548,6 +557,31 @@ export function createMeshPlanarRegionExtrusionToolVolumeComparison(
     differenceMm3: direction === 'equal' ? 0 : differenceMm3,
     differencePercent: direction === 'equal' ? 0 : differencePercent,
     direction
+  };
+}
+
+/** 复核共面加料或压入的有符号体积变化方向，只描述本次布尔几何结果。 */
+export function createMeshPlanarRegionExtrusionDirectionConsistency(
+  result: MeshElementEditResult,
+  currentRevision: string
+): MeshPlanarRegionExtrusionDirectionConsistency | null {
+  const resultComparison = createMeshPlanarRegionExtrusionResultComparison(result, currentRevision);
+  if (!resultComparison) return null;
+  const rawVolumeDeltaMm3 = result.validation.volumeDeltaMm3;
+  const zeroToleranceMm3 = Math.max(1e-6, resultComparison.toolVolumeMm3 * 1e-6);
+  const actualDirection = Math.abs(rawVolumeDeltaMm3) <= zeroToleranceMm3
+    ? 'unchanged'
+    : rawVolumeDeltaMm3 > 0 ? 'increase' : 'decrease';
+  const expectedDirection = resultComparison.mode === 'add' ? 'increase' : 'decrease';
+  return {
+    mode: resultComparison.mode,
+    status: actualDirection === 'unchanged'
+      ? 'unchanged'
+      : actualDirection === expectedDirection ? 'consistent' : 'inconsistent',
+    expectedDirection,
+    actualDirection,
+    volumeDeltaMm3: actualDirection === 'unchanged' ? 0 : rawVolumeDeltaMm3,
+    zeroToleranceMm3
   };
 }
 

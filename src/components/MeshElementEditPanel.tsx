@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
+  createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
   createMeshPlanarRegionExtrusionToolVolumeComparison,
   createMeshPlanarRegionExtrusionPreviewMetrics,
@@ -126,6 +127,26 @@ export function MeshElementEditPanel() {
       ? createMeshPlanarRegionExtrusionToolVolumeComparison(meshElementEditResult, importedStlModel.revision)
       : null
   ), [importedStlModel, meshElementEditResult]);
+  const meshPlanarRegionExtrusionDirectionConsistency = useMemo(() => (
+    meshElementEditResult && importedStlModel
+      ? createMeshPlanarRegionExtrusionDirectionConsistency(meshElementEditResult, importedStlModel.revision)
+      : null
+  ), [importedStlModel, meshElementEditResult]);
+  const meshPlanarRegionChainStatus = meshPlanarRegionExtrusionDirectionConsistency
+    ? {
+        planar: meshPlanarRegionExtrusionToolVolumeComparison ? '平面估算已计算' : '平面估算不可用',
+        tool: meshPlanarRegionExtrusionToolVolumeComparison
+          ? meshPlanarRegionExtrusionToolVolumeComparison.direction === 'equal'
+            ? '与平面估算一致'
+            : `${meshPlanarRegionExtrusionToolVolumeComparison.direction === 'higher' ? '高于' : '低于'}平面估算`
+          : '实际体积已测量',
+        boolean: meshPlanarRegionExtrusionDirectionConsistency.status === 'consistent'
+          ? meshPlanarRegionExtrusionDirectionConsistency.mode === 'add' ? '加料增量一致' : '压入减量一致'
+          : meshPlanarRegionExtrusionDirectionConsistency.status === 'unchanged'
+            ? '体积近似未变化'
+            : meshPlanarRegionExtrusionDirectionConsistency.mode === 'add' ? '加料却发生减量' : '压入却发生增量'
+      }
+    : null;
   const moveInvalid = !displacement
     || [displacement.x, displacement.y, displacement.z].every((value) => value === 0)
     || [displacement.x, displacement.y, displacement.z].some((value) => Math.abs(value) > 500);
@@ -470,6 +491,27 @@ export function MeshElementEditPanel() {
                     {' · '}
                     {meshPlanarRegionExtrusionToolVolumeComparison.differencePercent > 0 ? '+' : ''}{meshPlanarRegionExtrusionToolVolumeComparison.differencePercent.toFixed(2)}%
                   </strong>
+                </div>
+              )}
+              {meshPlanarRegionExtrusionDirectionConsistency && meshPlanarRegionChainStatus && (
+                <div
+                  className={`mesh-planar-region-chain-status ${meshPlanarRegionExtrusionDirectionConsistency.status}`}
+                  aria-label="三段体积链路状态"
+                >
+                  <span><small>平面轮廓</small><strong>{meshPlanarRegionChainStatus.planar}</strong></span>
+                  <span><small>工具体</small><strong>{meshPlanarRegionChainStatus.tool}</strong></span>
+                  <span><small>布尔作用</small><strong>{meshPlanarRegionChainStatus.boolean}</strong></span>
+                </div>
+              )}
+              {meshPlanarRegionExtrusionDirectionConsistency?.status === 'inconsistent' && (
+                <div className="mesh-planar-region-direction-warning" role="alert">
+                  <strong>几何方向安全警告</strong>
+                  <span>
+                    结果声明为{meshPlanarRegionExtrusionDirectionConsistency.mode === 'add' ? '向外加料' : '向内压入'}，
+                    但模型体积实际{meshPlanarRegionExtrusionDirectionConsistency.actualDirection === 'increase' ? '增加' : '减少'}
+                    {Math.abs(meshPlanarRegionExtrusionDirectionConsistency.volumeDeltaMm3).toFixed(2)} 立方毫米；
+                    请勿将其视为正常{meshPlanarRegionExtrusionDirectionConsistency.mode === 'add' ? '加料' : '压入'}结果。
+                  </span>
                 </div>
               )}
               <small className="mesh-planar-region-result-note">

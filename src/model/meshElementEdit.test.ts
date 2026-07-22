@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectMeshElementBoxSelection,
+  createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
   createMeshPlanarRegionExtrusionToolVolumeComparison,
   createMeshElementSelectionSet,
@@ -708,6 +709,18 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     };
   }
 
+  function resultWithDirection(
+    mode: 'add' | 'cut',
+    volumeDeltaMm3: number,
+    toolVolumeMm3 = 200
+  ) {
+    const candidate = result(toolVolumeMm3);
+    candidate.faceExtrusionMode = mode;
+    candidate.validation.volumeAfterMm3 = candidate.validation.volumeBeforeMm3 + volumeDeltaMm3;
+    candidate.validation.volumeDeltaMm3 = volumeDeltaMm3;
+    return candidate;
+  }
+
   it('识别一致、高于和低于平面估算的工具体积', () => {
     expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200), '修订-偏差')).toEqual({
       planarEstimatedVolumeMm3: 200,
@@ -756,5 +769,77 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(100), '修订-偏差')?.differencePercent).toBe(-50);
     expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(301), '修订-偏差')).toBeNull();
     expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(99), '修订-偏差')).toBeNull();
+  });
+
+  it('复核加料增量和压入减量方向一致', () => {
+    const addComparison = createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('add', 180),
+      '修订-偏差'
+    );
+    expect(addComparison).toMatchObject({
+      mode: 'add',
+      status: 'consistent',
+      expectedDirection: 'increase',
+      actualDirection: 'increase',
+      volumeDeltaMm3: 180
+    });
+    expect(addComparison?.zeroToleranceMm3).toBeCloseTo(0.0002, 12);
+    const cutComparison = createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('cut', -180),
+      '修订-偏差'
+    );
+    expect(cutComparison).toMatchObject({
+      mode: 'cut',
+      status: 'consistent',
+      expectedDirection: 'decrease',
+      actualDirection: 'decrease',
+      volumeDeltaMm3: -180
+    });
+    expect(cutComparison?.zeroToleranceMm3).toBeCloseTo(0.0002, 12);
+  });
+
+  it('识别加料减量和压入增量的方向矛盾', () => {
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('add', -50),
+      '修订-偏差'
+    )?.status).toBe('inconsistent');
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('cut', 50),
+      '修订-偏差'
+    )?.status).toBe('inconsistent');
+  });
+
+  it('把工具体百万分之一内的变化归一为近似未变化', () => {
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('add', 0.0001),
+      '修订-偏差'
+    )).toMatchObject({
+      mode: 'add',
+      status: 'unchanged',
+      actualDirection: 'unchanged',
+      volumeDeltaMm3: 0
+    });
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('cut', -0.0001),
+      '修订-偏差'
+    )?.status).toBe('unchanged');
+  });
+
+  it('对过期修订、缺失模式、非有限和明显异常体积变化安全降级', () => {
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('add', 180),
+      '其他修订'
+    )).toBeNull();
+    const missingMode = resultWithDirection('add', 180);
+    missingMode.faceExtrusionMode = undefined;
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(missingMode, '修订-偏差')).toBeNull();
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('add', Number.NaN),
+      '修订-偏差'
+    )).toBeNull();
+    expect(createMeshPlanarRegionExtrusionDirectionConsistency(
+      resultWithDirection('add', 201),
+      '修订-偏差'
+    )).toBeNull();
   });
 });
