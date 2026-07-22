@@ -625,6 +625,34 @@ export function createMeshPlanarRegionExtrusionDiagnosticSummary(
   ].join('\n');
 }
 
+export type MeshPlanarRegionCodexDraftAppendStatus = 'appended' | 'duplicate' | 'invalid';
+
+/** 把当前几何诊断包装为仅供用户审阅的 Codex 中文分析请求，不触发任何执行。 */
+export function createMeshPlanarRegionCodexAnalysisRequest(summary: string): string | null {
+  const trimmedSummary = summary.trim();
+  if (!trimmedSummary) return null;
+  return [
+    '【共面区域几何诊断分析请求】',
+    '请分析以下当前模型的共面区域几何诊断：',
+    trimmedSummary,
+    '请分析几何链路是否合理并提出下一步修改建议。'
+  ].join('\n');
+}
+
+/** 保留已有指令并追加诊断分析块；同一完整诊断块已存在时不重复插入。 */
+export function appendMeshPlanarRegionCodexAnalysisDraft(
+  currentDraft: string,
+  summary: string
+): { draft: string; status: MeshPlanarRegionCodexDraftAppendStatus } {
+  const request = createMeshPlanarRegionCodexAnalysisRequest(summary);
+  if (!request) return { draft: currentDraft, status: 'invalid' };
+  if (currentDraft.includes(request)) return { draft: currentDraft, status: 'duplicate' };
+  return {
+    draft: currentDraft.trimEnd() ? `${currentDraft.trimEnd()}\n\n${request}` : request,
+    status: 'appended'
+  };
+}
+
 /** 通过调用方提供的写入函数复制诊断文本，便于测试并隔离 Clipboard API。 */
 export async function copyMeshPlanarRegionExtrusionDiagnosticSummary(
   summary: string,

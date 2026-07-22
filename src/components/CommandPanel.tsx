@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, KeyboardEvent } from 'react';
 import { Bot, CornerDownLeft, MapPin, Sparkles, X } from 'lucide-react';
 import { describeCadEdgeGeometryType, describeCadSurfaceGeometryType } from '../model/localCadFeature';
 import { WALL_THICKNESS_LABELS } from '../model/wallThickness';
@@ -24,8 +24,13 @@ const cadEdgeSuggestions = ['将这条边做 2 毫米圆角', '将这条边做 1
 const cadManualEdgeChainSuggestions = ['将这些边做 2 毫米圆角', '将这些边做 1 毫米倒角'];
 const uploadedStlSuggestions = ['这里增加一个直径 8 毫米、高 2 毫米的凸台', '这里开一个直径 4 毫米、深 6 毫米的孔'];
 
-export function CommandPanel() {
-  const [command, setCommand] = useState('');
+interface CommandPanelProps {
+  command: string;
+  onCommandChange: (command: string) => void;
+}
+
+/** 展示当前页面的临时建模指令草稿；只有用户提交表单时才执行指令。 */
+export function CommandPanel({ command, onCommandChange }: CommandPanelProps) {
   const messages = useModelStore((state) => state.messages);
   const executeCommand = useModelStore((state) => state.executeCommand);
   const aiStatus = useModelStore((state) => state.aiStatus);
@@ -65,7 +70,13 @@ export function CommandPanel() {
     const trimmed = command.trim();
     if (!trimmed) return;
     void executeCommand(trimmed);
-    setCommand('');
+    onCommandChange('');
+  };
+
+  const submitWithShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   };
 
   const badge = aiStatus === 'running'
@@ -147,15 +158,16 @@ export function CommandPanel() {
       )}
       <div className="suggestions">
         {suggestions.map((suggestion) => (
-          <button key={suggestion} onClick={() => setCommand(suggestion)}>
+          <button key={suggestion} onClick={() => onCommandChange(suggestion)}>
             {suggestion}
           </button>
         ))}
       </div>
       <form onSubmit={submit} className="command-form">
-        <input
+        <textarea
           value={command}
-          onChange={(event) => setCommand(event.target.value)}
+          onChange={(event) => onCommandChange(event.target.value)}
+          onKeyDown={submitWithShortcut}
           placeholder={cadFaceSelection
             ? cadFaceSelection.selectionMode === 'edge-chain'
               ? '例如：将这些边做 2 毫米圆角'
@@ -166,6 +178,7 @@ export function CommandPanel() {
                 : '例如：在这里开长 14 毫米、宽 5 毫米、深 4 毫米的槽孔'
             : uploadedRegionSelected ? '例如：这里增加直径 8 毫米、高 2 毫米的凸台' : '例如：圆角改成 5 毫米，壁厚设置为 2.2 毫米'}
           disabled={aiStatus === 'running'}
+          aria-label="建模指令草稿"
         />
         <button type="submit" aria-label="执行建模指令" disabled={aiStatus === 'running'}>
           <CornerDownLeft size={16} />

@@ -30,6 +30,7 @@ import { SceneTree } from './components/SceneTree';
 import { VersionHistoryDialog } from './components/VersionHistoryDialog';
 import { generatedDownloadUrl } from './model/cad';
 import { getOuterDimensions } from './model/defaults';
+import { appendMeshPlanarRegionCodexAnalysisDraft } from './model/meshElementEdit';
 import {
   createTransformedExportObject,
   manufacturingSplitPresentationId,
@@ -51,6 +52,7 @@ function App() {
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [manufacturingOpen, setManufacturingOpen] = useState(false);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [commandDraft, setCommandDraft] = useState('');
   const imageInput = useRef<HTMLInputElement>(null);
   const initialParameters = useRef(true);
   const undo = useModelStore((state) => state.undo);
@@ -88,6 +90,11 @@ function App() {
   const setCadFaceSelectionMode = useModelStore((state) => state.setCadFaceSelectionMode);
   const clearCadFaceSelection = useModelStore((state) => state.clearCadFaceSelection);
   const versionGeometryComparisonMode = useModelStore((state) => state.versionGeometryComparisonMode);
+
+  /** 保留当前页面已有指令，并去重追加用户主动选择的几何诊断分析请求。 */
+  const appendCodexDiagnostic = (summary: string) => {
+    setCommandDraft((current) => appendMeshPlanarRegionCodexAnalysisDraft(current, summary).draft);
+  };
   const modelExportFiles: Array<readonly [string, string]> = cadResult
     ? [
         ...cadResult.parts.flatMap((part) => [
@@ -510,8 +517,8 @@ function App() {
             <span>{viewportModelSource === 'uploaded-stl' ? '上传 STL 实体' : viewportModelSource === 'cad' ? 'OpenCascade 实体' : '快速预览'}</span>
           </div>
           <ModelViewport />
-          <MeshElementEditPanel />
-          <CommandPanel />
+          <MeshElementEditPanel onAppendCodexDiagnostic={appendCodexDiagnostic} />
+          <CommandPanel command={commandDraft} onCommandChange={setCommandDraft} />
           <button
             type="button"
             className="history-indicator"

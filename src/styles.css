@@ -114,9 +114,9 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .suggestions { display: flex; gap: 5px; overflow-x: auto; padding: 3px 10px 7px; scrollbar-width: none; }
 .suggestions button { white-space: nowrap; background: transparent; border: 1px solid #3a3d43; color: #777c84; border-radius: 12px; padding: 3px 7px; font-size: 8px; cursor: pointer; }
 .suggestions button:hover { color: #e0a439; border-color: #8d641d; }
-.command-form { height: 39px; display: grid; grid-template-columns: 1fr 34px; border-top: 1px solid #303238; }
-.command-form input { border: 0; outline: 0; background: transparent; color: #d9dad7; padding: 0 11px; font-size: 10px; }
-.command-form input::placeholder { color: #575c64; }
+.command-form { min-height: 52px; display: grid; grid-template-columns: 1fr 34px; border-top: 1px solid #303238; }
+.command-form textarea { min-height: 52px; max-height: 132px; resize: vertical; border: 0; outline: 0; background: transparent; color: #d9dad7; padding: 9px 11px; font: inherit; font-size: 10px; line-height: 1.45; }
+.command-form textarea::placeholder { color: #575c64; }
 .command-form button { border: 0; background: transparent; color: #d99929; display: grid; place-items: center; cursor: pointer; }
 .command-form button:hover { background: #2a2c31; }
 .command-region-context {
@@ -1243,11 +1243,13 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-result-comparison.cut .mesh-planar-region-chain-status span { background: rgba(38, 20, 17, .44); }
 .mesh-planar-region-direction-warning { display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid rgba(235, 105, 105, .58); border-radius: 4px; color: #d99a9a; background: rgba(72, 20, 20, .46); font-size: 7px; line-height: 1.45; }
 .mesh-planar-region-direction-warning strong { color: #f19a9a; font-size: 7px; }
-.mesh-planar-region-diagnostic-copy { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.mesh-planar-region-diagnostic-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 7px; min-width: 0; }
 .mesh-planar-region-diagnostic-copy button { flex: 0 0 auto; min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }
 .mesh-planar-region-diagnostic-copy button:hover:not(:disabled) { border-color: rgba(97, 230, 209, .72); color: #d6f7f0; background: rgba(25, 74, 66, .62); }
+.mesh-planar-region-diagnostic-copy button.codex-analysis { border-color: rgba(222, 164, 55, .5); color: #e7c27b; background: rgba(73, 49, 15, .48); }
+.mesh-planar-region-diagnostic-copy button.codex-analysis:hover:not(:disabled) { border-color: rgba(237, 184, 81, .75); color: #ffe1a6; background: rgba(91, 61, 18, .6); }
 .mesh-planar-region-diagnostic-copy button:disabled { cursor: not-allowed; opacity: .42; }
-.mesh-planar-region-diagnostic-copy span { min-width: 0; color: #79a89f; font-size: 6px; line-height: 1.4; }
+.mesh-planar-region-diagnostic-copy span { flex-basis: 100%; min-width: 0; color: #79a89f; font-size: 6px; line-height: 1.4; }
 .mesh-planar-region-diagnostic-copy.failed button { border-color: rgba(235, 105, 105, .58); color: #f0a0a0; background: rgba(72, 20, 20, .4); }
 .mesh-planar-region-diagnostic-copy.failed span { color: #e78f8f; }
 .mesh-planar-region-result-comparison.cut .mesh-planar-region-diagnostic-copy button { border-color: rgba(255, 159, 135, .5); color: #ffd1c6; background: rgba(58, 29, 23, .56); }

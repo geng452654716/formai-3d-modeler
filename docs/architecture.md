@@ -691,3 +691,14 @@ nestingDepth: 二维包含深度
 2026-07-22 架构验证：针对性测试 36/36、前端 209/209、生产构建和差异检查通过。真实 Worker 的 655.20 平方毫米加料结果生成完整十行摘要；受支持浏览器上下文可读取复制文本，干净新页面的复制反馈和布局正常且 Console 无错误。
 
 **下一阶段架构方向：**建立无自动提交的本地“Codex 指令草稿注入”边界。由纯函数生成诊断分析请求，使用页面内事件或受控回调把文本追加到现有指令输入状态，保留用户原文并按诊断标识去重；不得触发执行函数、网络请求、Worker 或版本写入。
+
+### 61. 连续共面区域诊断请求本地草稿注入架构（已实现）
+
+- `createMeshPlanarRegionCodexAnalysisRequest(summary)` 负责把非空诊断包装为稳定中文请求；`appendMeshPlanarRegionCodexAnalysisDraft(currentDraft, summary)` 负责保留既有文字、追加双换行分隔块并按完整请求去重，返回 `appended / duplicate / invalid` 状态。
+- `App` 持有仅在当前页面存活的 `commandDraft` React 状态，并通过受控回调连接 `MeshElementEditPanel` 与 `CommandPanel`。没有引入全局事件、Zustand 字段、Tauri 命令、Python Worker 输出、项目版本或快照迁移。
+- `MeshElementEditPanel` 只在用户点击“交给 Codex 分析”时传递当前 `createMeshPlanarRegionExtrusionDiagnosticSummary` 结果；摘要为 `null` 时按钮禁用，反馈与当前摘要绑定，结果变化后旧反馈不继续生效。
+- `CommandPanel` 改为受控多行草稿；只有表单提交或 Command/Ctrl + Enter 才调用已有 `executeCommand`，草稿注入回调本身不接触 Codex/API、网络或 Worker。
+
+2026-07-22 架构验证：纯函数新增请求生成、保留原文、重复去重和失效摘要测试，针对性测试 40/40、前端 213/213、生产构建和差异检查通过。真实 Worker 的 655.20 平方毫米加料结果成功追加到已有用户草稿，连续点击保持单个请求块，消息数量未变化；验收页 Console 无错误。
+
+**下一阶段架构方向：**为完整系统诊断请求建立可识别的本地块边界和精确移除纯函数。只有草稿中仍存在未被修改的完整块时才能安全删除；删除后归一化相邻空行并保留块前后用户文字，已手工编辑的块只显示状态提示，不做模糊匹配或破坏性删除。

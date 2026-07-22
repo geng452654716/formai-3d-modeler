@@ -83,8 +83,12 @@ async function writeDiagnosticTextToClipboard(text: string) {
   if (!copied) throw new Error('当前环境拒绝复制诊断文本');
 }
 
+interface MeshElementEditPanelProps {
+  onAppendCodexDiagnostic: (summary: string) => void;
+}
+
 /** 为精确 CAD 创建受管网格分支，并提供网格选择集合的受限变换入口。 */
-export function MeshElementEditPanel() {
+export function MeshElementEditPanel({ onAppendCodexDiagnostic }: MeshElementEditPanelProps) {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
   const importedStlModel = useModelStore((state) => state.importedStlModel);
   const importedStlStatus = useModelStore((state) => state.importedStlStatus);
@@ -126,6 +130,7 @@ export function MeshElementEditPanel() {
     summary: string;
     status: 'copied' | 'failed';
   } | null>(null);
+  const [diagnosticDraftFeedback, setDiagnosticDraftFeedback] = useState<string | null>(null);
 
   const displacement = useMemo<MeshPointMm | null>(() => {
     const values = [parseFinite(x), parseFinite(y), parseFinite(z)];
@@ -177,6 +182,7 @@ export function MeshElementEditPanel() {
   const diagnosticCopyStatus = diagnosticCopyFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
     ? diagnosticCopyFeedback.status
     : 'idle';
+  const diagnosticDraftCurrent = diagnosticDraftFeedback === meshPlanarRegionExtrusionDiagnosticSummary;
   const meshPlanarRegionChainStatus = meshPlanarRegionExtrusionDirectionConsistency
     ? {
         planar: meshPlanarRegionExtrusionToolVolumeComparison ? '平面估算已计算' : '平面估算不可用',
@@ -246,6 +252,13 @@ export function MeshElementEditPanel() {
       writeDiagnosticTextToClipboard
     );
     setDiagnosticCopyFeedback({ summary: meshPlanarRegionExtrusionDiagnosticSummary, status });
+  }
+
+  /** 仅把当前有效诊断追加到页面内草稿，仍由用户检查并手动执行。 */
+  function appendPlanarRegionDiagnosticToCodexDraft() {
+    if (!meshPlanarRegionExtrusionDiagnosticSummary) return;
+    onAppendCodexDiagnostic(meshPlanarRegionExtrusionDiagnosticSummary);
+    setDiagnosticDraftFeedback(meshPlanarRegionExtrusionDiagnosticSummary);
   }
 
   async function submitCadMeshBranch() {
@@ -577,8 +590,17 @@ export function MeshElementEditPanel() {
                 >
                   {diagnosticCopyStatus === 'copied' ? '已复制几何诊断' : '复制几何诊断'}
                 </button>
+                <button
+                  type="button"
+                  className="codex-analysis"
+                  onClick={appendPlanarRegionDiagnosticToCodexDraft}
+                  disabled={!meshPlanarRegionExtrusionDiagnosticSummary}
+                >
+                  交给 Codex 分析
+                </button>
                 {diagnosticCopyStatus === 'copied' && <span>已复制到系统剪贴板，不会自动发送或保存。</span>}
                 {diagnosticCopyStatus === 'failed' && <span role="alert">复制失败，请检查剪贴板权限。</span>}
+                {diagnosticDraftCurrent && <span>已填入本地指令草稿，请检查后手动执行。</span>}
               </div>
               <small className="mesh-planar-region-result-note">
                 {meshPlanarRegionExtrusionToolVolumeComparison

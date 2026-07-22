@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendMeshPlanarRegionCodexAnalysisDraft,
   collectMeshElementBoxSelection,
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
+  createMeshPlanarRegionCodexAnalysisRequest,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
@@ -910,5 +912,50 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     await expect(copyMeshPlanarRegionExtrusionDiagnosticSummary('诊断文本', async () => {
       throw new Error('剪贴板不可用');
     })).resolves.toBe('failed');
+  });
+
+  it('生成稳定的全中文 Codex 几何分析请求但不包含自动执行语义', () => {
+    const request = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n模型体积变化：+180.00 立方毫米');
+    expect(request).toBe([
+      '【共面区域几何诊断分析请求】',
+      '请分析以下当前模型的共面区域几何诊断：',
+      '共面区域几何诊断',
+      '模型体积变化：+180.00 立方毫米',
+      '请分析几何链路是否合理并提出下一步修改建议。'
+    ].join('\n'));
+    expect(request).not.toContain('执行建模指令');
+    expect(createMeshPlanarRegionCodexAnalysisRequest('   ')).toBeNull();
+  });
+
+  it('保留用户已有指令并在后方追加诊断分析块', () => {
+    const result = appendMeshPlanarRegionCodexAnalysisDraft(
+      '请先保留我写的检查要求。  ',
+      '共面区域几何诊断\n方向状态：加料增量一致'
+    );
+    expect(result.status).toBe('appended');
+    expect(result.draft).toBe([
+      '请先保留我写的检查要求。',
+      '',
+      '【共面区域几何诊断分析请求】',
+      '请分析以下当前模型的共面区域几何诊断：',
+      '共面区域几何诊断',
+      '方向状态：加料增量一致',
+      '请分析几何链路是否合理并提出下一步修改建议。'
+    ].join('\n'));
+  });
+
+  it('同一诊断重复追加时保持草稿不变', () => {
+    const first = appendMeshPlanarRegionCodexAnalysisDraft('', '共面区域几何诊断\n实际作用比例：90.00%');
+    const repeated = appendMeshPlanarRegionCodexAnalysisDraft(first.draft, '共面区域几何诊断\n实际作用比例：90.00%');
+    expect(first.status).toBe('appended');
+    expect(repeated).toEqual({ draft: first.draft, status: 'duplicate' });
+    expect(repeated.draft.match(/【共面区域几何诊断分析请求】/g)).toHaveLength(1);
+  });
+
+  it('摘要失效时不改变已有 Codex 指令草稿', () => {
+    expect(appendMeshPlanarRegionCodexAnalysisDraft('已有指令', '  ')).toEqual({
+      draft: '已有指令',
+      status: 'invalid'
+    });
   });
 });
