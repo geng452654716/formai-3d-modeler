@@ -1101,7 +1101,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       || selection.selectionMethod !== 'click'
       || selection.elements.length !== 1
     )) {
-      set({ meshElementEditError: '三角面法向编辑第一版必须且只能点击选择一个三角面' });
+      set({ meshElementEditError: '连续共面区域法向编辑必须且只能点击选择一个种子三角面' });
       return null;
     }
     const selectionCount = selection.elements.length;
@@ -1111,7 +1111,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         ? '统一旋转'
         : operation.kind === 'scale'
           ? '均匀缩放'
-          : operation.mode === 'add' ? '三角面向外加料' : '三角面向内压入';
+          : operation.mode === 'add' ? '共面区域向外加料' : '共面区域向内压入';
     set({
       meshElementEditStatus: 'editing',
       meshElementEditError: null,
@@ -1185,7 +1185,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
             ? `以几何中心按 ${result.scaleFactor} 倍均匀缩放`
             : `${result.faceExtrusionMode === 'add' ? '沿真实外法线加料' : '沿真实内法线压入'} ${result.distanceMm} 毫米`;
       const editStatistics = result.operation === 'extrude-face'
-        ? `工具体积 ${result.toolVolumeMm3?.toFixed(2) ?? '未知'} 立方毫米`
+        ? `自动扩展 ${result.affectedTriangleCount ?? 1} 个连续共面三角面、区域面积 ${result.regionAreaMm2?.toFixed(2) ?? '未知'} 平方毫米、工具体积 ${result.toolVolumeMm3?.toFixed(2) ?? '未知'} 立方毫米`
         : `同步更新 ${result.movedCoordinateCount} 个源坐标、${result.movedVertexOccurrenceCount} 个 STL 顶点副本`;
       set((current) => ({
         messages: current.messages.concat({

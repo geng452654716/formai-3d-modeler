@@ -289,7 +289,7 @@ describe('上传 STL 网格元素批量编辑', () => {
     expect(useModelStore.getState().messages.at(-1)?.content).toContain('按 1.2 倍均匀缩放');
   });
 
-  it('点击单个三角面可沿真实外法线加料并创建中文版本', async () => {
+  it('点击种子三角面可扩展连续共面区域并沿真实外法线加料', async () => {
     const faceSelection = createMeshElementSelectionSet([
       { ...selection, kind: 'face', elementIndex: 0 }
     ], 'click')!;
@@ -299,7 +299,12 @@ describe('上传 STL 网格元素批量编辑', () => {
       faceExtrusionMode: 'add',
       distanceMm: 2,
       outwardNormal: { x: 0, y: 0, z: 1 },
-      toolVolumeMm3: 42,
+      affectedTriangleCount: 2,
+      regionAreaMm2: 100,
+      boundaryLoopCount: 1,
+      normalToleranceDegrees: 0.5,
+      planeToleranceMm: 0.001,
+      toolVolumeMm3: 202,
       movedCoordinateCount: 0,
       movedVertexOccurrenceCount: 0,
       validation: {
@@ -328,12 +333,12 @@ describe('上传 STL 网格元素批量编辑', () => {
       selection: faceSelection,
       operation: { kind: 'extrude-face', mode: 'add', distanceMm: 2 }
     });
-    expect(useModelStore.getState().versions.at(-1)?.label).toBe('三角面向外加料上传模型');
+    expect(useModelStore.getState().versions.at(-1)?.label).toBe('共面区域向外加料上传模型');
     expect(useModelStore.getState().messages.at(-1)?.content).toContain('沿真实外法线加料 2 毫米');
-    expect(useModelStore.getState().messages.at(-1)?.content).toContain('工具体积 42.00 立方毫米');
+    expect(useModelStore.getState().messages.at(-1)?.content).toContain('自动扩展 2 个连续共面三角面、区域面积 100.00 平方毫米、工具体积 202.00 立方毫米');
   });
 
-  it('三角面法向编辑在 Store 直接拒绝框选、多面或非面请求', async () => {
+  it('连续共面区域法向编辑在 Store 直接拒绝框选、多种子或非面请求', async () => {
     const boxedFaces = createMeshElementSelectionSet([
       { ...selection, kind: 'face', elementIndex: 0 },
       { ...selection, kind: 'face', triangleIndex: 5, elementIndex: 0 }
@@ -349,7 +354,7 @@ describe('上传 STL 网格元素批量编辑', () => {
     })).toBeNull();
     expect(backendMocks.runMeshElementEdit).not.toHaveBeenCalled();
     expect(useModelStore.getState().meshElementEditError)
-      .toBe('三角面法向编辑第一版必须且只能点击选择一个三角面');
+      .toBe('连续共面区域法向编辑必须且只能点击选择一个种子三角面');
 
     backendMocks.runMeshElementEdit.mockClear();
     useModelStore.getState().setMeshElementEditMode('vertex');
@@ -361,7 +366,7 @@ describe('上传 STL 网格元素批量编辑', () => {
     })).toBeNull();
     expect(backendMocks.runMeshElementEdit).not.toHaveBeenCalled();
     expect(useModelStore.getState().meshElementEditError)
-      .toBe('三角面法向编辑第一版必须且只能点击选择一个三角面');
+      .toBe('连续共面区域法向编辑必须且只能点击选择一个种子三角面');
   });
 
   it('Worker 失败时保留最后有效模型和整个集合并显示中文错误', async () => {

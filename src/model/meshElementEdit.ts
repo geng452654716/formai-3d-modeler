@@ -74,6 +74,11 @@ export interface MeshElementEditResult {
   kind: MeshElementKind;
   selectionMethod: MeshElementSelectionMethod;
   selectedElementCount: number;
+  affectedTriangleCount?: number;
+  regionAreaMm2?: number;
+  boundaryLoopCount?: number;
+  normalToleranceDegrees?: number;
+  planeToleranceMm?: number;
   operation: MeshElementTransformKind;
   pivotMm: MeshPointMm;
   displacementMm?: MeshPointMm;

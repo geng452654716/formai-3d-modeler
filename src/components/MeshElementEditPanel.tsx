@@ -35,7 +35,7 @@ const TRANSFORM_MODES: Array<{
   { kind: 'move', label: '位移', icon: Move3d },
   { kind: 'rotate', label: '旋转', icon: Rotate3d },
   { kind: 'scale', label: '缩放', icon: Scaling },
-  { kind: 'extrude-face', label: '法向编辑', icon: Layers3 }
+  { kind: 'extrude-face', label: '共面区域', icon: Layers3 }
 ];
 
 function parseFinite(value: string) {
@@ -185,7 +185,7 @@ export function MeshElementEditPanel() {
     : meshElementEditMode === 'off'
       ? '请选择一种编辑元素'
       : transformKind === 'extrude-face'
-        ? '请在模型上点击一个三角面；系统会自动确认真实外法线'
+        ? '请点击一个种子三角面；系统会自动扩展同一连续共面区域并确认真实外法线'
         : meshElementSelectionMethod === 'box'
           ? `请按住鼠标拖动框选要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`
           : `请在模型上点击要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
@@ -331,7 +331,7 @@ export function MeshElementEditPanel() {
           {transformKind === 'rotate' && rotationInvalid && <div className="mesh-element-error">旋转角度必须是 -180° 至 180° 之间的非零有限数值</div>}
           {transformKind === 'scale' && scaleInvalid && <div className="mesh-element-error">缩放比例必须在 0.25 至 4 倍之间，且不能等于 1</div>}
           {transformKind === 'extrude-face' && faceExtrusionDistanceInvalid && <div className="mesh-element-error">作用距离必须在 0.20 至 100.00 毫米之间</div>}
-          {transformKind === 'extrude-face' && faceExtrusionSelectionInvalid && <div className="mesh-element-error">请点击选择当前修订中的单个三角面</div>}
+          {transformKind === 'extrude-face' && faceExtrusionSelectionInvalid && <div className="mesh-element-error">请点击选择当前修订中的一个种子三角面</div>}
 
           <div className="mesh-element-actions">
             <button type="button" className="mesh-element-apply" onClick={() => void submitTransform()} disabled={!selectionCurrent || operationInvalid || isEditing}>
@@ -345,7 +345,7 @@ export function MeshElementEditPanel() {
       <footer>
         <span>旋转和缩放以选择集合唯一源坐标的几何中心为枢轴；旋转使用源模型单轴，缩放比例限制为 0.25 至 4 倍。</span>
         <span>单次最多选择 {MAX_MESH_ELEMENT_SELECTIONS} 个同类元素；框选可能包含被遮挡区域中的元素。</span>
-        <span>法向编辑只接受单个点击三角面，方向由 OpenCascade 实体内外分类确认，不信任 STL 法线字段。</span>
+        <span>共面区域编辑只接受一个点击种子三角面，沿共享无向边扩展连续共面三角面，不跨越锐边或曲面；方向由 OpenCascade 实体内外分类确认。</span>
         <span>修改后仍会重新检查退化面、封闭性、实体有效性、Solid 数量和体积。</span>
       </footer>
     </aside>

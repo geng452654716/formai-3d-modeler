@@ -353,7 +353,7 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
 }
 
 
-/** 对任意受管单 Solid 网格执行集合变换或单三角面法向加料与压入。 */
+/** 对任意受管单 Solid 网格执行集合变换或连续共面区域法向加料与压入。 */
 export async function runMeshElementEdit(request: MeshElementTransformRequest) {
   const operationPayload = request.operation.kind === 'move'
     ? {

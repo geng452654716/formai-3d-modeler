@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,13 @@ from unittest.mock import patch
 import cadquery as cq
 from cadquery import exporters
 
-from edit_mesh_element import edit_mesh_element, edit_mesh_elements, extrude_mesh_face, transform_mesh_elements
+from edit_mesh_element import (
+    _expand_coplanar_region,
+    edit_mesh_element,
+    edit_mesh_elements,
+    extrude_mesh_face,
+    transform_mesh_elements,
+)
 from export_transformed_model import read_stl
 from split_and_cap import import_stl_as_solid, inspect_stl_file
 
@@ -22,6 +29,22 @@ class MeshElementEditTests(unittest.TestCase):
         manifest = inspect_stl_file(source, root, original_file_name="任意模型.stl")
         working = root / str(manifest["sourceFile"])
         return working, manifest
+
+    def _project_with_top_hole(self, root: Path) -> tuple[Path, dict[str, object]]:
+        """创建顶面中心带贯穿圆孔的通用盒体测试模型。"""
+
+        source = root / "imported-model.stl"
+        model = (
+            cq.Workplane("XY")
+            .box(20, 16, 10, centered=(False, False, False))
+            .faces(">Z")
+            .workplane()
+            .center(10, 8)
+            .hole(4)
+        )
+        exporters.export(model, str(source), tolerance=0.05)
+        manifest = inspect_stl_file(source, root, original_file_name="带贯穿孔的任意模型.stl")
+        return root / str(manifest["sourceFile"]), manifest
 
     def _selection(self, source: Path, triangle_index: int, element_index: int) -> dict[str, object]:
         triangle = read_stl(source)[triangle_index]
@@ -40,7 +63,7 @@ class MeshElementEditTests(unittest.TestCase):
         )
         return self._selection(source, triangle_index, 0)
 
-    def test_adds_and_cuts_single_face_along_classified_outward_normal(self) -> None:
+    def test_adds_and_cuts_continuous_coplanar_region_along_classified_outward_normal(self) -> None:
         for mode, expected_direction in (("add", 1), ("cut", -1)):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -52,14 +75,67 @@ class MeshElementEditTests(unittest.TestCase):
                 self.assertEqual(result["operation"], "extrude-face")
                 self.assertEqual(result["faceExtrusionMode"], mode)
                 self.assertEqual(result["selectedElementCount"], 1)
+                self.assertEqual(result["affectedTriangleCount"], 2)
+                self.assertAlmostEqual(result["regionAreaMm2"], 320.0, places=6)
+                self.assertEqual(result["boundaryLoopCount"], 1)
                 self.assertAlmostEqual(result["outwardNormal"]["z"], 1.0, places=6)
                 self.assertGreater(result["toolVolumeMm3"], 0)
                 self.assertEqual(
                     result["validation"]["volumeDeltaMm3"] > 0,
                     expected_direction > 0,
                 )
+                self.assertAlmostEqual(result["validation"]["volumeDeltaMm3"], expected_direction * 640.0, places=3)
                 self.assertTrue(result["validation"]["watertight"])
                 self.assertEqual(result["validation"]["solidCountAfter"], 1)
+
+    def test_coplanar_region_expansion_does_not_cross_sharp_edges_and_enforces_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, _ = self._project(root)
+            triangles = read_stl(source)
+            seed = int(self._top_face_selection(source)["triangleIndex"])
+            indexes, area_mm2, tolerance_mm = _expand_coplanar_region(triangles, seed, 30.0)
+            self.assertEqual(len(indexes), 2)
+            self.assertAlmostEqual(area_mm2, 320.0, places=6)
+            self.assertGreater(tolerance_mm, 0)
+            self.assertTrue(all(all(abs(point[2] - 10.0) < 1e-6 for point in triangles[index]) for index in indexes))
+            with patch("edit_mesh_element.MAX_PLANAR_REGION_TRIANGLES", 0):
+                with self.assertRaisesRegex(ValueError, "超过 0 个三角面上限"):
+                    _expand_coplanar_region(triangles, seed, 30.0)
+            with patch("edit_mesh_element.MAX_PLANAR_REGION_TRIANGLES", 1):
+                with self.assertRaisesRegex(ValueError, "超过 1 个三角面上限"):
+                    _expand_coplanar_region(triangles, seed, 30.0)
+            with patch("edit_mesh_element.MAX_PLANAR_REGION_AREA_MM2", 100.0):
+                with self.assertRaisesRegex(ValueError, "面积超过 100 平方毫米上限"):
+                    _expand_coplanar_region(triangles, seed, 30.0)
+            with patch("edit_mesh_element.MAX_PLANAR_REGION_AREA_MM2", 200.0):
+                with self.assertRaisesRegex(ValueError, "面积超过 200 平方毫米上限"):
+                    _expand_coplanar_region(triangles, seed, 30.0)
+
+    def test_coplanar_region_preserves_inner_boundary_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project_with_top_hole(root)
+            result = extrude_mesh_face(
+                source,
+                root,
+                str(manifest["revision"]),
+                self._top_face_selection(source),
+                "add",
+                2.0,
+                "click",
+            )
+            expected_area = 20 * 16 - math.pi * 2**2
+            self.assertGreater(result["affectedTriangleCount"], 2)
+            self.assertEqual(result["boundaryLoopCount"], 2)
+            self.assertAlmostEqual(result["regionAreaMm2"], expected_area, delta=0.02)
+            self.assertAlmostEqual(
+                result["validation"]["volumeDeltaMm3"],
+                result["regionAreaMm2"] * 2,
+                delta=0.02,
+            )
+            self.assertTrue(result["validation"]["watertight"])
+            self.assertEqual(result["validation"]["solidCountAfter"], 1)
 
     def test_face_extrusion_prefixes_export_mesh_failure_and_preserves_working_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -74,7 +150,7 @@ class MeshElementEditTests(unittest.TestCase):
                 "edit_mesh_element.import_stl_as_solid",
                 side_effect=[source_import, ValueError("STL 包含 1 条非流形边；当前不会自动猜测拓扑")],
             ):
-                with self.assertRaisesRegex(ValueError, "三角面法向编辑导出结果未通过网格检查.*非流形边"):
+                with self.assertRaisesRegex(ValueError, "连续共面区域法向编辑导出结果未通过网格检查.*非流形边"):
                     extrude_mesh_face(source, root, str(manifest["revision"]), selection, "add", 2.0, "click")
 
             self.assertEqual(source.read_bytes(), working_bytes)

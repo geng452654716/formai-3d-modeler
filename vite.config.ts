@@ -529,7 +529,7 @@ function runMeshElementEditWorker(body: {
       ))) throw new Error('网格元素源坐标必须是安全范围内的有限毫米数值');
     }
   }
-  if (!['move', 'rotate', 'scale', 'extrude-face'].includes(body.operation ?? '')) throw new Error('网格元素操作只能是位移、旋转、缩放或单三角面法向编辑');
+  if (!['move', 'rotate', 'scale', 'extrude-face'].includes(body.operation ?? '')) throw new Error('网格元素操作只能是位移、旋转、缩放或连续共面区域法向编辑');
   const displacement = [body.deltaXmm ?? 0, body.deltaYmm ?? 0, body.deltaZmm ?? 0];
   const rotationAxis = body.rotationAxis;
   const rotationDegrees = body.rotationDegrees ?? 0;
@@ -550,13 +550,13 @@ function runMeshElementEditWorker(body: {
     }
   } else {
     if (body.elementKind !== 'face' || body.selectionMethod !== 'click' || body.selections.length !== 1) {
-      throw new Error('三角面法向编辑第一版必须且只能点击选择一个三角面');
+      throw new Error('连续共面区域法向编辑必须且只能点击选择一个种子三角面');
     }
     if (!['add', 'cut'].includes(body.faceExtrusionMode ?? '')) {
-      throw new Error('三角面法向编辑只能选择向外加料或向内压入');
+      throw new Error('连续共面区域法向编辑只能选择向外加料或向内压入');
     }
     if (!Number.isFinite(body.distanceMm) || body.distanceMm! < 0.2 || body.distanceMm! > 100) {
-      throw new Error('三角面法向距离必须在 0.20 至 100.00 毫米之间');
+      throw new Error('共面区域法向距离必须在 0.20 至 100.00 毫米之间');
     }
   }
   if (!existsSync(meshElementEditWorkerPath)) throw new Error(`未找到网格元素编辑 Worker：${meshElementEditWorkerPath}`);

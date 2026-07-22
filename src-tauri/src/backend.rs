@@ -1610,7 +1610,7 @@ fn validate_mesh_element_selections(
     serde_json::to_string(selections).map_err(|error| format!("无法序列化网格元素选择：{error}"))
 }
 
-/// 校验单三角面法向编辑的选择约束、方向模式和毫米距离。
+/// 校验连续共面区域法向编辑的种子选择、方向模式和毫米距离。
 fn validate_mesh_face_extrusion(
     element_kind: &str,
     selection_method: &str,
@@ -1619,15 +1619,15 @@ fn validate_mesh_face_extrusion(
     distance_mm: Option<f64>,
 ) -> Result<(String, f64), String> {
     if element_kind != "face" || selection_method != "click" || selection_count != 1 {
-        return Err("三角面法向编辑第一版必须且只能点击选择一个三角面".into());
+        return Err("连续共面区域法向编辑必须且只能点击选择一个种子三角面".into());
     }
     let mode = face_extrusion_mode.unwrap_or_default();
     if !matches!(mode.as_str(), "add" | "cut") {
-        return Err("三角面法向编辑只能选择向外加料或向内压入".into());
+        return Err("连续共面区域法向编辑只能选择向外加料或向内压入".into());
     }
     let distance = distance_mm.unwrap_or(0.0);
     if !distance.is_finite() || !(0.2..=100.0).contains(&distance) {
-        return Err("三角面法向距离必须在 0.20 至 100.00 毫米之间".into());
+        return Err("共面区域法向距离必须在 0.20 至 100.00 毫米之间".into());
     }
     Ok((mode, distance))
 }
