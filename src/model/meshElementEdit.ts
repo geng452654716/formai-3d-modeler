@@ -645,10 +645,29 @@ export interface MeshPlanarRegionCodexDraftBlockLocation {
   directionStatus: string;
 }
 
+export interface MeshPlanarRegionCodexDiagnosticFieldDifference {
+  key: string;
+  label: string;
+  previousValue: string;
+  latestValue: string;
+}
+
 const MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS = [
   '【共面区域几何诊断分析请求】',
   '请分析以下当前模型的共面区域几何诊断：',
   '请分析几何链路是否合理并提出下一步修改建议。'
+] as const;
+
+const MESH_PLANAR_REGION_CODEX_DIAGNOSTIC_FIELDS = [
+  ['operation-mode', '操作模式'],
+  ['region-area', '区域面积'],
+  ['distance', '作用距离'],
+  ['planar-estimate', '执行前平面估算'],
+  ['tool-volume', '实际工具体积'],
+  ['tool-deviation', '工具体构造偏差'],
+  ['model-volume-delta', '模型体积变化'],
+  ['effect-ratio', '实际作用比例'],
+  ['direction-status', '方向状态']
 ] as const;
 
 /** 把当前几何诊断包装为仅供用户审阅的 Codex 中文分析请求，不触发任何执行。 */
@@ -714,6 +733,28 @@ export function inspectMeshPlanarRegionCodexAnalysisDraft(
     return { status: 'edited', completeBlockCount: 0, matchedBlock: null };
   }
   return { status: 'none', completeBlockCount: 0, matchedBlock: null };
+}
+
+/** 按稳定中文字段顺序比较唯一旧诊断块和当前最新请求，不完整状态不返回猜测差异。 */
+export function createMeshPlanarRegionCodexDiagnosticFieldDifferences(
+  draft: string,
+  generatedBlocks: readonly string[],
+  latestSummary: string
+): MeshPlanarRegionCodexDiagnosticFieldDifference[] | null {
+  const latestRequest = createMeshPlanarRegionCodexAnalysisRequest(latestSummary);
+  if (!latestRequest) return null;
+  const inspection = inspectMeshPlanarRegionCodexAnalysisDraft(draft, generatedBlocks);
+  if (inspection.status !== 'complete' || !inspection.matchedBlock) return null;
+  if (inspection.matchedBlock === latestRequest) return [];
+  const previousLines = inspection.matchedBlock.split('\n');
+  const latestLines = latestRequest.split('\n');
+  return MESH_PLANAR_REGION_CODEX_DIAGNOSTIC_FIELDS.flatMap(([key, label]) => {
+    const prefix = `${label}：`;
+    const previousValue = previousLines.find((line) => line.startsWith(prefix))?.slice(prefix.length).trim();
+    const latestValue = latestLines.find((line) => line.startsWith(prefix))?.slice(prefix.length).trim();
+    if (!previousValue || !latestValue || previousValue === latestValue) return [];
+    return [{ key, label, previousValue, latestValue }];
+  });
 }
 
 /** 为唯一完整诊断块返回精确字符范围和只读摘要；不安全状态不猜测位置。 */

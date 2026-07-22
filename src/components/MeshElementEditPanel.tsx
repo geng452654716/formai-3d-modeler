@@ -12,6 +12,7 @@ import {
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
   type MeshElementEditMode,
+  type MeshPlanarRegionCodexDiagnosticFieldDifference,
   type MeshElementSelectionMethod,
   type MeshElementTransformKind,
   type MeshElementTransformOperation,
@@ -88,12 +89,14 @@ type CodexDiagnosticDraftApplyStatus = 'appended' | 'replaced' | 'duplicate' | '
 
 interface MeshElementEditPanelProps {
   codexDiagnosticDraftAction: CodexDiagnosticDraftAction;
+  codexDiagnosticFieldDifferences: MeshPlanarRegionCodexDiagnosticFieldDifference[] | null;
   onApplyCodexDiagnostic: (summary: string) => CodexDiagnosticDraftApplyStatus;
 }
 
 /** 为精确 CAD 创建受管网格分支，并提供网格选择集合的受限变换入口。 */
 export function MeshElementEditPanel({
   codexDiagnosticDraftAction,
+  codexDiagnosticFieldDifferences,
   onApplyCodexDiagnostic
 }: MeshElementEditPanelProps) {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
@@ -598,6 +601,20 @@ export function MeshElementEditPanel({
                   </span>
                 </div>
               )}
+              {codexDiagnosticDraftAction === 'replace' && codexDiagnosticFieldDifferences?.length ? (
+                <div className="mesh-planar-region-diagnostic-differences" aria-label="诊断字段变化">
+                  <strong>最新诊断将更新 {codexDiagnosticFieldDifferences.length} 项</strong>
+                  <ul>
+                    {codexDiagnosticFieldDifferences.map((difference) => (
+                      <li key={difference.key}>
+                        <span>{difference.label}</span>
+                        <code>{difference.previousValue} → {difference.latestValue}</code>
+                      </li>
+                    ))}
+                  </ul>
+                  <small>这里只显示变化字段；点击替换前不会修改草稿或执行指令。</small>
+                </div>
+              ) : null}
               <div className={`mesh-planar-region-diagnostic-copy ${diagnosticCopyStatus}`} aria-live="polite">
                 <button
                   type="button"

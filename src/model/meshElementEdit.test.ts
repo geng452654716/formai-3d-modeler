@@ -5,6 +5,7 @@ import {
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionCodexAnalysisRequest,
   createMeshPlanarRegionCodexDraftBlockLocation,
+  createMeshPlanarRegionCodexDiagnosticFieldDifferences,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
@@ -963,6 +964,54 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     });
   });
 
+
+  it('按固定业务顺序返回旧诊断到最新诊断的变化字段', () => {
+    const oldSummary = [
+      '共面区域几何诊断',
+      '操作模式：向外加料',
+      '区域面积：100.00 平方毫米',
+      '作用距离：2.00 毫米',
+      '执行前平面估算：200.00 立方毫米',
+      '实际工具体积：210.00 立方毫米',
+      '工具体构造偏差：高于 10.00 立方毫米（+5.00%）',
+      '模型体积变化：+180.00 立方毫米',
+      '实际作用比例：85.71%',
+      '方向状态：加料增量一致'
+    ].join('\n');
+    const latestSummary = oldSummary
+      .replace('作用距离：2.00 毫米', '作用距离：3.00 毫米')
+      .replace('执行前平面估算：200.00 立方毫米', '执行前平面估算：300.00 立方毫米')
+      .replace('实际作用比例：85.71%', '实际作用比例：90.00%');
+    const oldBlock = createMeshPlanarRegionCodexAnalysisRequest(oldSummary)!;
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(oldBlock, [oldBlock], latestSummary)).toEqual([
+      { key: 'distance', label: '作用距离', previousValue: '2.00 毫米', latestValue: '3.00 毫米' },
+      { key: 'planar-estimate', label: '执行前平面估算', previousValue: '200.00 立方毫米', latestValue: '300.00 立方毫米' },
+      { key: 'effect-ratio', label: '实际作用比例', previousValue: '85.71%', latestValue: '90.00%' }
+    ]);
+  });
+
+  it('相同字段被过滤且缺失字段不补造差异', () => {
+    const oldSummary = '共面区域几何诊断\n操作模式：向外加料\n作用距离：2.00 毫米';
+    const oldBlock = createMeshPlanarRegionCodexAnalysisRequest(oldSummary)!;
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(
+      oldBlock,
+      [oldBlock],
+      '共面区域几何诊断\n操作模式：向外加料\n作用距离：3.00 毫米\n实际工具体积：300.00 立方毫米'
+    )).toEqual([
+      { key: 'distance', label: '作用距离', previousValue: '2.00 毫米', latestValue: '3.00 毫米' }
+    ]);
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(oldBlock, [oldBlock], oldSummary)).toEqual([]);
+  });
+
+  it('编辑、重复、未登记或空最新摘要不返回诊断字段差异', () => {
+    const summary = '共面区域几何诊断\n作用距离：2.00 毫米';
+    const block = createMeshPlanarRegionCodexAnalysisRequest(summary)!;
+    const latest = '共面区域几何诊断\n作用距离：3.00 毫米';
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(block.replace('2.00', '2.50'), [block], latest)).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(`${block}\n\n${block}`, [block], latest)).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(block, [], latest)).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(block, [block], '  ')).toBeNull();
+  });
 
   it('用最新诊断精确替换唯一旧块并原样保留前后用户文字和换行', () => {
     const oldBlock = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n作用距离：2.00 毫米')!;

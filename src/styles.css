@@ -1255,6 +1255,13 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-result-comparison.cut .mesh-planar-region-chain-status span { background: rgba(38, 20, 17, .44); }
 .mesh-planar-region-direction-warning { display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid rgba(235, 105, 105, .58); border-radius: 4px; color: #d99a9a; background: rgba(72, 20, 20, .46); font-size: 7px; line-height: 1.45; }
 .mesh-planar-region-direction-warning strong { color: #f19a9a; font-size: 7px; }
+.mesh-planar-region-diagnostic-differences { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 7px; border: 1px solid rgba(222, 164, 55, .42); border-radius: 4px; background: rgba(73, 49, 15, .24); }
+.mesh-planar-region-diagnostic-differences > strong { color: #e7c27b; font-size: 7px; }
+.mesh-planar-region-diagnostic-differences ul { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.mesh-planar-region-diagnostic-differences li { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 6px; align-items: start; min-width: 0; }
+.mesh-planar-region-diagnostic-differences li span { color: #9c8763; font-size: 6px; line-height: 1.4; }
+.mesh-planar-region-diagnostic-differences code { min-width: 0; color: #d8c5a2; font-family: inherit; font-size: 6px; line-height: 1.4; overflow-wrap: anywhere; }
+.mesh-planar-region-diagnostic-differences small { color: #837967; font-size: 6px; line-height: 1.4; }
 .mesh-planar-region-diagnostic-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 7px; min-width: 0; }
 .mesh-planar-region-diagnostic-copy button { flex: 0 0 auto; min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }
 .mesh-planar-region-diagnostic-copy button:hover:not(:disabled) { border-color: rgba(97, 230, 209, .72); color: #d6f7f0; background: rgba(25, 74, 66, .62); }

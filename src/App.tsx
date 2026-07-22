@@ -33,6 +33,7 @@ import { getOuterDimensions } from './model/defaults';
 import {
   appendMeshPlanarRegionCodexAnalysisDraft,
   createMeshPlanarRegionCodexAnalysisRequest,
+  createMeshPlanarRegionCodexDiagnosticFieldDifferences,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   inspectMeshPlanarRegionCodexAnalysisDraft,
   replaceMeshPlanarRegionCodexAnalysisDraftBlock
@@ -113,6 +114,13 @@ function App() {
     : commandDiagnosticInspection.status === 'complete' && commandDiagnosticInspection.matchedBlock
       ? commandDiagnosticInspection.matchedBlock === currentCodexDiagnosticBlock ? 'duplicate' : 'replace'
       : commandDiagnosticInspection.status === 'none' ? 'append' : 'unsafe';
+  const codexDiagnosticFieldDifferences = currentCodexDiagnosticSummary
+    ? createMeshPlanarRegionCodexDiagnosticFieldDifferences(
+        commandDraft,
+        commandDiagnosticBlocks,
+        currentCodexDiagnosticSummary
+      )
+    : null;
 
   /** 追加首个诊断或安全替换唯一旧块，并同步更新当前页面的完整块登记。 */
   const applyCodexDiagnostic = (summary: string) => {
@@ -566,6 +574,7 @@ function App() {
           <ModelViewport />
           <MeshElementEditPanel
             codexDiagnosticDraftAction={codexDiagnosticDraftAction}
+            codexDiagnosticFieldDifferences={codexDiagnosticFieldDifferences}
             onApplyCodexDiagnostic={applyCodexDiagnostic}
           />
           <CommandPanel command={commandDraft} generatedDiagnosticBlocks={commandDiagnosticBlocks} onCommandChange={updateCommandDraft} />
