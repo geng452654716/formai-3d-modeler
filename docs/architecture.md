@@ -768,4 +768,13 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 65/65、前端 238/238、生产构建和差异检查通过。真实浏览器验证 Selection 文本与预览正文严格相同、剪贴板调用为 0，并覆盖 Selection 不可用、收起重置、重新展开和替换卸载；干净页面 Console 无错误。
 
-**下一阶段架构方向：**从同一 `diagnosticDifferenceSummary` 纯派生行数与 Unicode 字符数，并在展开预览中只读展示。统计不得截断、重写或缓存正文，也不得影响 keyed 状态边界。
+### 69. 连续共面区域诊断差异预览统计架构（已实现）
+
+- `createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics(summary)` 是无副作用纯函数：空摘要返回 `null`，行数按 CRLF/LF/CR 分隔统计，字符数使用 `Array.from(summary).length` 按 Unicode 码点计算。
+- `MeshPlanarRegionDiagnosticDifferenceTools` 只从当前 `preview.content` 即时派生统计；预览收起时 `content` 为 `null`，因此统计不渲染，也不存在第二份正文状态。
+- 统计标签是只读 `<small aria-label="差异摘要内容统计">`，仅增加语义颜色和等宽数字样式；既有 `<pre>` 引用和 Selection/Range 选择链路保持不变。
+- 摘要变化仍由 `key={diagnosticDifferenceSummary}` 触发子组件重挂载，替换或安全状态失效则卸载整张差异工具卡；未新增 Store、Tauri、Worker、模型版本、快照或持久化字段。
+
+2026-07-22 架构验证：针对性测试 67/67、前端 240/240、生产构建和差异检查通过。真实浏览器中 6 项差异正文独立计算为 8 行、230 个 Unicode 字符，统计标签严格一致；Selection 不受影响，收起、重新展开与替换卸载均符合 keyed 状态边界，干净页面 Console 无错误。
+
+**下一阶段架构方向：**新增独立的打印方向评估纯计算模块，以当前封闭模型三角网格为输入，对 ±X、±Y、±Z 六个候选方向计算旋转后包围尺寸、模型高度、底面接触面积和悬垂三角面积，并按 P1S 成型空间与受限权重输出可解释推荐。第一版只进入前端只读分析状态，不写回模型变换、版本或快照。

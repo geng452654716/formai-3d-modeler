@@ -4,6 +4,7 @@ import {
   copyMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionCodexDiagnosticDifferencePreview,
+  createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics,
   createMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
@@ -112,6 +113,7 @@ function MeshPlanarRegionDiagnosticDifferenceTools({
   const [selectionStatus, setSelectionStatus] = useState<'idle' | 'selected' | 'failed'>('idle');
   const previewElementRef = useRef<HTMLPreElement>(null);
   const preview = createMeshPlanarRegionCodexDiagnosticDifferencePreview(summary, previewExpanded);
+  const previewMetrics = createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics(preview?.content ?? null);
 
   /** 复制内容与预览共用当前摘要来源，仍由可注入剪贴板边界处理失败。 */
   async function copyDifferences() {
@@ -163,6 +165,9 @@ function MeshPlanarRegionDiagnosticDifferenceTools({
       {preview.content ? (
         <div className="mesh-planar-region-diagnostic-difference-preview">
           <small>以下内容仅供检查，不会自动发送或执行。</small>
+          {previewMetrics && (
+            <small aria-label="差异摘要内容统计">{previewMetrics.label}</small>
+          )}
           <div className="mesh-planar-region-diagnostic-difference-preview-actions">
             <button type="button" className="codex-analysis" onClick={selectPreviewText}>
               {selectionStatus === 'selected' ? '已全选预览内容' : '全选预览内容'}

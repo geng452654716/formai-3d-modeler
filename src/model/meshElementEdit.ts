@@ -799,6 +799,26 @@ export interface MeshPlanarRegionCodexDiagnosticDifferencePreview {
   content: string | null;
 }
 
+export interface MeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics {
+  lineCount: number;
+  characterCount: number;
+  label: string;
+}
+
+/** 从同一差异摘要纯派生行数和 Unicode 码点数，不改写或缓存正文。 */
+export function createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics(
+  summary: string | null
+): MeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics | null {
+  if (!summary?.trim()) return null;
+  const lineCount = summary.split(/\r\n|\n|\r/).length;
+  const characterCount = Array.from(summary).length;
+  return {
+    lineCount,
+    characterCount,
+    label: `共 ${lineCount} 行 · ${characterCount} 个字符`
+  };
+}
+
 export type MeshPlanarRegionCodexDiagnosticDifferencePreviewSelectionStatus = 'selected' | 'failed';
 
 /** 通过可注入选择边界全选当前只读预览；空引用、空正文和浏览器拒绝统一安全失败。 */

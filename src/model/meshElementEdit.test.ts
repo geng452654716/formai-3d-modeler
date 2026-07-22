@@ -7,6 +7,7 @@ import {
   createMeshPlanarRegionCodexAnalysisRequest,
   createMeshPlanarRegionCodexDraftBlockLocation,
   createMeshPlanarRegionCodexDiagnosticDifferencePreview,
+  createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics,
   createMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   createMeshPlanarRegionCodexDiagnosticFieldDifferences,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
@@ -1077,6 +1078,29 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
   it('空摘要不生成预览，避免沿用失效或不安全内容', () => {
     expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview(null, false)).toBeNull();
     expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview('  ', true)).toBeNull();
+  });
+
+  it('预览统计拒绝空摘要并统计单行 Unicode 字符', () => {
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics(null)).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics('  ')).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics('模型😀')).toEqual({
+      lineCount: 1,
+      characterCount: 3,
+      label: '共 1 行 · 3 个字符'
+    });
+  });
+
+  it('预览统计保留多行换行并兼容 CRLF', () => {
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics('第一行\n第二行')).toEqual({
+      lineCount: 2,
+      characterCount: 7,
+      label: '共 2 行 · 7 个字符'
+    });
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreviewMetrics('A\r\nB')).toEqual({
+      lineCount: 2,
+      characterCount: 4,
+      label: '共 2 行 · 4 个字符'
+    });
   });
 
   it('一键全选通过注入边界选择当前完整预览正文', () => {
