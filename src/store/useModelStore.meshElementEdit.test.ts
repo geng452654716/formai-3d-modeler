@@ -218,6 +218,7 @@ describe('上传 STL 网格元素批量编辑', () => {
         },
         nestingDepth: 1
       }],
+      outwardNormalMm: { x: 0, y: 0, z: 1 },
       normalToleranceDegrees: 0.5, planeToleranceMm: 0.00002
     };
     useModelStore.getState().setMeshPlanarRegionPreview(preview);

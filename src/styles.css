@@ -1280,3 +1280,27 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   background: rgba(28, 13, 10, .9);
   color: #ff9f85;
 }
+
+.mesh-planar-region-extrusion-label {
+  display: flex;
+  min-width: 104px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 5px 7px;
+  border: 1px solid rgba(45, 212, 191, .72);
+  border-radius: 5px;
+  background: rgba(7, 29, 26, .92);
+  color: #9be9dd;
+  font-size: 7px;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.mesh-planar-region-extrusion-label strong { color: #41e3cb; font-size: 8px; }
+.mesh-planar-region-extrusion-label.cut {
+  border-color: rgba(255, 128, 102, .76);
+  background: rgba(40, 15, 11, .92);
+  color: #ffc0b2;
+}
+.mesh-planar-region-extrusion-label.cut strong { color: #ff8f76; }

@@ -9,7 +9,7 @@ import {
   PerspectiveCamera,
   TransformControls
 } from '@react-three/drei';
-import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
+import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, DoubleSide, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Path, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
 import type { Camera, Group, Object3D } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
@@ -37,6 +37,7 @@ import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '
 import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
+  createMeshPlanarRegionExtrusionPreviewProfile,
   createMeshPlanarRegionDimensionGuides,
   createMeshPlanarRegionTopology,
   expandMeshPlanarRegion,
@@ -503,6 +504,8 @@ function LoadedCadMesh({
   const meshElementSelectionMethod = useModelStore((state) => state.meshElementSelectionMethod);
   const meshElementSelection = useModelStore((state) => state.meshElementSelection);
   const meshElementTransformKind = useModelStore((state) => state.meshElementTransformKind);
+  const meshFaceExtrusionMode = useModelStore((state) => state.meshFaceExtrusionMode);
+  const meshFaceExtrusionDistanceText = useModelStore((state) => state.meshFaceExtrusionDistanceText);
   const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
   const meshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.meshPlanarRegionFocusedLoopIndex);
   const setMeshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.setMeshPlanarRegionFocusedLoopIndex);
@@ -730,6 +733,65 @@ function LoadedCadMesh({
     meshPlanarRegionBoundaryGeometries.outer?.dispose();
     meshPlanarRegionBoundaryGeometries.hole?.dispose();
   }, [meshPlanarRegionBoundaryGeometries]);
+
+  const meshPlanarRegionExtrusionPreview = useMemo(() => {
+    if (
+      id !== 'uploaded-model'
+      || meshElementTransformKind !== 'extrude-face'
+      || !importedStlModel
+      || meshPlanarRegionPreview?.revision !== importedStlModel.revision
+    ) return null;
+    const profile = createMeshPlanarRegionExtrusionPreviewProfile(
+      meshPlanarRegionPreview,
+      meshFaceExtrusionMode,
+      Number(meshFaceExtrusionDistanceText)
+    );
+    if (!profile) return null;
+    const shape = new Shape();
+    shape.moveTo(profile.outer[0].x, profile.outer[0].y);
+    profile.outer.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+    shape.closePath();
+    profile.holes.forEach((holePoints) => {
+      const hole = new Path();
+      hole.moveTo(holePoints[0].x, holePoints[0].y);
+      holePoints.slice(1).forEach((point) => hole.lineTo(point.x, point.y));
+      hole.closePath();
+      shape.holes.push(hole);
+    });
+    const extrusionGeometry = new ExtrudeGeometry(shape, {
+      depth: profile.distanceMm,
+      bevelEnabled: false,
+      steps: 1,
+      curveSegments: 1
+    });
+    const sourceBasis = new Matrix4().makeBasis(
+      new Vector3(profile.axisU.x, profile.axisU.y, profile.axisU.z),
+      new Vector3(profile.axisV.x, profile.axisV.y, profile.axisV.z),
+      new Vector3(profile.directionNormalMm.x, profile.directionNormalMm.y, profile.directionNormalMm.z)
+    );
+    sourceBasis.setPosition(profile.originMm.x, profile.originMm.y, profile.originMm.z);
+    extrusionGeometry.applyMatrix4(coordinateTransform.clone().multiply(sourceBasis));
+    const transformPoint = (point: { x: number; y: number; z: number }) => (
+      new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
+    );
+    return {
+      geometry: extrusionGeometry,
+      mode: meshFaceExtrusionMode,
+      distanceMm: profile.distanceMm,
+      color: meshFaceExtrusionMode === 'add' ? '#2dd4bf' : '#ff8066',
+      directionLine: [transformPoint(profile.directionStartMm), transformPoint(profile.directionEndMm)] as [Vector3, Vector3],
+      labelPoint: transformPoint(profile.labelPointMm)
+    };
+  }, [
+    coordinateTransform,
+    id,
+    importedStlModel,
+    meshElementTransformKind,
+    meshFaceExtrusionDistanceText,
+    meshFaceExtrusionMode,
+    meshPlanarRegionPreview
+  ]);
+  useEffect(() => () => meshPlanarRegionExtrusionPreview?.geometry.dispose(), [meshPlanarRegionExtrusionPreview]);
 
   const focusedMeshPlanarRegionLoopBase = meshPlanarRegionFocusedLoopIndex === null
     ? null
@@ -1150,6 +1212,47 @@ function LoadedCadMesh({
             depthWrite={false}
           />
         </mesh>
+      )}
+
+      {meshPlanarRegionExtrusionPreview && (
+        <>
+          <mesh
+            geometry={meshPlanarRegionExtrusionPreview.geometry}
+            renderOrder={11}
+            raycast={() => undefined}
+          >
+            <meshStandardMaterial
+              color={meshPlanarRegionExtrusionPreview.color}
+              emissive={meshPlanarRegionExtrusionPreview.color}
+              emissiveIntensity={0.2}
+              transparent
+              opacity={0.18}
+              depthWrite={false}
+              side={DoubleSide}
+            />
+          </mesh>
+          <Line
+            points={meshPlanarRegionExtrusionPreview.directionLine}
+            color={meshPlanarRegionExtrusionPreview.color}
+            lineWidth={2.2}
+            transparent
+            opacity={0.95}
+            depthTest={false}
+            depthWrite={false}
+            renderOrder={15}
+            raycast={() => undefined}
+          />
+          <Html position={meshPlanarRegionExtrusionPreview.labelPoint} center distanceFactor={9}>
+            <div
+              className={`mesh-planar-region-extrusion-label ${meshPlanarRegionExtrusionPreview.mode}`}
+              data-mesh-planar-extrusion-preview={meshPlanarRegionExtrusionPreview.mode}
+              data-distance-mm={meshPlanarRegionExtrusionPreview.distanceMm.toFixed(2)}
+            >
+              {meshPlanarRegionExtrusionPreview.mode === 'add' ? '向外加料预演' : '向内压入预演'}
+              <strong>{meshPlanarRegionExtrusionPreview.distanceMm.toFixed(2)} 毫米</strong>
+            </div>
+          </Html>
+        </>
       )}
 
       {meshPlanarRegionBoundaryGeometries.outer && (

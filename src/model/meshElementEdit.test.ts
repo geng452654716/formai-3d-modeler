@@ -241,8 +241,12 @@ describe('连续共面区域执行前预览', () => {
     expect(preview.triangleIndexes).toEqual([0, 1]);
   });
 
-  it('识别带孔平面区域的外环和孔洞环', async () => {
-    const { createMeshPlanarRegionDimensionGuides, expandMeshPlanarRegion } = await import('./meshElementEdit');
+  it('识别带孔平面区域的外环和孔洞环，并生成顺序无关的法向工具体轮廓', async () => {
+    const {
+      createMeshPlanarRegionDimensionGuides,
+      createMeshPlanarRegionExtrusionPreviewProfile,
+      expandMeshPlanarRegion
+    } = await import('./meshElementEdit');
     const outer = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]] as const;
     const inner = [[4, 4, 0], [6, 4, 0], [6, 6, 0], [4, 6, 0]] as const;
     const faces = outer.flatMap((point, index) => {
@@ -281,6 +285,40 @@ describe('连续共面区域执行前预览', () => {
     expect(holeGuides.width.labelMm.y).toBeLessThan(4);
     expect(holeGuides.height.labelMm.x).toBeGreaterThan(6);
     expect(holeGuides.summaryLabelMm.y).toBeGreaterThan(6);
+
+    const addProfile = createMeshPlanarRegionExtrusionPreviewProfile(preview, 'add', 2);
+    const cutProfile = createMeshPlanarRegionExtrusionPreviewProfile(preview, 'cut', 2);
+    expect(addProfile?.outer).toHaveLength(4);
+    expect(addProfile?.holes).toHaveLength(1);
+    expect(addProfile?.holes[0]).toHaveLength(4);
+    expect(addProfile?.distanceMm).toBe(2);
+    expect(cutProfile?.directionNormalMm).toEqual({
+      x: -addProfile!.directionNormalMm.x,
+      y: -addProfile!.directionNormalMm.y,
+      z: -addProfile!.directionNormalMm.z
+    });
+    expect(createMeshPlanarRegionExtrusionPreviewProfile(preview, 'add', 0.1)).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewProfile(preview, 'add', Number.NaN)).toBeNull();
+
+    const reorderedProfile = createMeshPlanarRegionExtrusionPreviewProfile({
+      ...preview,
+      boundaryLoops: [...preview.boundaryLoops].reverse()
+    }, 'add', 2);
+    expect(reorderedProfile?.outer).toEqual(addProfile?.outer);
+    expect(reorderedProfile?.holes).toEqual(addProfile?.holes);
+  });
+
+  it('使用闭合网格有符号体积把反向绕序种子法线修正为外法线', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const preview = expandMeshPlanarRegion('修订-反向四面体', 0, [
+      face(0, [0, 0, 0], [1, 0, 0], [0, 1, 0]),
+      face(1, [0, 0, 0], [0, 0, 1], [1, 0, 0]),
+      face(2, [0, 0, 0], [0, 1, 0], [0, 0, 1]),
+      face(3, [1, 0, 0], [0, 0, 1], [0, 1, 0])
+    ], 2);
+    expect(preview.outwardNormalMm.x).toBeCloseTo(0, 8);
+    expect(preview.outwardNormalMm.y).toBeCloseTo(0, 8);
+    expect(preview.outwardNormalMm.z).toBeCloseTo(-1, 8);
   });
 
   it('尺寸辅助线候选可把宽高和摘要翻转到相反轮廓外侧', async () => {

@@ -8,6 +8,7 @@ import {
   type MeshElementSelectionMethod,
   type MeshElementTransformKind,
   type MeshElementTransformOperation,
+  type MeshFaceExtrusionMode,
   type MeshPointMm,
   type MeshTransformAxis
 } from '../model/meshElementEdit';
@@ -67,19 +68,21 @@ export function MeshElementEditPanel() {
   const clearManufacturingSplit = useModelStore((state) => state.clearManufacturingSplit);
   const [cadPartSelection, setCadPartSelection] = useState('');
   const transformKind = useModelStore((state) => state.meshElementTransformKind);
+  const faceExtrusionMode = useModelStore((state) => state.meshFaceExtrusionMode);
+  const faceExtrusionDistance = useModelStore((state) => state.meshFaceExtrusionDistanceText);
   const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
   const meshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.meshPlanarRegionFocusedLoopIndex);
   const meshPlanarRegionPreviewError = useModelStore((state) => state.meshPlanarRegionPreviewError);
   const setMeshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.setMeshPlanarRegionFocusedLoopIndex);
   const setMeshElementTransformKind = useModelStore((state) => state.setMeshElementTransformKind);
+  const setFaceExtrusionMode = useModelStore((state) => state.setMeshFaceExtrusionMode);
+  const setFaceExtrusionDistance = useModelStore((state) => state.setMeshFaceExtrusionDistanceText);
   const [x, setX] = useState('0');
   const [y, setY] = useState('0');
   const [z, setZ] = useState('0');
   const [rotationAxis, setRotationAxis] = useState<MeshTransformAxis>('z');
   const [rotationDegrees, setRotationDegrees] = useState('15');
   const [scaleFactor, setScaleFactor] = useState('1.1');
-  const [faceExtrusionMode, setFaceExtrusionMode] = useState<'add' | 'cut'>('add');
-  const [faceExtrusionDistance, setFaceExtrusionDistance] = useState('2');
 
   const displacement = useMemo<MeshPointMm | null>(() => {
     const values = [parseFinite(x), parseFinite(y), parseFinite(z)];
@@ -323,7 +326,7 @@ export function MeshElementEditPanel() {
             <div className="mesh-element-transform-grid">
               <label>
                 <span>法向操作</span>
-                <select value={faceExtrusionMode} onChange={(event) => setFaceExtrusionMode(event.target.value as 'add' | 'cut')} disabled={isEditing}>
+                <select value={faceExtrusionMode} onChange={(event) => setFaceExtrusionMode(event.target.value as MeshFaceExtrusionMode)} disabled={isEditing}>
                   <option value="add">向外加料</option>
                   <option value="cut">向内压入</option>
                 </select>

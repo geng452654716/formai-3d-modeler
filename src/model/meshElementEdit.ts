@@ -146,8 +146,23 @@ export interface MeshPlanarRegionPreview {
   holeBoundaryLoopCount: number;
   boundaryLoopsMm: MeshPointMm[][];
   boundaryLoops: MeshPlanarRegionBoundaryLoop[];
+  /** 前端预演使用的网格绕序推断外法线；桌面 Worker 仍会独立确认真实实体内外。 */
+  outwardNormalMm: MeshPointMm;
   normalToleranceDegrees: number;
   planeToleranceMm: number;
+}
+
+export interface MeshPlanarRegionExtrusionPreviewProfile {
+  originMm: MeshPointMm;
+  axisU: MeshPointMm;
+  axisV: MeshPointMm;
+  directionNormalMm: MeshPointMm;
+  distanceMm: number;
+  outer: { x: number; y: number }[];
+  holes: { x: number; y: number }[][];
+  directionStartMm: MeshPointMm;
+  directionEndMm: MeshPointMm;
+  labelPointMm: MeshPointMm;
 }
 
 export interface MeshScreenProjection {
@@ -296,6 +311,99 @@ function triangleUnitNormal(triangle: [MeshPointMm, MeshPointMm, MeshPointMm]) {
   const length = Math.hypot(normal.x, normal.y, normal.z);
   if (length <= 1e-9) throw new Error('共面区域预览遇到退化三角面，请先修复网格');
   return { x: normal.x / length, y: normal.y / length, z: normal.z / length };
+}
+
+/** 通过闭合 STL 的有符号体积修正种子三角面绕序，开口或近零体积网格保持种子方向作为安全回退。 */
+function meshOutwardNormal(
+  seedNormal: MeshPointMm,
+  triangles: Iterable<MeshPlanarRegionTriangle>
+) {
+  let signedVolumeTimesSix = 0;
+  for (const { triangleMm: [a, b, c] } of triangles) {
+    signedVolumeTimesSix += a.x * (b.y * c.z - b.z * c.y)
+      + a.y * (b.z * c.x - b.x * c.z)
+      + a.z * (b.x * c.y - b.y * c.x);
+  }
+  if (!Number.isFinite(signedVolumeTimesSix) || Math.abs(signedVolumeTimesSix) < 1e-9) {
+    return { ...seedNormal };
+  }
+  return signedVolumeTimesSix < 0
+    ? { x: -seedNormal.x, y: -seedNormal.y, z: -seedNormal.z }
+    : { ...seedNormal };
+}
+
+function meshPointAlong(start: MeshPointMm, direction: MeshPointMm, distanceMm: number) {
+  return {
+    x: start.x + direction.x * distanceMm,
+    y: start.y + direction.y * distanceMm,
+    z: start.z + direction.z * distanceMm
+  };
+}
+
+/** 把当前带孔共面区域转换为法向加料或压入的只读二维工具体轮廓。 */
+export function createMeshPlanarRegionExtrusionPreviewProfile(
+  preview: MeshPlanarRegionPreview,
+  mode: MeshFaceExtrusionMode,
+  distanceMm: number
+): MeshPlanarRegionExtrusionPreviewProfile | null {
+  if (!Number.isFinite(distanceMm) || distanceMm < 0.2 || distanceMm > 100) return null;
+  const outerLoops = preview.boundaryLoops.filter((loop) => loop.kind === 'outer' && loop.pointsMm.length >= 3);
+  if (outerLoops.length !== 1) return null;
+  const outerLoop = outerLoops[0];
+  const frame = outerLoop.measurementFrame;
+  const normalLength = Math.hypot(
+    preview.outwardNormalMm.x,
+    preview.outwardNormalMm.y,
+    preview.outwardNormalMm.z
+  );
+  if (!Number.isFinite(normalLength) || normalLength < 1e-9) return null;
+  const outwardNormal = {
+    x: preview.outwardNormalMm.x / normalLength,
+    y: preview.outwardNormalMm.y / normalLength,
+    z: preview.outwardNormalMm.z / normalLength
+  };
+  const directionNormalMm = mode === 'add'
+    ? outwardNormal
+    : { x: -outwardNormal.x, y: -outwardNormal.y, z: -outwardNormal.z };
+  const projectLoop = (loop: MeshPlanarRegionBoundaryLoop) => loop.pointsMm.map((point) => {
+    const offset = {
+      x: point.x - frame.originMm.x,
+      y: point.y - frame.originMm.y,
+      z: point.z - frame.originMm.z
+    };
+    return {
+      x: offset.x * frame.axisU.x + offset.y * frame.axisU.y + offset.z * frame.axisU.z,
+      y: offset.x * frame.axisV.x + offset.y * frame.axisV.y + offset.z * frame.axisV.z
+    };
+  });
+  const outer = projectLoop(outerLoop);
+  const holes = preview.boundaryLoops
+    .filter((loop) => loop.kind === 'hole' && loop.pointsMm.length >= 3)
+    .map(projectLoop);
+  if ([...outer, ...holes.flat()].some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    return null;
+  }
+  const centerUMm = (frame.minUMm + frame.maxUMm) / 2;
+  const centerVMm = (frame.minVMm + frame.maxVMm) / 2;
+  const directionStartMm = {
+    x: frame.originMm.x + frame.axisU.x * centerUMm + frame.axisV.x * centerVMm,
+    y: frame.originMm.y + frame.axisU.y * centerUMm + frame.axisV.y * centerVMm,
+    z: frame.originMm.z + frame.axisU.z * centerUMm + frame.axisV.z * centerVMm
+  };
+  const directionEndMm = meshPointAlong(directionStartMm, directionNormalMm, distanceMm);
+  const labelClearanceMm = Math.max(1.5, Math.min(5, distanceMm * 0.25));
+  return {
+    originMm: { ...frame.originMm },
+    axisU: { ...frame.axisU },
+    axisV: { ...frame.axisV },
+    directionNormalMm,
+    distanceMm,
+    outer,
+    holes,
+    directionStartMm,
+    directionEndMm,
+    labelPointMm: meshPointAlong(directionEndMm, directionNormalMm, labelClearanceMm)
+  };
 }
 
 
@@ -700,6 +808,7 @@ export function expandMeshPlanarRegion(
     }));
   }
   const boundaryLoops = measureMeshPlanarBoundaryLoops(boundaryLoopsMm, seedOrigin, seedNormal);
+  const outwardNormalMm = meshOutwardNormal(seedNormal, triangleByIndex.values());
   const triangleIndexes = [...region].sort((left, right) => left - right);
   return {
     revision,
@@ -712,6 +821,7 @@ export function expandMeshPlanarRegion(
     holeBoundaryLoopCount: boundaryLoops.filter((loop) => loop.kind === 'hole').length,
     boundaryLoopsMm,
     boundaryLoops,
+    outwardNormalMm,
     normalToleranceDegrees: PLANAR_REGION_NORMAL_TOLERANCE_DEGREES,
     planeToleranceMm
   };

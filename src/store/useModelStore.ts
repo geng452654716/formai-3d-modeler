@@ -56,6 +56,7 @@ import {
   type MeshElementSelectionSet,
   type MeshElementTransformKind,
   type MeshElementTransformOperation,
+  type MeshFaceExtrusionMode,
   type MeshPlanarRegionPreview,
   type MeshPointMm
 } from '../model/meshElementEdit';
@@ -148,6 +149,8 @@ interface ModelStore {
   meshElementSelection: MeshElementSelectionSet | null;
   meshElementBoxRequest: MeshElementBoxSelectionRequest | null;
   meshElementTransformKind: MeshElementTransformKind;
+  meshFaceExtrusionMode: MeshFaceExtrusionMode;
+  meshFaceExtrusionDistanceText: string;
   meshPlanarRegionPreview: MeshPlanarRegionPreview | null;
   meshPlanarRegionFocusedLoopIndex: number | null;
   meshPlanarRegionPreviewError: string | null;
@@ -210,6 +213,8 @@ interface ModelStore {
   requestMeshElementBoxSelection: (request: MeshElementBoxSelectionRequest) => void;
   clearMeshElementSelection: () => void;
   setMeshElementTransformKind: (kind: MeshElementTransformKind) => void;
+  setMeshFaceExtrusionMode: (mode: MeshFaceExtrusionMode) => void;
+  setMeshFaceExtrusionDistanceText: (distanceText: string) => void;
   setMeshPlanarRegionPreview: (preview: MeshPlanarRegionPreview | null, error?: string | null) => void;
   setMeshPlanarRegionFocusedLoopIndex: (loopIndex: number | null) => void;
   applyMeshElementTransform: (operation: MeshElementTransformOperation) => Promise<MeshElementEditResult | null>;
@@ -400,6 +405,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   meshElementSelection: null,
   meshElementBoxRequest: null,
   meshElementTransformKind: 'move',
+  meshFaceExtrusionMode: 'add',
+  meshFaceExtrusionDistanceText: '2',
   meshPlanarRegionPreview: null,
   meshPlanarRegionFocusedLoopIndex: null,
   meshPlanarRegionPreviewError: null,
@@ -654,6 +661,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       meshElementSelectionMethod: 'click',
       meshElementSelection: null,
       meshElementBoxRequest: null,
+      meshFaceExtrusionMode: 'add',
+      meshFaceExtrusionDistanceText: '2',
       meshPlanarRegionPreview: null,
       meshPlanarRegionFocusedLoopIndex: null,
       meshPlanarRegionPreviewError: null,
@@ -1146,6 +1155,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     meshPlanarRegionPreviewError: null,
     meshElementEditError: null
   }),
+  setMeshFaceExtrusionMode: (meshFaceExtrusionMode) => set({ meshFaceExtrusionMode }),
+  setMeshFaceExtrusionDistanceText: (meshFaceExtrusionDistanceText) => set({ meshFaceExtrusionDistanceText }),
   setMeshPlanarRegionPreview: (meshPlanarRegionPreview, meshPlanarRegionPreviewError = null) => set({
     meshPlanarRegionPreview,
     meshPlanarRegionFocusedLoopIndex: null,
