@@ -5,13 +5,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cadquery as cq
 from cadquery import exporters
 
-from edit_mesh_element import edit_mesh_element, edit_mesh_elements, transform_mesh_elements
+from edit_mesh_element import edit_mesh_element, edit_mesh_elements, extrude_mesh_face, transform_mesh_elements
 from export_transformed_model import read_stl
-from split_and_cap import inspect_stl_file
+from split_and_cap import import_stl_as_solid, inspect_stl_file
 
 
 class MeshElementEditTests(unittest.TestCase):
@@ -29,6 +30,86 @@ class MeshElementEditTests(unittest.TestCase):
             "elementIndex": element_index,
             "triangleMm": [{"x": point[0], "y": point[1], "z": point[2]} for point in triangle],
         }
+
+    def _top_face_selection(self, source: Path) -> dict[str, object]:
+        """返回测试长方体顶面的一个真实源三角面。"""
+
+        triangle_index = next(
+            index for index, triangle in enumerate(read_stl(source))
+            if all(abs(point[2] - 10.0) < 1e-6 for point in triangle)
+        )
+        return self._selection(source, triangle_index, 0)
+
+    def test_adds_and_cuts_single_face_along_classified_outward_normal(self) -> None:
+        for mode, expected_direction in (("add", 1), ("cut", -1)):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, manifest = self._project(root)
+                selection = self._top_face_selection(source)
+                result = extrude_mesh_face(
+                    source, root, str(manifest["revision"]), selection, mode, 2.0, "click"
+                )
+                self.assertEqual(result["operation"], "extrude-face")
+                self.assertEqual(result["faceExtrusionMode"], mode)
+                self.assertEqual(result["selectedElementCount"], 1)
+                self.assertAlmostEqual(result["outwardNormal"]["z"], 1.0, places=6)
+                self.assertGreater(result["toolVolumeMm3"], 0)
+                self.assertEqual(
+                    result["validation"]["volumeDeltaMm3"] > 0,
+                    expected_direction > 0,
+                )
+                self.assertTrue(result["validation"]["watertight"])
+                self.assertEqual(result["validation"]["solidCountAfter"], 1)
+
+    def test_face_extrusion_prefixes_export_mesh_failure_and_preserves_working_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            selection = self._top_face_selection(source)
+            source_import = import_stl_as_solid(source)
+            working_bytes = source.read_bytes()
+            manifest_text = (root / "imported-model-result.json").read_text(encoding="utf-8")
+
+            with patch(
+                "edit_mesh_element.import_stl_as_solid",
+                side_effect=[source_import, ValueError("STL 包含 1 条非流形边；当前不会自动猜测拓扑")],
+            ):
+                with self.assertRaisesRegex(ValueError, "三角面法向编辑导出结果未通过网格检查.*非流形边"):
+                    extrude_mesh_face(source, root, str(manifest["revision"]), selection, "add", 2.0, "click")
+
+            self.assertEqual(source.read_bytes(), working_bytes)
+            self.assertEqual((root / "imported-model-result.json").read_text(encoding="utf-8"), manifest_text)
+            self.assertFalse(any(path.name.startswith(".imported-model-working-") for path in root.iterdir()))
+
+    def test_face_extrusion_preserves_cad_branch_source_and_rejects_unsafe_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self._project(root)
+            branch_source = {
+                "kind": "cad-part",
+                "cadRevision": "cad-source-revision",
+                "partId": "ornament-left",
+                "partLabel": "左侧装饰件",
+                "sourceStlFile": "ornament-left.stl",
+            }
+            manifest["branchSource"] = branch_source
+            (root / "imported-model-result.json").write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            selection = self._top_face_selection(source)
+            with self.assertRaisesRegex(ValueError, "只支持点击选择"):
+                extrude_mesh_face(source, root, str(manifest["revision"]), selection, "add", 1.0, "box")
+            with self.assertRaisesRegex(ValueError, "0.20 至 100.00"):
+                extrude_mesh_face(source, root, str(manifest["revision"]), selection, "add", 0.1, "click")
+            tampered = json.loads(json.dumps(selection))
+            tampered["triangleMm"][0]["x"] += 0.5
+            with self.assertRaisesRegex(ValueError, "源坐标与当前模型不一致"):
+                extrude_mesh_face(source, root, str(manifest["revision"]), tampered, "cut", 1.0, "click")
+
+            result = extrude_mesh_face(source, root, str(manifest["revision"]), selection, "add", 1.0, "click")
+            self.assertEqual(result["updatedModel"]["branchSource"], branch_source)
+            persisted = json.loads((root / "imported-model-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["branchSource"], branch_source)
 
     def test_moves_shared_vertex_and_updates_manifest_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

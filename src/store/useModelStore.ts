@@ -1096,8 +1096,22 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       set({ meshElementSelection: null, meshElementEditError: '当前没有可变换的网格元素，请重新选择' });
       return null;
     }
+    if (operation.kind === 'extrude-face' && (
+      selection.kind !== 'face'
+      || selection.selectionMethod !== 'click'
+      || selection.elements.length !== 1
+    )) {
+      set({ meshElementEditError: '三角面法向编辑第一版必须且只能点击选择一个三角面' });
+      return null;
+    }
     const selectionCount = selection.elements.length;
-    const actionLabel = operation.kind === 'move' ? '批量移动' : operation.kind === 'rotate' ? '统一旋转' : '均匀缩放';
+    const actionLabel = operation.kind === 'move'
+      ? '批量移动'
+      : operation.kind === 'rotate'
+        ? '统一旋转'
+        : operation.kind === 'scale'
+          ? '均匀缩放'
+          : operation.mode === 'add' ? '三角面向外加料' : '三角面向内压入';
     set({
       meshElementEditStatus: 'editing',
       meshElementEditError: null,
@@ -1145,7 +1159,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         aiActivity: null,
         aiError: null
       });
-      get().commitVersion(`${actionLabel}上传模型${MESH_ELEMENT_LABELS[selection.kind]}`);
+      get().commitVersion(operation.kind === 'extrude-face'
+        ? `${actionLabel}上传模型`
+        : `${actionLabel}上传模型${MESH_ELEMENT_LABELS[selection.kind]}`);
       try {
         const afterSnapshot = await createVersionSnapshot(
           `网格元素${actionLabel}后-${MESH_ELEMENT_LABELS[selection.kind]}`,
@@ -1165,17 +1181,22 @@ export const useModelStore = create<ModelStore>((set, get) => ({
         ? `位移 (${result.displacementMm.x}, ${result.displacementMm.y}, ${result.displacementMm.z}) 毫米`
         : result.operation === 'rotate'
           ? `绕几何中心的 ${result.rotationAxis?.toUpperCase()} 轴旋转 ${result.rotationDegrees}°`
-          : `以几何中心按 ${result.scaleFactor} 倍均匀缩放`;
+          : result.operation === 'scale'
+            ? `以几何中心按 ${result.scaleFactor} 倍均匀缩放`
+            : `${result.faceExtrusionMode === 'add' ? '沿真实外法线加料' : '沿真实内法线压入'} ${result.distanceMm} 毫米`;
+      const editStatistics = result.operation === 'extrude-face'
+        ? `工具体积 ${result.toolVolumeMm3?.toFixed(2) ?? '未知'} 立方毫米`
+        : `同步更新 ${result.movedCoordinateCount} 个源坐标、${result.movedVertexOccurrenceCount} 个 STL 顶点副本`;
       set((current) => ({
         messages: current.messages.concat({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `已${actionLabel} ${result.selectedElementCount} 个${MESH_ELEMENT_LABELS[selection.kind]}：${transformDetail}；同步更新 ${result.movedCoordinateCount} 个源坐标、${result.movedVertexOccurrenceCount} 个 STL 顶点副本；体积 ${result.validation.volumeBeforeMm3.toFixed(2)} → ${result.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过封闭性、实体有效性、退化面和 Solid 数量检查；旧拆件与壁厚分析已失效。`
+          content: `已${actionLabel} ${result.selectedElementCount} 个${MESH_ELEMENT_LABELS[selection.kind]}：${transformDetail}；${editStatistics}；体积 ${result.validation.volumeBeforeMm3.toFixed(2)} → ${result.validation.volumeAfterMm3.toFixed(2)} 立方毫米（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）。结果已通过封闭性、实体有效性、退化面和 Solid 数量检查；旧拆件与壁厚分析已失效。`
         })
       }));
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : '上传 STL 网格元素变换失败';
+      const message = error instanceof Error ? error.message : '上传 STL 网格元素编辑失败';
       set((current) => ({
         meshElementEditStatus: 'error',
         meshElementEditError: message,

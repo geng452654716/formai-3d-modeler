@@ -1610,6 +1610,28 @@ fn validate_mesh_element_selections(
     serde_json::to_string(selections).map_err(|error| format!("无法序列化网格元素选择：{error}"))
 }
 
+/// 校验单三角面法向编辑的选择约束、方向模式和毫米距离。
+fn validate_mesh_face_extrusion(
+    element_kind: &str,
+    selection_method: &str,
+    selection_count: usize,
+    face_extrusion_mode: Option<String>,
+    distance_mm: Option<f64>,
+) -> Result<(String, f64), String> {
+    if element_kind != "face" || selection_method != "click" || selection_count != 1 {
+        return Err("三角面法向编辑第一版必须且只能点击选择一个三角面".into());
+    }
+    let mode = face_extrusion_mode.unwrap_or_default();
+    if !matches!(mode.as_str(), "add" | "cut") {
+        return Err("三角面法向编辑只能选择向外加料或向内压入".into());
+    }
+    let distance = distance_mm.unwrap_or(0.0);
+    if !distance.is_finite() || !(0.2..=100.0).contains(&distance) {
+        return Err("三角面法向距离必须在 0.20 至 100.00 毫米之间".into());
+    }
+    Ok((mode, distance))
+}
+
 #[derive(Debug, PartialEq)]
 struct MeshElementTransformParameters {
     displacement: [f64; 3],
@@ -1695,6 +1717,8 @@ pub async fn run_mesh_element_edit(
     rotation_axis: Option<String>,
     rotation_degrees: Option<f64>,
     scale_factor: Option<f64>,
+    face_extrusion_mode: Option<String>,
+    distance_mm: Option<f64>,
     state: tauri::State<'_, BackendState>,
 ) -> Result<Value, String> {
     let state = state.inner().clone();
@@ -1711,15 +1735,37 @@ pub async fn run_mesh_element_edit(
         }
         let selections_json =
             validate_mesh_element_selections(&element_kind, &selection_method, &selections)?;
-        let transform = validate_mesh_element_transform(
-            &operation,
-            delta_xmm,
-            delta_ymm,
-            delta_zmm,
-            rotation_axis,
-            rotation_degrees,
-            scale_factor,
-        )?;
+        let (transform, face_extrusion) = if operation == "extrude-face" {
+            let extrusion = validate_mesh_face_extrusion(
+                &element_kind,
+                &selection_method,
+                selections.len(),
+                face_extrusion_mode,
+                distance_mm,
+            )?;
+            (
+                MeshElementTransformParameters {
+                    displacement: [0.0, 0.0, 0.0],
+                    rotation_axis: "z".into(),
+                    rotation_degrees: 0.0,
+                    scale_factor: 1.0,
+                },
+                extrusion,
+            )
+        } else {
+            (
+                validate_mesh_element_transform(
+                    &operation,
+                    delta_xmm,
+                    delta_ymm,
+                    delta_zmm,
+                    rotation_axis,
+                    rotation_degrees,
+                    scale_factor,
+                )?,
+                ("add".into(), 0.0),
+            )
+        };
         if !state.paths.mesh_element_edit_worker_path.is_file() {
             return Err(format!(
                 "未找到网格元素编辑 Worker：{}",
@@ -1761,6 +1807,10 @@ pub async fn run_mesh_element_edit(
             transform.rotation_degrees.to_string(),
             "--scale-factor".into(),
             transform.scale_factor.to_string(),
+            "--face-extrusion-mode".into(),
+            face_extrusion.0,
+            "--distance".into(),
+            face_extrusion.1.to_string(),
         ];
         let output = run_process_with_input(
             &state.paths.python_path,
@@ -3666,6 +3716,53 @@ mod tests {
                 .expect_err("超范围三角面索引必须被拒绝")
                 .contains("三角面索引超过")
         );
+    }
+
+    #[test]
+    fn validates_single_mesh_face_extrusion_parameters() {
+        let added = validate_mesh_face_extrusion("face", "click", 1, Some("add".into()), Some(2.0))
+            .expect("合法向外加料应通过");
+        assert_eq!(added, ("add".into(), 2.0));
+
+        let cut = validate_mesh_face_extrusion("face", "click", 1, Some("cut".into()), Some(0.2))
+            .expect("合法向内压入应通过");
+        assert_eq!(cut, ("cut".into(), 0.2));
+    }
+
+    #[test]
+    fn rejects_invalid_mesh_face_extrusion_selection_mode_and_distance() {
+        for (kind, method, count) in [
+            ("vertex", "click", 1),
+            ("face", "box", 1),
+            ("face", "click", 2),
+        ] {
+            assert!(validate_mesh_face_extrusion(
+                kind,
+                method,
+                count,
+                Some("add".into()),
+                Some(2.0),
+            )
+            .is_err());
+        }
+        assert!(validate_mesh_face_extrusion(
+            "face",
+            "click",
+            1,
+            Some("未知方向".into()),
+            Some(2.0),
+        )
+        .is_err());
+        for distance in [0.1, 100.01, f64::NAN] {
+            assert!(validate_mesh_face_extrusion(
+                "face",
+                "click",
+                1,
+                Some("cut".into()),
+                Some(distance),
+            )
+            .is_err());
+        }
     }
 
     #[test]

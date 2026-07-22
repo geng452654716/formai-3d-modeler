@@ -4,7 +4,8 @@ export type MeshElementKind = 'vertex' | 'edge' | 'face';
 export type MeshElementEditMode = 'off' | MeshElementKind;
 export type MeshElementSelectionMethod = 'click' | 'box';
 export type MeshTransformAxis = 'x' | 'y' | 'z';
-export type MeshElementTransformKind = 'move' | 'rotate' | 'scale';
+export type MeshElementTransformKind = 'move' | 'rotate' | 'scale' | 'extrude-face';
+export type MeshFaceExtrusionMode = 'add' | 'cut';
 
 export interface MeshPointMm {
   x: number;
@@ -51,7 +52,8 @@ export interface MeshScreenProjection {
 export type MeshElementTransformOperation =
   | { kind: 'move'; displacementMm: MeshPointMm }
   | { kind: 'rotate'; axis: MeshTransformAxis; angleDegrees: number }
-  | { kind: 'scale'; scaleFactor: number };
+  | { kind: 'scale'; scaleFactor: number }
+  | { kind: 'extrude-face'; mode: MeshFaceExtrusionMode; distanceMm: number };
 
 export interface MeshElementTransformRequest {
   selection: MeshElementSelectionSet;
@@ -78,6 +80,10 @@ export interface MeshElementEditResult {
   rotationAxis?: MeshTransformAxis;
   rotationDegrees?: number;
   scaleFactor?: number;
+  faceExtrusionMode?: MeshFaceExtrusionMode;
+  distanceMm?: number;
+  outwardNormal?: MeshPointMm;
+  toolVolumeMm3?: number;
   movedCoordinateCount: number;
   movedVertexOccurrenceCount: number;
   sourceFile: string;

@@ -476,3 +476,30 @@ Three.js 点击命中或当前摄像机屏幕投影框选
 - 第一版一次只转换一个 CAD 零件；不执行多个零件合并、不生成参数化特征树、不把编辑后 STEP 称为原生精确 B-Rep，也不实现拓扑增删、焊接、分裂、面挤出或自由雕刻。
 
 2026-07-22 第 43 阶段验证结果：前端 177/177、Rust 47/47、Python 网格元素编辑 10/10、局部 STL 编辑 5/5、上传快照恢复 4/4、拆件与补面 27/27；生产构建、Cargo 检查与测试、Python 语法、Rust 格式和差异检查通过。浏览器完成真实 CAD 零件转网格分支并确认全中文状态、真实毫米尺寸、来源语义和无控制台错误。
+
+## 受管网格单三角面法向布尔协议
+
+第 44 阶段把网格元素协议扩展为受限 `extrude-face` 操作：
+
+```text
+当前上传模型修订 + 点击选择的单个 triangleIndex/triangleMm
+  → TypeScript 可辨识联合类型和 Store 前置拒绝
+  → Vite/Tauri 独立校验面类型、点击方式、单元素、模式和距离
+  → Python 复核当前 STL 中的三角面源坐标
+  → OpenCascade 实体内外分类确认真实外法线
+  → 构造带极小重叠量的封闭三角柱工具体
+  → add 执行并集 / cut 执行切除
+  → 有效性、封闭性、单 Solid 和体积方向检查
+  → 临时 STEP/STL 导出并重新导入验证网格拓扑
+  → 原子替换工作文件、更新修订并保留 branchSource
+  → Store 清除过期选择、分析与拆件，创建中文版本和桌面精确快照
+```
+
+- `src/model/meshElementEdit.ts` 新增 `operation=extrude-face`、`faceExtrusionMode=add|cut` 和 `distanceMm`；它与位移、旋转、缩放保持可辨识联合类型，避免把缺少法向参数的请求默认成其他操作。
+- `src/components/MeshElementEditPanel.tsx` 固定第一版为面元素和点击单选。Store 在调用后端前拒绝框选、多面、非面和过期修订；成功后使用真实外法线、工具体积和体积差生成中文摘要。
+- `src-tauri/src/backend.rs` 与 `vite.config.ts` 分别执行等价白名单校验。Rust 将选择集合通过标准输入交给 Worker；Vite 开发后端调用相同 Python 实现，因此浏览器验收不会绕过生产建模算法。
+- `modeling/edit_mesh_element.py` 不信任 STL 法线，而是从 `triangleMm` 计算候选法线并用 `BRepClass3d_SolidClassifier` 对两侧采样点分类。三角柱在实体内外增加受限微小重叠量，确保布尔工具与目标 Solid 真实相交。
+- 布尔结果先检查 OpenCascade Shape，再导出临时 STEP/STL，并调用通用 STL 实体导入链重新检查非流形边、封闭性、Solid 数量、体积和包围盒。STL 再导入失败会被包装成“法向编辑导出结果未通过网格检查”，临时文件在 `finally` 中清理，既有工作文件不变。
+- `imported-model-working.stl`、`imported-model-working.step`、`imported-model-result.json` 和 `mesh-element-edit-result.json` 使用既有批量原子替换和回滚机制。`branchSource` 被复制到新清单，使普通上传 STL 和 CAD 派生网格共享算法但保留来源语义。
+- Vite 中不需要读取 Worker JSON 的任务使用 `stdio=['ignore','ignore','pipe']`，只消费标准错误；需要解析 JSON 的曲面点击 Worker 仍显式读取标准输出。该区分防止大型清单填满未消费管道导致全局 `generating` 锁长期占用。
+- 第一版故意不做面区域扩展或拓扑焊接。选中三角面落在锐边或开孔边界时，布尔结果可能在 STL 三角化后形成四面共边；系统安全拒绝，不关闭非流形检查。

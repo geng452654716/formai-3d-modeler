@@ -241,7 +241,7 @@ function runWorker() {
     const process = spawn(
       pythonPath,
       [workerPath, '--parameters', runtimeParametersPath, '--output', artifactsDirectory],
-      { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }
+      { cwd: projectRoot, stdio: ['ignore', 'ignore', 'pipe'] }
     );
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -269,7 +269,7 @@ function runStlInspection(originalFileName: string) {
         '--inspect-only',
         '--original-file-name', safeOriginalFileName
       ],
-      { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }
+      { cwd: projectRoot, stdio: ['ignore', 'ignore', 'pipe'] }
     );
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -362,7 +362,7 @@ function runSplitWorker(
         '--clearance', String(clearanceMm),
         '--apply-features'
       ],
-      { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }
+      { cwd: projectRoot, stdio: ['ignore', 'ignore', 'pipe'] }
     );
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -412,7 +412,7 @@ function runWallThicknessWorker(
         '--minimum-wall', String(minimumWallMm),
         '--sample-limit', String(sampleLimit)
       ],
-      { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }
+      { cwd: projectRoot, stdio: ['ignore', 'ignore', 'pipe'] }
     );
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -468,7 +468,7 @@ function runLocalStlEditWorker(body: {
         '--depth', String(body.depthMm),
         '--command', body.command ?? ''
       ],
-      { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }
+      { cwd: projectRoot, stdio: ['ignore', 'ignore', 'pipe'] }
     );
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -493,6 +493,8 @@ function runMeshElementEditWorker(body: {
   rotationAxis?: string;
   rotationDegrees?: number;
   scaleFactor?: number;
+  faceExtrusionMode?: string;
+  distanceMm?: number;
 }) {
   if (body.sourcePartId !== 'uploaded-model') throw new Error('网格元素编辑只允许当前上传模型');
   if (typeof body.selectionRevision !== 'string' || !body.selectionRevision.trim() || body.selectionRevision.length > 200) {
@@ -527,7 +529,7 @@ function runMeshElementEditWorker(body: {
       ))) throw new Error('网格元素源坐标必须是安全范围内的有限毫米数值');
     }
   }
-  if (!['move', 'rotate', 'scale'].includes(body.operation ?? '')) throw new Error('网格元素操作只能是位移、旋转或缩放');
+  if (!['move', 'rotate', 'scale', 'extrude-face'].includes(body.operation ?? '')) throw new Error('网格元素操作只能是位移、旋转、缩放或单三角面法向编辑');
   const displacement = [body.deltaXmm ?? 0, body.deltaYmm ?? 0, body.deltaZmm ?? 0];
   const rotationAxis = body.rotationAxis;
   const rotationDegrees = body.rotationDegrees ?? 0;
@@ -542,8 +544,20 @@ function runMeshElementEditWorker(body: {
     if (!Number.isFinite(rotationDegrees) || Math.abs(rotationDegrees) > 180 || Math.abs(rotationDegrees) < 1e-9) {
       throw new Error('旋转角度必须是 -180° 至 180° 之间的非零有限数值');
     }
-  } else if (!Number.isFinite(scaleFactor) || scaleFactor < 0.25 || scaleFactor > 4 || Math.abs(scaleFactor - 1) < 1e-9) {
-    throw new Error('缩放比例必须在 0.25 至 4 倍之间，且不能等于 1');
+  } else if (body.operation === 'scale') {
+    if (!Number.isFinite(scaleFactor) || scaleFactor < 0.25 || scaleFactor > 4 || Math.abs(scaleFactor - 1) < 1e-9) {
+      throw new Error('缩放比例必须在 0.25 至 4 倍之间，且不能等于 1');
+    }
+  } else {
+    if (body.elementKind !== 'face' || body.selectionMethod !== 'click' || body.selections.length !== 1) {
+      throw new Error('三角面法向编辑第一版必须且只能点击选择一个三角面');
+    }
+    if (!['add', 'cut'].includes(body.faceExtrusionMode ?? '')) {
+      throw new Error('三角面法向编辑只能选择向外加料或向内压入');
+    }
+    if (!Number.isFinite(body.distanceMm) || body.distanceMm! < 0.2 || body.distanceMm! > 100) {
+      throw new Error('三角面法向距离必须在 0.20 至 100.00 毫米之间');
+    }
   }
   if (!existsSync(meshElementEditWorkerPath)) throw new Error(`未找到网格元素编辑 Worker：${meshElementEditWorkerPath}`);
   if (!existsSync(pythonPath)) throw new Error(`CAD Python 环境不可用：${pythonPath}`);
@@ -563,7 +577,9 @@ function runMeshElementEditWorker(body: {
       '--delta-z', String(displacement[2]),
       '--rotation-axis', rotationAxis ?? 'z',
       '--rotation-degrees', String(rotationDegrees),
-      '--scale-factor', String(scaleFactor)
+      '--scale-factor', String(scaleFactor),
+      '--face-extrusion-mode', body.faceExtrusionMode ?? 'add',
+      '--distance', String(body.distanceMm ?? 0)
     ], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -741,7 +757,7 @@ function runLocalCadFeatureWorker(body: {
   }
   if (body.previewOnly) arguments_.push('--preview-only');
   return new Promise<void>((resolvePromise, rejectPromise) => {
-    const process = spawn(pythonPath, arguments_, { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    const process = spawn(pythonPath, arguments_, { cwd: projectRoot, stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     process.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     process.on('error', rejectPromise);
@@ -965,7 +981,7 @@ function cadWorkerPlugin(): Plugin {
             const result = JSON.parse(readFileSync(resolve(artifactsDirectory, 'mesh-element-edit-result.json'), 'utf8')) as Record<string, unknown>;
             writeJson(response, 200, result);
           } catch (error) {
-            writeJson(response, 400, { status: 'error', message: error instanceof Error ? error.message : '上传 STL 网格元素变换失败' });
+            writeJson(response, 400, { status: 'error', message: error instanceof Error ? error.message : '上传 STL 网格元素编辑失败' });
           } finally {
             generating = false;
           }

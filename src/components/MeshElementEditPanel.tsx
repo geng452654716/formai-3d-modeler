@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { BoxSelect, GitBranch, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
+import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
@@ -34,7 +34,8 @@ const TRANSFORM_MODES: Array<{
 }> = [
   { kind: 'move', label: '位移', icon: Move3d },
   { kind: 'rotate', label: '旋转', icon: Rotate3d },
-  { kind: 'scale', label: '缩放', icon: Scaling }
+  { kind: 'scale', label: '缩放', icon: Scaling },
+  { kind: 'extrude-face', label: '法向编辑', icon: Layers3 }
 ];
 
 function parseFinite(value: string) {
@@ -71,6 +72,8 @@ export function MeshElementEditPanel() {
   const [rotationAxis, setRotationAxis] = useState<MeshTransformAxis>('z');
   const [rotationDegrees, setRotationDegrees] = useState('15');
   const [scaleFactor, setScaleFactor] = useState('1.1');
+  const [faceExtrusionMode, setFaceExtrusionMode] = useState<'add' | 'cut'>('add');
+  const [faceExtrusionDistance, setFaceExtrusionDistance] = useState('2');
 
   const displacement = useMemo<MeshPointMm | null>(() => {
     const values = [parseFinite(x), parseFinite(y), parseFinite(z)];
@@ -79,12 +82,27 @@ export function MeshElementEditPanel() {
   }, [x, y, z]);
   const parsedRotation = parseFinite(rotationDegrees);
   const parsedScale = parseFinite(scaleFactor);
+  const parsedFaceExtrusionDistance = parseFinite(faceExtrusionDistance);
   const moveInvalid = !displacement
     || [displacement.x, displacement.y, displacement.z].every((value) => value === 0)
     || [displacement.x, displacement.y, displacement.z].some((value) => Math.abs(value) > 500);
   const rotationInvalid = parsedRotation === null || parsedRotation === 0 || Math.abs(parsedRotation) > 180;
   const scaleInvalid = parsedScale === null || parsedScale === 1 || parsedScale < 0.25 || parsedScale > 4;
-  const operationInvalid = transformKind === 'move' ? moveInvalid : transformKind === 'rotate' ? rotationInvalid : scaleInvalid;
+  const faceExtrusionDistanceInvalid = parsedFaceExtrusionDistance === null
+    || parsedFaceExtrusionDistance < 0.2
+    || parsedFaceExtrusionDistance > 100;
+  const faceExtrusionSelectionInvalid = transformKind === 'extrude-face' && (
+    meshElementSelection?.kind !== 'face'
+    || meshElementSelection.selectionMethod !== 'click'
+    || meshElementSelection.elements.length !== 1
+  );
+  const operationInvalid = transformKind === 'move'
+    ? moveInvalid
+    : transformKind === 'rotate'
+      ? rotationInvalid
+      : transformKind === 'scale'
+        ? scaleInvalid
+        : faceExtrusionDistanceInvalid || faceExtrusionSelectionInvalid;
   const isEditing = meshElementEditStatus === 'editing';
   const selectionCurrent = Boolean(
     meshElementSelection
@@ -166,9 +184,11 @@ export function MeshElementEditPanel() {
     ? `已${meshElementSelection.selectionMethod === 'box' ? '框选' : '点击选择'} ${meshElementSelection.elements.length} 个${MESH_ELEMENT_LABELS[meshElementSelection.kind]}`
     : meshElementEditMode === 'off'
       ? '请选择一种编辑元素'
-      : meshElementSelectionMethod === 'box'
-        ? `请按住鼠标拖动框选要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`
-        : `请在模型上点击要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
+      : transformKind === 'extrude-face'
+        ? '请在模型上点击一个三角面；系统会自动确认真实外法线'
+        : meshElementSelectionMethod === 'box'
+          ? `请按住鼠标拖动框选要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`
+          : `请在模型上点击要变换的${MESH_ELEMENT_LABELS[meshElementEditMode]}`;
 
   async function submitTransform() {
     if (operationInvalid || !selectionCurrent || isEditing) return;
@@ -176,7 +196,9 @@ export function MeshElementEditPanel() {
       ? { kind: 'move', displacementMm: displacement! }
       : transformKind === 'rotate'
         ? { kind: 'rotate', axis: rotationAxis, angleDegrees: parsedRotation! }
-        : { kind: 'scale', scaleFactor: parsedScale! };
+        : transformKind === 'scale'
+          ? { kind: 'scale', scaleFactor: parsedScale! }
+          : { kind: 'extrude-face', mode: faceExtrusionMode, distanceMm: parsedFaceExtrusionDistance! };
     const result = await applyMeshElementTransform(operation);
     if (result?.operation === 'move') {
       setX('0');
@@ -185,7 +207,13 @@ export function MeshElementEditPanel() {
     }
   }
 
-  const actionText = transformKind === 'move' ? '批量应用位移' : transformKind === 'rotate' ? '统一应用旋转' : '统一应用缩放';
+  const actionText = transformKind === 'move'
+    ? '批量应用位移'
+    : transformKind === 'rotate'
+      ? '统一应用旋转'
+      : transformKind === 'scale'
+        ? '统一应用缩放'
+        : faceExtrusionMode === 'add' ? '沿真实外法线加料' : '沿真实内法线压入';
 
   return (
     <aside className="mesh-element-edit-panel" aria-label="网格元素编辑">
@@ -211,7 +239,7 @@ export function MeshElementEditPanel() {
         <>
           <div className="mesh-element-mode-row">
             {EDIT_MODES.map(({ mode, label }) => (
-              <button key={mode} type="button" className={meshElementEditMode === mode ? 'is-active' : ''} onClick={() => setMeshElementEditMode(mode)} disabled={isEditing}>
+              <button key={mode} type="button" className={meshElementEditMode === mode ? 'is-active' : ''} onClick={() => setMeshElementEditMode(mode)} disabled={isEditing || (transformKind === 'extrude-face' && mode !== 'face')}>
                 <MousePointer2 size={11} /> {label}
               </button>
             ))}
@@ -219,7 +247,7 @@ export function MeshElementEditPanel() {
 
           <div className="mesh-element-mode-row mesh-element-selection-methods">
             {SELECTION_METHODS.map(({ method, label, icon: Icon }) => (
-              <button key={method} type="button" className={meshElementSelectionMethod === method ? 'is-active' : ''} onClick={() => setMeshElementSelectionMethod(method)} disabled={isEditing || meshElementEditMode === 'off'}>
+              <button key={method} type="button" className={meshElementSelectionMethod === method ? 'is-active' : ''} onClick={() => setMeshElementSelectionMethod(method)} disabled={isEditing || meshElementEditMode === 'off' || (transformKind === 'extrude-face' && method !== 'click')}>
                 <Icon size={11} /> {label}
               </button>
             ))}
@@ -229,7 +257,20 @@ export function MeshElementEditPanel() {
 
           <div className="mesh-element-mode-row mesh-element-transform-methods">
             {TRANSFORM_MODES.map(({ kind, label, icon: Icon }) => (
-              <button key={kind} type="button" className={transformKind === kind ? 'is-active' : ''} onClick={() => setTransformKind(kind)} disabled={isEditing}>
+              <button
+                key={kind}
+                type="button"
+                className={transformKind === kind ? 'is-active' : ''}
+                onClick={() => {
+                  setTransformKind(kind);
+                  if (kind === 'extrude-face') {
+                    setMeshElementEditMode('face');
+                    setMeshElementSelectionMethod('click');
+                    clearMeshElementSelection();
+                  }
+                }}
+                disabled={isEditing}
+              >
                 <Icon size={11} /> {label}
               </button>
             ))}
@@ -269,11 +310,28 @@ export function MeshElementEditPanel() {
               </label>
             </div>
           )}
+          {transformKind === 'extrude-face' && (
+            <div className="mesh-element-transform-grid">
+              <label>
+                <span>法向操作</span>
+                <select value={faceExtrusionMode} onChange={(event) => setFaceExtrusionMode(event.target.value as 'add' | 'cut')} disabled={isEditing}>
+                  <option value="add">向外加料</option>
+                  <option value="cut">向内压入</option>
+                </select>
+              </label>
+              <label>
+                <span>作用距离</span>
+                <div><input value={faceExtrusionDistance} onChange={(event) => setFaceExtrusionDistance(event.target.value)} inputMode="decimal" disabled={isEditing} /><em>毫米</em></div>
+              </label>
+            </div>
+          )}
 
           {meshElementEditError && <div className="mesh-element-error">{meshElementEditError}</div>}
           {transformKind === 'move' && moveInvalid && <div className="mesh-element-error">位移必须包含非零有限数值，且每轴不能超过 500 毫米</div>}
           {transformKind === 'rotate' && rotationInvalid && <div className="mesh-element-error">旋转角度必须是 -180° 至 180° 之间的非零有限数值</div>}
           {transformKind === 'scale' && scaleInvalid && <div className="mesh-element-error">缩放比例必须在 0.25 至 4 倍之间，且不能等于 1</div>}
+          {transformKind === 'extrude-face' && faceExtrusionDistanceInvalid && <div className="mesh-element-error">作用距离必须在 0.20 至 100.00 毫米之间</div>}
+          {transformKind === 'extrude-face' && faceExtrusionSelectionInvalid && <div className="mesh-element-error">请点击选择当前修订中的单个三角面</div>}
 
           <div className="mesh-element-actions">
             <button type="button" className="mesh-element-apply" onClick={() => void submitTransform()} disabled={!selectionCurrent || operationInvalid || isEditing}>
@@ -287,6 +345,7 @@ export function MeshElementEditPanel() {
       <footer>
         <span>旋转和缩放以选择集合唯一源坐标的几何中心为枢轴；旋转使用源模型单轴，缩放比例限制为 0.25 至 4 倍。</span>
         <span>单次最多选择 {MAX_MESH_ELEMENT_SELECTIONS} 个同类元素；框选可能包含被遮挡区域中的元素。</span>
+        <span>法向编辑只接受单个点击三角面，方向由 OpenCascade 实体内外分类确认，不信任 STL 法线字段。</span>
         <span>修改后仍会重新检查退化面、封闭性、实体有效性、Solid 数量和体积。</span>
       </footer>
     </aside>

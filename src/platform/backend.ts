@@ -353,7 +353,7 @@ export async function runLocalStlEdit(request: LocalStlEditRequest) {
 }
 
 
-/** 对任意上传 STL 的同类元素集合执行受限位移、单轴旋转或均匀缩放。 */
+/** 对任意受管单 Solid 网格执行集合变换或单三角面法向加料与压入。 */
 export async function runMeshElementEdit(request: MeshElementTransformRequest) {
   const operationPayload = request.operation.kind === 'move'
     ? {
@@ -363,7 +363,9 @@ export async function runMeshElementEdit(request: MeshElementTransformRequest) {
       }
     : request.operation.kind === 'rotate'
       ? { rotationAxis: request.operation.axis, rotationDegrees: request.operation.angleDegrees }
-      : { scaleFactor: request.operation.scaleFactor };
+      : request.operation.kind === 'scale'
+        ? { scaleFactor: request.operation.scaleFactor }
+        : { faceExtrusionMode: request.operation.mode, distanceMm: request.operation.distanceMm };
   const payload = {
     sourcePartId: request.selection.sourcePartId,
     selectionRevision: request.selection.revision,
@@ -388,7 +390,7 @@ export async function runMeshElementEdit(request: MeshElementTransformRequest) {
   });
   const result = await response.json() as MeshElementEditResult | { message?: string };
   if (!response.ok || !('status' in result) || result.status !== 'ok') {
-    throw new Error('message' in result && result.message ? result.message : '上传 STL 网格元素变换失败');
+    throw new Error('message' in result && result.message ? result.message : '上传 STL 网格元素编辑失败');
   }
   return result;
 }

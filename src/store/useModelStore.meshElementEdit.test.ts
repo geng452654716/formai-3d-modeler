@@ -289,6 +289,81 @@ describe('上传 STL 网格元素批量编辑', () => {
     expect(useModelStore.getState().messages.at(-1)?.content).toContain('按 1.2 倍均匀缩放');
   });
 
+  it('点击单个三角面可沿真实外法线加料并创建中文版本', async () => {
+    const faceSelection = createMeshElementSelectionSet([
+      { ...selection, kind: 'face', elementIndex: 0 }
+    ], 'click')!;
+    backendMocks.runMeshElementEdit.mockResolvedValueOnce(result({
+      kind: 'face',
+      operation: 'extrude-face',
+      faceExtrusionMode: 'add',
+      distanceMm: 2,
+      outwardNormal: { x: 0, y: 0, z: 1 },
+      toolVolumeMm3: 42,
+      movedCoordinateCount: 0,
+      movedVertexOccurrenceCount: 0,
+      validation: {
+        valid: true,
+        watertight: true,
+        solidCountBefore: 1,
+        solidCountAfter: 1,
+        volumeBeforeMm3: 1000,
+        volumeAfterMm3: 1040,
+        volumeDeltaMm3: 40,
+        boundsBeforeMm: bounds,
+        boundsAfterMm: { ...bounds, maxZ: 12, z: 12 }
+      }
+    }));
+    useModelStore.getState().setMeshElementEditMode('face');
+    useModelStore.getState().selectMeshElements(faceSelection);
+
+    const editResult = await useModelStore.getState().applyMeshElementTransform({
+      kind: 'extrude-face',
+      mode: 'add',
+      distanceMm: 2
+    });
+
+    expect(editResult?.operation).toBe('extrude-face');
+    expect(backendMocks.runMeshElementEdit).toHaveBeenCalledWith({
+      selection: faceSelection,
+      operation: { kind: 'extrude-face', mode: 'add', distanceMm: 2 }
+    });
+    expect(useModelStore.getState().versions.at(-1)?.label).toBe('三角面向外加料上传模型');
+    expect(useModelStore.getState().messages.at(-1)?.content).toContain('沿真实外法线加料 2 毫米');
+    expect(useModelStore.getState().messages.at(-1)?.content).toContain('工具体积 42.00 立方毫米');
+  });
+
+  it('三角面法向编辑在 Store 直接拒绝框选、多面或非面请求', async () => {
+    const boxedFaces = createMeshElementSelectionSet([
+      { ...selection, kind: 'face', elementIndex: 0 },
+      { ...selection, kind: 'face', triangleIndex: 5, elementIndex: 0 }
+    ], 'box')!;
+    useModelStore.getState().setMeshElementEditMode('face');
+    useModelStore.getState().setMeshElementSelectionMethod('box');
+    useModelStore.getState().selectMeshElements(boxedFaces);
+
+    expect(await useModelStore.getState().applyMeshElementTransform({
+      kind: 'extrude-face',
+      mode: 'cut',
+      distanceMm: 2
+    })).toBeNull();
+    expect(backendMocks.runMeshElementEdit).not.toHaveBeenCalled();
+    expect(useModelStore.getState().meshElementEditError)
+      .toBe('三角面法向编辑第一版必须且只能点击选择一个三角面');
+
+    backendMocks.runMeshElementEdit.mockClear();
+    useModelStore.getState().setMeshElementEditMode('vertex');
+    useModelStore.getState().selectMeshElement(selection);
+    expect(await useModelStore.getState().applyMeshElementTransform({
+      kind: 'extrude-face',
+      mode: 'add',
+      distanceMm: 2
+    })).toBeNull();
+    expect(backendMocks.runMeshElementEdit).not.toHaveBeenCalled();
+    expect(useModelStore.getState().meshElementEditError)
+      .toBe('三角面法向编辑第一版必须且只能点击选择一个三角面');
+  });
+
   it('Worker 失败时保留最后有效模型和整个集合并显示中文错误', async () => {
     backendMocks.runMeshElementEdit.mockRejectedValueOnce(new Error('移动后网格不再封闭'));
     useModelStore.getState().setMeshElementEditMode('face');
