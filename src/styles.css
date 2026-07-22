@@ -1262,6 +1262,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-diagnostic-differences li span { color: #9c8763; font-size: 6px; line-height: 1.4; }
 .mesh-planar-region-diagnostic-differences code { min-width: 0; color: #d8c5a2; font-family: inherit; font-size: 6px; line-height: 1.4; overflow-wrap: anywhere; }
 .mesh-planar-region-diagnostic-differences small { color: #837967; font-size: 6px; line-height: 1.4; }
+.mesh-planar-region-diagnostic-differences .diagnostic-difference-copy { padding-top: 5px; border-top: 1px solid rgba(222, 164, 55, .22); }
 .mesh-planar-region-diagnostic-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 7px; min-width: 0; }
 .mesh-planar-region-diagnostic-copy button { flex: 0 0 auto; min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }
 .mesh-planar-region-diagnostic-copy button:hover:not(:disabled) { border-color: rgba(97, 230, 209, .72); color: #d6f7f0; background: rgba(25, 74, 66, .62); }

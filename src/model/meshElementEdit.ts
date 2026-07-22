@@ -757,6 +757,43 @@ export function createMeshPlanarRegionCodexDiagnosticFieldDifferences(
   });
 }
 
+/** 把有限诊断变化项格式化为可按需复制的简洁中文摘要，不包含完整诊断正文。 */
+export function createMeshPlanarRegionCodexDiagnosticDifferenceSummary(
+  differences: readonly MeshPlanarRegionCodexDiagnosticFieldDifference[]
+): string | null {
+  if (!differences.length) return null;
+  const normalized = differences.map((difference) => ({
+    label: difference.label.trim(),
+    previousValue: difference.previousValue.trim(),
+    latestValue: difference.latestValue.trim()
+  }));
+  if (normalized.some((difference) => (
+    !difference.label || !difference.previousValue || !difference.latestValue
+  ))) return null;
+  return [
+    '【共面区域诊断字段差异】',
+    `共 ${normalized.length} 项变化`,
+    ...normalized.map((difference) => (
+      `${difference.label}：${difference.previousValue} → ${difference.latestValue}`
+    ))
+  ].join('\n');
+}
+
+/** 仅把有限差异摘要交给调用方提供的剪贴板写入函数，失败时不向外抛错。 */
+export async function copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(
+  differences: readonly MeshPlanarRegionCodexDiagnosticFieldDifference[],
+  writeText: (text: string) => Promise<void>
+): Promise<'copied' | 'failed'> {
+  const summary = createMeshPlanarRegionCodexDiagnosticDifferenceSummary(differences);
+  if (!summary) return 'failed';
+  try {
+    await writeText(summary);
+    return 'copied';
+  } catch {
+    return 'failed';
+  }
+}
+
 /** 为唯一完整诊断块返回精确字符范围和只读摘要；不安全状态不猜测位置。 */
 export function createMeshPlanarRegionCodexDraftBlockLocation(
   draft: string,

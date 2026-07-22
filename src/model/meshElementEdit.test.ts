@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   appendMeshPlanarRegionCodexAnalysisDraft,
   collectMeshElementBoxSelection,
+  copyMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionCodexAnalysisRequest,
   createMeshPlanarRegionCodexDraftBlockLocation,
+  createMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   createMeshPlanarRegionCodexDiagnosticFieldDifferences,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
@@ -1011,6 +1013,47 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(`${block}\n\n${block}`, [block], latest)).toBeNull();
     expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(block, [], latest)).toBeNull();
     expect(createMeshPlanarRegionCodexDiagnosticFieldDifferences(block, [block], '  ')).toBeNull();
+  });
+
+  it('按当前字段顺序生成不含完整诊断正文的简洁差异摘要', () => {
+    const differences = [
+      { key: 'distance', label: '作用距离', previousValue: '2.00 毫米', latestValue: '3.00 毫米' },
+      { key: 'effect-ratio', label: '实际作用比例', previousValue: '85.71%', latestValue: '90.00%' }
+    ];
+    const summary = createMeshPlanarRegionCodexDiagnosticDifferenceSummary(differences);
+    expect(summary).toBe([
+      '【共面区域诊断字段差异】',
+      '共 2 项变化',
+      '作用距离：2.00 毫米 → 3.00 毫米',
+      '实际作用比例：85.71% → 90.00%'
+    ].join('\n'));
+    expect(summary).not.toContain('【共面区域几何诊断分析请求】');
+    expect(summary).not.toContain('请分析以下当前模型');
+  });
+
+  it('空差异或不完整差异不生成可复制摘要', () => {
+    expect(createMeshPlanarRegionCodexDiagnosticDifferenceSummary([])).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticDifferenceSummary([
+      { key: 'distance', label: '作用距离', previousValue: ' ', latestValue: '3.00 毫米' }
+    ])).toBeNull();
+  });
+
+  it('差异复制使用注入写入函数并把失败安全转换为中文界面状态', async () => {
+    const differences = [
+      { key: 'distance', label: '作用距离', previousValue: '2.00 毫米', latestValue: '3.00 毫米' }
+    ];
+    let copiedText = '';
+    await expect(copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(differences, async (text) => {
+      copiedText = text;
+    })).resolves.toBe('copied');
+    expect(copiedText).toContain('共 1 项变化');
+    expect(copiedText).toContain('作用距离：2.00 毫米 → 3.00 毫米');
+    await expect(copyMeshPlanarRegionCodexDiagnosticDifferenceSummary([], async () => {
+      throw new Error('空差异不应写入剪贴板');
+    })).resolves.toBe('failed');
+    await expect(copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(differences, async () => {
+      throw new Error('剪贴板不可用');
+    })).resolves.toBe('failed');
   });
 
   it('用最新诊断精确替换唯一旧块并原样保留前后用户文字和换行', () => {

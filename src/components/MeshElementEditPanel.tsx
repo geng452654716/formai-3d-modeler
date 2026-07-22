@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
+  copyMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
+  createMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
@@ -140,6 +142,10 @@ export function MeshElementEditPanel({
     summary: string;
     status: 'copied' | 'failed';
   } | null>(null);
+  const [diagnosticDifferenceCopyFeedback, setDiagnosticDifferenceCopyFeedback] = useState<{
+    summary: string;
+    status: 'copied' | 'failed';
+  } | null>(null);
   const [diagnosticDraftFeedback, setDiagnosticDraftFeedback] = useState<{
     summary: string;
     status: CodexDiagnosticDraftApplyStatus;
@@ -194,6 +200,14 @@ export function MeshElementEditPanel({
   ), [importedStlModel, meshElementEditResult]);
   const diagnosticCopyStatus = diagnosticCopyFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
     ? diagnosticCopyFeedback.status
+    : 'idle';
+  const diagnosticDifferenceSummary = useMemo(() => (
+    codexDiagnosticDraftAction === 'replace' && codexDiagnosticFieldDifferences?.length
+      ? createMeshPlanarRegionCodexDiagnosticDifferenceSummary(codexDiagnosticFieldDifferences)
+      : null
+  ), [codexDiagnosticDraftAction, codexDiagnosticFieldDifferences]);
+  const diagnosticDifferenceCopyStatus = diagnosticDifferenceCopyFeedback?.summary === diagnosticDifferenceSummary
+    ? diagnosticDifferenceCopyFeedback.status
     : 'idle';
   const diagnosticDraftCurrent = diagnosticDraftFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
     && (
@@ -271,6 +285,16 @@ export function MeshElementEditPanel({
       writeDiagnosticTextToClipboard
     );
     setDiagnosticCopyFeedback({ summary: meshPlanarRegionExtrusionDiagnosticSummary, status });
+  }
+
+  /** 仅在安全替换状态下复制有限字段变化，不读取或复制完整诊断正文。 */
+  async function copyPlanarRegionDiagnosticDifferences() {
+    if (!codexDiagnosticFieldDifferences?.length || !diagnosticDifferenceSummary) return;
+    const status = await copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(
+      codexDiagnosticFieldDifferences,
+      writeDiagnosticTextToClipboard
+    );
+    setDiagnosticDifferenceCopyFeedback({ summary: diagnosticDifferenceSummary, status });
   }
 
   /** 仅把当前有效诊断追加或安全替换到页面草稿，仍由用户检查并手动执行。 */
@@ -613,6 +637,17 @@ export function MeshElementEditPanel({
                     ))}
                   </ul>
                   <small>这里只显示变化字段；点击替换前不会修改草稿或执行指令。</small>
+                  <div className={`mesh-planar-region-diagnostic-copy diagnostic-difference-copy ${diagnosticDifferenceCopyStatus}`} aria-live="polite">
+                    <button
+                      type="button"
+                      className="codex-analysis"
+                      onClick={() => void copyPlanarRegionDiagnosticDifferences()}
+                    >
+                      {diagnosticDifferenceCopyStatus === 'copied' ? '已复制差异摘要' : '复制差异摘要'}
+                    </button>
+                    {diagnosticDifferenceCopyStatus === 'copied' && <span>差异摘要已复制，不会自动发送或执行。</span>}
+                    {diagnosticDifferenceCopyStatus === 'failed' && <span role="alert">复制差异摘要失败，请检查剪贴板权限。</span>}
+                  </div>
                 </div>
               ) : null}
               <div className={`mesh-planar-region-diagnostic-copy ${diagnosticCopyStatus}`} aria-live="polite">
