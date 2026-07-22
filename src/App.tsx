@@ -30,7 +30,7 @@ import { SceneTree } from './components/SceneTree';
 import { VersionHistoryDialog } from './components/VersionHistoryDialog';
 import { generatedDownloadUrl } from './model/cad';
 import { getOuterDimensions } from './model/defaults';
-import { appendMeshPlanarRegionCodexAnalysisDraft } from './model/meshElementEdit';
+import { appendMeshPlanarRegionCodexAnalysisDraft, createMeshPlanarRegionCodexAnalysisRequest } from './model/meshElementEdit';
 import {
   createTransformedExportObject,
   manufacturingSplitPresentationId,
@@ -53,6 +53,7 @@ function App() {
   const [manufacturingOpen, setManufacturingOpen] = useState(false);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const [commandDraft, setCommandDraft] = useState('');
+  const [commandDiagnosticBlocks, setCommandDiagnosticBlocks] = useState<string[]>([]);
   const imageInput = useRef<HTMLInputElement>(null);
   const initialParameters = useRef(true);
   const undo = useModelStore((state) => state.undo);
@@ -91,9 +92,21 @@ function App() {
   const clearCadFaceSelection = useModelStore((state) => state.clearCadFaceSelection);
   const versionGeometryComparisonMode = useModelStore((state) => state.versionGeometryComparisonMode);
 
-  /** 保留当前页面已有指令，并去重追加用户主动选择的几何诊断分析请求。 */
+  /** 保留当前页面已有指令，并登记本页实际注入的完整诊断块供安全识别与移除。 */
   const appendCodexDiagnostic = (summary: string) => {
-    setCommandDraft((current) => appendMeshPlanarRegionCodexAnalysisDraft(current, summary).draft);
+    const result = appendMeshPlanarRegionCodexAnalysisDraft(commandDraft, summary);
+    setCommandDraft(result.draft);
+    if (result.status !== 'appended') return;
+    const generatedBlock = createMeshPlanarRegionCodexAnalysisRequest(summary);
+    if (generatedBlock) {
+      setCommandDiagnosticBlocks((current) => current.includes(generatedBlock) ? current : [...current, generatedBlock]);
+    }
+  };
+
+  /** 更新当前页草稿；全部清空时同步丢弃只属于本页的诊断块登记。 */
+  const updateCommandDraft = (nextDraft: string) => {
+    setCommandDraft(nextDraft);
+    if (!nextDraft) setCommandDiagnosticBlocks([]);
   };
   const modelExportFiles: Array<readonly [string, string]> = cadResult
     ? [
@@ -518,7 +531,7 @@ function App() {
           </div>
           <ModelViewport />
           <MeshElementEditPanel onAppendCodexDiagnostic={appendCodexDiagnostic} />
-          <CommandPanel command={commandDraft} onCommandChange={setCommandDraft} />
+          <CommandPanel command={commandDraft} generatedDiagnosticBlocks={commandDiagnosticBlocks} onCommandChange={updateCommandDraft} />
           <button
             type="button"
             className="history-indicator"

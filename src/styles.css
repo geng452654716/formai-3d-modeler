@@ -98,6 +98,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .print-hint svg { flex: none; color: #c6871b; }
 
 .command-panel { position: absolute; right: 14px; bottom: 14px; width: 360px; border: 1px solid #383b41; border-radius: 9px; background: rgba(23,24,27,.95); backdrop-filter: blur(16px); z-index: 6; box-shadow: 0 12px 35px rgba(0,0,0,.3); overflow: hidden; }
+.mesh-element-edit-panel ~ .command-panel { right: 338px; }
 .command-title { height: 35px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid #303238; }
 .command-title > div { display: flex; align-items: center; gap: 6px; color: #c4c6c4; font-size: 10px; font-weight: 700; }
 .command-title svg { color: #e3a12b; }
@@ -114,6 +115,16 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .suggestions { display: flex; gap: 5px; overflow-x: auto; padding: 3px 10px 7px; scrollbar-width: none; }
 .suggestions button { white-space: nowrap; background: transparent; border: 1px solid #3a3d43; color: #777c84; border-radius: 12px; padding: 3px 7px; font-size: 8px; cursor: pointer; }
 .suggestions button:hover { color: #e0a439; border-color: #8d641d; }
+.command-diagnostic-draft { margin: 0 10px 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid rgba(83, 199, 180, .4); border-radius: 6px; background: rgba(17, 54, 48, .34); }
+.command-diagnostic-draft > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.command-diagnostic-draft strong { color: #addfd6; font-size: 8px; }
+.command-diagnostic-draft span { color: #82aaa3; font-size: 7px; line-height: 1.45; }
+.command-diagnostic-draft button { min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }
+.command-diagnostic-draft button:hover:not(:disabled) { border-color: rgba(97, 230, 209, .72); color: #d6f7f0; background: rgba(25, 74, 66, .62); }
+.command-diagnostic-draft button:disabled { cursor: not-allowed; opacity: .45; }
+.command-diagnostic-draft.edited, .command-diagnostic-draft.ambiguous { border-color: rgba(235, 168, 91, .48); background: rgba(73, 49, 15, .34); }
+.command-diagnostic-draft.edited strong, .command-diagnostic-draft.ambiguous strong { color: #efc786; }
+.command-diagnostic-draft.edited span, .command-diagnostic-draft.ambiguous span { color: #b79a6c; }
 .command-form { min-height: 52px; display: grid; grid-template-columns: 1fr 34px; border-top: 1px solid #303238; }
 .command-form textarea { min-height: 52px; max-height: 132px; resize: vertical; border: 0; outline: 0; background: transparent; color: #d9dad7; padding: 9px 11px; font: inherit; font-size: 10px; line-height: 1.45; }
 .command-form textarea::placeholder { color: #575c64; }

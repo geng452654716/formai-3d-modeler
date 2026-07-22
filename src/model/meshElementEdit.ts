@@ -626,16 +626,30 @@ export function createMeshPlanarRegionExtrusionDiagnosticSummary(
 }
 
 export type MeshPlanarRegionCodexDraftAppendStatus = 'appended' | 'duplicate' | 'invalid';
+export type MeshPlanarRegionCodexDraftBlockStatus = 'none' | 'complete' | 'edited' | 'ambiguous';
+export type MeshPlanarRegionCodexDraftRemoveStatus = 'removed' | 'not-found' | 'unsafe';
+
+export interface MeshPlanarRegionCodexDraftInspection {
+  status: MeshPlanarRegionCodexDraftBlockStatus;
+  completeBlockCount: number;
+  matchedBlock: string | null;
+}
+
+const MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS = [
+  '【共面区域几何诊断分析请求】',
+  '请分析以下当前模型的共面区域几何诊断：',
+  '请分析几何链路是否合理并提出下一步修改建议。'
+] as const;
 
 /** 把当前几何诊断包装为仅供用户审阅的 Codex 中文分析请求，不触发任何执行。 */
 export function createMeshPlanarRegionCodexAnalysisRequest(summary: string): string | null {
   const trimmedSummary = summary.trim();
   if (!trimmedSummary) return null;
   return [
-    '【共面区域几何诊断分析请求】',
-    '请分析以下当前模型的共面区域几何诊断：',
+    MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS[0],
+    MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS[1],
     trimmedSummary,
-    '请分析几何链路是否合理并提出下一步修改建议。'
+    MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS[2]
   ].join('\n');
 }
 
@@ -650,6 +664,62 @@ export function appendMeshPlanarRegionCodexAnalysisDraft(
   return {
     draft: currentDraft.trimEnd() ? `${currentDraft.trimEnd()}\n\n${request}` : request,
     status: 'appended'
+  };
+}
+
+/** 统计完整文本出现次数，避免多个诊断块时误删用户无法确认的目标。 */
+function countExactTextOccurrences(source: string, target: string): number {
+  if (!target) return 0;
+  let count = 0;
+  let offset = 0;
+  while (offset <= source.length - target.length) {
+    const index = source.indexOf(target, offset);
+    if (index < 0) break;
+    count += 1;
+    offset = index + target.length;
+  }
+  return count;
+}
+
+/** 仅依据本页实际注入过的完整文本识别诊断块，并把编辑、残缺或重复情况标记为不安全。 */
+export function inspectMeshPlanarRegionCodexAnalysisDraft(
+  draft: string,
+  generatedBlocks: readonly string[]
+): MeshPlanarRegionCodexDraftInspection {
+  const knownBlocks = [...new Set(generatedBlocks.map((block) => block.trim()).filter(Boolean))];
+  const exactMatches = knownBlocks.flatMap((block) => (
+    Array.from({ length: countExactTextOccurrences(draft, block) }, () => block)
+  ));
+  const markerCount = MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS.reduce(
+    (count, marker) => count + countExactTextOccurrences(draft, marker),
+    0
+  );
+  if (exactMatches.length === 1 && markerCount === MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS.length) {
+    return { status: 'complete', completeBlockCount: 1, matchedBlock: exactMatches[0] };
+  }
+  if (exactMatches.length > 1 || (exactMatches.length === 1 && markerCount > MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS.length)) {
+    return { status: 'ambiguous', completeBlockCount: exactMatches.length, matchedBlock: null };
+  }
+  if (markerCount > 0) {
+    return { status: 'edited', completeBlockCount: 0, matchedBlock: null };
+  }
+  return { status: 'none', completeBlockCount: 0, matchedBlock: null };
+}
+
+/** 只移除唯一、完整且由本页注入的诊断块；其余情况保持草稿原样。 */
+export function removeMeshPlanarRegionCodexAnalysisDraftBlock(
+  draft: string,
+  generatedBlocks: readonly string[]
+): { draft: string; status: MeshPlanarRegionCodexDraftRemoveStatus } {
+  const inspection = inspectMeshPlanarRegionCodexAnalysisDraft(draft, generatedBlocks);
+  if (inspection.status === 'none') return { draft, status: 'not-found' };
+  if (inspection.status !== 'complete' || !inspection.matchedBlock) return { draft, status: 'unsafe' };
+  const blockIndex = draft.indexOf(inspection.matchedBlock);
+  const before = draft.slice(0, blockIndex).trimEnd();
+  const after = draft.slice(blockIndex + inspection.matchedBlock.length).trimStart();
+  return {
+    draft: before && after ? `${before}\n\n${after}` : before || after,
+    status: 'removed'
   };
 }
 

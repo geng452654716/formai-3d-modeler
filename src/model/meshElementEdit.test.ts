@@ -8,11 +8,13 @@ import {
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
   createMeshPlanarRegionExtrusionToolVolumeComparison,
+  inspectMeshPlanarRegionCodexAnalysisDraft,
   createMeshElementSelectionSet,
   meshElementSelectionKey,
   meshElementSelectionPivot,
   uniqueMeshElementSelectionPoints,
   nearestMeshElementIndex,
+  removeMeshPlanarRegionCodexAnalysisDraftBlock,
   selectedMeshElementPoints,
   type MeshElementEditResult,
   type MeshElementSelection
@@ -957,5 +959,57 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
       draft: '已有指令',
       status: 'invalid'
     });
+  });
+
+
+  it('识别唯一完整诊断块并在移除时保留前后用户文字', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n方向状态：加料增量一致')!;
+    const draft = `请保留前方要求。  \n\n${block}\n\n  请保留后方补充。`;
+    expect(inspectMeshPlanarRegionCodexAnalysisDraft(draft, [block])).toEqual({
+      status: 'complete',
+      completeBlockCount: 1,
+      matchedBlock: block
+    });
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(draft, [block])).toEqual({
+      draft: '请保留前方要求。\n\n请保留后方补充。',
+      status: 'removed'
+    });
+  });
+
+  it('只含诊断块时移除为空草稿且不自动保留不可见内容', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n实际作用比例：96.54%')!;
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(block, [block])).toEqual({ draft: '', status: 'removed' });
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock('', [block])).toEqual({ draft: '', status: 'not-found' });
+  });
+
+  it('诊断块被手工编辑或仅剩部分内容时拒绝模糊删除', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n模型体积变化：+180.00 立方毫米')!;
+    const edited = block.replace('+180.00', '+200.00');
+    expect(inspectMeshPlanarRegionCodexAnalysisDraft(edited, [block])).toMatchObject({ status: 'edited' });
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(edited, [block])).toEqual({ draft: edited, status: 'unsafe' });
+
+    const partial = '用户要求\n\n【共面区域几何诊断分析请求】\n共面区域几何诊断';
+    expect(inspectMeshPlanarRegionCodexAnalysisDraft(partial, [block])).toMatchObject({ status: 'edited' });
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(partial, [block])).toEqual({ draft: partial, status: 'unsafe' });
+  });
+
+  it('重复完整诊断块属于歧义状态并保持草稿不变', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n方向状态：压入减量一致')!;
+    const repeated = `${block}\n\n${block}`;
+    expect(inspectMeshPlanarRegionCodexAnalysisDraft(repeated, [block])).toEqual({
+      status: 'ambiguous',
+      completeBlockCount: 2,
+      matchedBlock: null
+    });
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(repeated, [block])).toEqual({
+      draft: repeated,
+      status: 'unsafe'
+    });
+  });
+
+  it('未登记的相似文本不作为本页系统诊断块删除', () => {
+    const pasted = createMeshPlanarRegionCodexAnalysisRequest('用户自己粘贴的诊断')!;
+    expect(inspectMeshPlanarRegionCodexAnalysisDraft(pasted, [])).toMatchObject({ status: 'edited' });
+    expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(pasted, [])).toEqual({ draft: pasted, status: 'unsafe' });
   });
 });
