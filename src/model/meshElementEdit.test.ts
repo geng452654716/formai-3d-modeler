@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   collectMeshElementBoxSelection,
   createMeshPlanarRegionExtrusionResultComparison,
+  createMeshPlanarRegionExtrusionToolVolumeComparison,
   createMeshElementSelectionSet,
   meshElementSelectionKey,
   meshElementSelectionPivot,
@@ -576,6 +577,8 @@ describe('连续共面区域执行结果体积对照', () => {
     mode?: MeshElementEditResult['faceExtrusionMode'];
     toolVolumeMm3?: number;
     volumeDeltaMm3?: number;
+    regionAreaMm2?: number;
+    distanceMm?: number;
   } = {}): MeshElementEditResult {
     const revision = overrides.revision ?? '修订-结果';
     return {
@@ -590,6 +593,8 @@ describe('连续共面区域执行结果体积对照', () => {
       pivotMm: { x: 0, y: 0, z: 0 },
       faceExtrusionMode: overrides.mode === undefined ? 'add' : overrides.mode,
       toolVolumeMm3: overrides.toolVolumeMm3 === undefined ? 200 : overrides.toolVolumeMm3,
+      regionAreaMm2: overrides.regionAreaMm2 === undefined ? 100 : overrides.regionAreaMm2,
+      distanceMm: overrides.distanceMm === undefined ? 2 : overrides.distanceMm,
       movedCoordinateCount: 0,
       movedVertexOccurrenceCount: 0,
       sourceFile: '任意模型.stl',
@@ -656,5 +661,100 @@ describe('连续共面区域执行结果体积对照', () => {
     for (const volumeDeltaMm3 of [Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult({ volumeDeltaMm3 }), '修订-结果')).toBeNull();
     }
+  });
+});
+
+describe('连续共面区域平面估算与工具体积偏差', () => {
+  function result(toolVolumeMm3: number, overrides: Partial<MeshElementEditResult> = {}): MeshElementEditResult {
+    return {
+      status: 'ok',
+      revision: '修订-偏差',
+      selectionRevision: '修订-执行前',
+      sourcePartId: 'uploaded-model',
+      kind: 'face',
+      selectionMethod: 'click',
+      selectedElementCount: 1,
+      affectedTriangleCount: 2,
+      regionAreaMm2: 100,
+      boundaryLoopCount: 1,
+      normalToleranceDegrees: 0.5,
+      planeToleranceMm: 0.001,
+      operation: 'extrude-face',
+      pivotMm: { x: 0, y: 0, z: 0 },
+      faceExtrusionMode: 'add',
+      distanceMm: 2,
+      toolVolumeMm3,
+      movedCoordinateCount: 0,
+      movedVertexOccurrenceCount: 0,
+      sourceFile: '任意模型.stl',
+      stepFile: '任意模型.step',
+      outputs: ['任意模型.stl', '任意模型.step'],
+      units: 'mm',
+      kernel: 'OpenCascade 测试内核',
+      validation: {
+        valid: true,
+        watertight: true,
+        solidCountBefore: 1,
+        solidCountAfter: 1,
+        volumeBeforeMm3: 1_000,
+        volumeAfterMm3: 1_000 + Math.min(toolVolumeMm3, 180),
+        volumeDeltaMm3: Math.min(toolVolumeMm3, 180),
+        boundsBeforeMm: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 10, x: 10, y: 10, z: 10 },
+        boundsAfterMm: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 12, x: 10, y: 10, z: 12 }
+      },
+      updatedModel: {} as MeshElementEditResult['updatedModel'],
+      limitations: [],
+      ...overrides
+    };
+  }
+
+  it('识别一致、高于和低于平面估算的工具体积', () => {
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200), '修订-偏差')).toEqual({
+      planarEstimatedVolumeMm3: 200,
+      toolVolumeMm3: 200,
+      differenceMm3: 0,
+      differencePercent: 0,
+      direction: 'equal'
+    });
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200.0000001), '修订-偏差')).toEqual({
+      planarEstimatedVolumeMm3: 200,
+      toolVolumeMm3: 200.0000001,
+      differenceMm3: 0,
+      differencePercent: 0,
+      direction: 'equal'
+    });
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(206), '修订-偏差')).toEqual({
+      planarEstimatedVolumeMm3: 200,
+      toolVolumeMm3: 206,
+      differenceMm3: 6,
+      differencePercent: 3,
+      direction: 'higher'
+    });
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(190), '修订-偏差')).toEqual({
+      planarEstimatedVolumeMm3: 200,
+      toolVolumeMm3: 190,
+      differenceMm3: -10,
+      differencePercent: -5,
+      direction: 'lower'
+    });
+  });
+
+  it('对当前修订绑定并拒绝缺失、非正或非有限面积和距离', () => {
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200), '其他修订')).toBeNull();
+    for (const regionAreaMm2 of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200, { regionAreaMm2 }), '修订-偏差')).toBeNull();
+    }
+    for (const distanceMm of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200, { distanceMm }), '修订-偏差')).toBeNull();
+    }
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200, { regionAreaMm2: undefined }), '修订-偏差')).toBeNull();
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(200, { distanceMm: undefined }), '修订-偏差')).toBeNull();
+  });
+
+  it('接受边界值并让明显异常的工具体构造偏差安全降级', () => {
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(300), '修订-偏差')?.differencePercent).toBe(50);
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(100), '修订-偏差')?.differencePercent).toBe(-50);
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(301), '修订-偏差')).toBeNull();
+    expect(createMeshPlanarRegionExtrusionToolVolumeComparison(result(99), '修订-偏差')).toBeNull();
   });
 });

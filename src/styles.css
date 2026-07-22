@@ -1221,10 +1221,15 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-result-comparison > strong { color: #61e6d1; font-size: 8px; }
 .mesh-planar-region-result-comparison.cut { border-color: rgba(255, 143, 118, .48); background: rgba(55, 24, 18, .3); }
 .mesh-planar-region-result-comparison.cut > strong { color: #ff9f87; }
-.mesh-planar-region-result-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.mesh-planar-region-result-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 8px; }
 .mesh-planar-region-result-grid span { display: flex; min-width: 0; flex-direction: column; gap: 2px; color: #7d938a; font-size: 7px; }
 .mesh-planar-region-result-grid strong { overflow-wrap: anywhere; color: #d2eee6; font-size: 8px; }
 .mesh-planar-region-result-comparison.cut .mesh-planar-region-result-grid strong { color: #ffe0d8; }
+.mesh-planar-region-tool-volume-difference { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 6px; border-radius: 4px; background: rgba(14, 31, 27, .64); color: #78968c; font-size: 7px; }
+.mesh-planar-region-tool-volume-difference strong { color: #bcded4; font-size: 7px; text-align: right; }
+.mesh-planar-region-tool-volume-difference.higher strong { color: #f0c878; }
+.mesh-planar-region-tool-volume-difference.lower strong { color: #90c7ee; }
+.mesh-planar-region-result-comparison.cut .mesh-planar-region-tool-volume-difference { background: rgba(39, 20, 16, .58); }
 .mesh-planar-region-result-note { color: #79928a; font-size: 7px; line-height: 1.45; }
 .mesh-element-actions { display: grid; grid-template-columns: 1.4fr 1fr; gap: 6px; padding: 0 10px 8px; }
 .mesh-element-actions .mesh-element-apply { color: #2a2112; border-color: #d29424; background: #e0a12e; font-weight: 700; }

@@ -260,6 +260,14 @@ export interface MeshPlanarRegionExtrusionResultComparison {
   effectRatioPercent: number;
 }
 
+export interface MeshPlanarRegionExtrusionToolVolumeComparison {
+  planarEstimatedVolumeMm3: number;
+  toolVolumeMm3: number;
+  differenceMm3: number;
+  differencePercent: number;
+  direction: 'equal' | 'higher' | 'lower';
+}
+
 export const MESH_ELEMENT_LABELS: Record<MeshElementKind, string> = {
   vertex: '顶点',
   edge: '边',
@@ -271,6 +279,8 @@ export const MAX_MESH_ELEMENT_SELECTIONS = 512;
 export const MAX_PLANAR_REGION_TRIANGLES = 20_000;
 export const MAX_PLANAR_REGION_AREA_MM2 = 200_000;
 export const PLANAR_REGION_NORMAL_TOLERANCE_DEGREES = 0.5;
+const MAX_PLANAR_TOOL_VOLUME_DIFFERENCE_PERCENT = 50;
+const PLANAR_TOOL_VOLUME_EQUAL_RELATIVE_TOLERANCE = 1e-6;
 
 /** 在当前边界环列表中按指定方向循环定位，空列表返回未聚焦。 */
 export function cycleMeshPlanarRegionLoopIndex(
@@ -499,6 +509,45 @@ export function createMeshPlanarRegionExtrusionResultComparison(
     toolVolumeMm3,
     modelVolumeChangeMm3,
     effectRatioPercent: Math.min(100, rawEffectRatioPercent)
+  };
+}
+
+/** 对照三角面区域平面估算与 OpenCascade 实际工具体积，只解释几何构造偏差。 */
+export function createMeshPlanarRegionExtrusionToolVolumeComparison(
+  result: MeshElementEditResult,
+  currentRevision: string
+): MeshPlanarRegionExtrusionToolVolumeComparison | null {
+  const resultComparison = createMeshPlanarRegionExtrusionResultComparison(result, currentRevision);
+  const regionAreaMm2 = result.regionAreaMm2;
+  const distanceMm = result.distanceMm;
+  if (
+    !resultComparison
+    || regionAreaMm2 === undefined
+    || distanceMm === undefined
+    || !Number.isFinite(regionAreaMm2)
+    || !Number.isFinite(distanceMm)
+    || regionAreaMm2 <= 0
+    || distanceMm <= 0
+  ) return null;
+  const planarEstimatedVolumeMm3 = regionAreaMm2 * distanceMm;
+  if (!Number.isFinite(planarEstimatedVolumeMm3) || planarEstimatedVolumeMm3 <= 0) return null;
+  const differenceMm3 = resultComparison.toolVolumeMm3 - planarEstimatedVolumeMm3;
+  const differencePercent = differenceMm3 / planarEstimatedVolumeMm3 * 100;
+  if (
+    !Number.isFinite(differenceMm3)
+    || !Number.isFinite(differencePercent)
+    || Math.abs(differencePercent) > MAX_PLANAR_TOOL_VOLUME_DIFFERENCE_PERCENT
+  ) return null;
+  const equalityToleranceMm3 = Math.max(1e-6, planarEstimatedVolumeMm3 * PLANAR_TOOL_VOLUME_EQUAL_RELATIVE_TOLERANCE);
+  const direction = Math.abs(differenceMm3) <= equalityToleranceMm3
+    ? 'equal'
+    : differenceMm3 > 0 ? 'higher' : 'lower';
+  return {
+    planarEstimatedVolumeMm3,
+    toolVolumeMm3: resultComparison.toolVolumeMm3,
+    differenceMm3: direction === 'equal' ? 0 : differenceMm3,
+    differencePercent: direction === 'equal' ? 0 : differencePercent,
+    direction
   };
 }
 

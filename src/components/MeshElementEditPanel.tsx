@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
   createMeshPlanarRegionExtrusionResultComparison,
+  createMeshPlanarRegionExtrusionToolVolumeComparison,
   createMeshPlanarRegionExtrusionPreviewMetrics,
   createMeshPlanarRegionExtrusionPreviewProfile,
   cycleMeshPlanarRegionLoopIndex,
@@ -118,6 +119,11 @@ export function MeshElementEditPanel() {
   const meshPlanarRegionExtrusionResultComparison = useMemo(() => (
     meshElementEditResult && importedStlModel
       ? createMeshPlanarRegionExtrusionResultComparison(meshElementEditResult, importedStlModel.revision)
+      : null
+  ), [importedStlModel, meshElementEditResult]);
+  const meshPlanarRegionExtrusionToolVolumeComparison = useMemo(() => (
+    meshElementEditResult && importedStlModel
+      ? createMeshPlanarRegionExtrusionToolVolumeComparison(meshElementEditResult, importedStlModel.revision)
       : null
   ), [importedStlModel, meshElementEditResult]);
   const moveInvalid = !displacement
@@ -447,11 +453,28 @@ export function MeshElementEditPanel() {
             <section className={`mesh-planar-region-result-comparison ${meshPlanarRegionExtrusionResultComparison.mode}`} aria-label="OpenCascade 执行结果体积对照">
               <strong>OpenCascade 执行结果</strong>
               <div className="mesh-planar-region-result-grid">
+                {meshPlanarRegionExtrusionToolVolumeComparison && (
+                  <span>执行前平面估算<strong>{meshPlanarRegionExtrusionToolVolumeComparison.planarEstimatedVolumeMm3.toFixed(2)} 立方毫米</strong></span>
+                )}
                 <span>实际工具体积<strong>{meshPlanarRegionExtrusionResultComparison.toolVolumeMm3.toFixed(2)} 立方毫米</strong></span>
                 <span>模型体积变化<strong>{meshPlanarRegionExtrusionResultComparison.modelVolumeChangeMm3.toFixed(2)} 立方毫米</strong></span>
                 <span>实际作用比例<strong>{meshPlanarRegionExtrusionResultComparison.effectRatioPercent.toFixed(2)}%</strong></span>
               </div>
+              {meshPlanarRegionExtrusionToolVolumeComparison && (
+                <div className={`mesh-planar-region-tool-volume-difference ${meshPlanarRegionExtrusionToolVolumeComparison.direction}`}>
+                  <span>工具体构造偏差</span>
+                  <strong>
+                    {meshPlanarRegionExtrusionToolVolumeComparison.direction === 'equal'
+                      ? '与平面估算一致'
+                      : `${meshPlanarRegionExtrusionToolVolumeComparison.direction === 'higher' ? '高于' : '低于'} ${Math.abs(meshPlanarRegionExtrusionToolVolumeComparison.differenceMm3).toFixed(2)} 立方毫米`}
+                    {' · '}
+                    {meshPlanarRegionExtrusionToolVolumeComparison.differencePercent > 0 ? '+' : ''}{meshPlanarRegionExtrusionToolVolumeComparison.differencePercent.toFixed(2)}%
+                  </strong>
+                </div>
+              )}
               <small className="mesh-planar-region-result-note">
+                {meshPlanarRegionExtrusionToolVolumeComparison
+                  && '平面估算与实际工具体的差异可能来自 Wire 重建和几何容差。'}
                 {meshPlanarRegionExtrusionResultComparison.mode === 'add'
                   ? '向外加料时，工具体可能与已有实体重叠。'
                   : '向内压入时，工具体可能超出实体厚度并被裁剪。'}

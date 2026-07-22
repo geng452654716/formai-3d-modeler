@@ -660,4 +660,14 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：纯函数覆盖加料 90%、压入 75%、轻微浮点夹紧、明显异常比例、过期修订、其他操作、缺失模式、零值、负值和非有限数；针对性测试 24/24、前端 197/197，生产构建和差异检查通过。浏览器真实 Worker 返回 103.58 立方毫米工具体与 100.00 立方毫米模型变化，派生 96.54%，Console 无错误。
 
-**下一阶段架构方向：**在同一成功结果上复用 `regionAreaMm2` 与 `distanceMm` 计算执行前平面理论体积，再与 `toolVolumeMm3` 派生绝对偏差和百分比；继续保持纯函数、当前修订绑定和零协议变更。
+### 58. 连续共面区域平面估算与工具体构造偏差架构（已实现）
+
+- `createMeshPlanarRegionExtrusionToolVolumeComparison(result, currentRevision)` 先复用既有执行结果边界，再校验正有限 `regionAreaMm2` 与 `distanceMm`；平面理论体积固定为面积乘距离，不重新读取预演 Store 或 Three.js 几何。
+- 实际工具体积减去平面理论体积得到有符号 `differenceMm3`，再除以理论体积得到 `differencePercent`。方向枚举限定为 `equal | higher | lower`；理论体积百万分之一或 `0.000001` 立方毫米以内归一为零偏差，避免界面出现 `-0.00%`。
+- 绝对偏差百分比超过 50% 时返回 `null`。该阈值只用于拒绝明显不可信的解释数据，不会让 `createMeshPlanarRegionExtrusionResultComparison` 的合法工具体积、模型变化和作用比例消失。
+- `MeshElementEditPanel` 仅从同一 `meshElementEditResult` 与当前导入修订派生两份比较对象；四个主指标改为两列网格，偏差方向使用独立语义色，说明文案不承诺偏差根因。
+- 没有新增 Zustand 持久字段、Tauri 命令、Python Worker 输出、项目版本数据或快照迁移，旧结果和缺字段结果继续安全降级。
+
+2026-07-22 架构验证：测试覆盖零偏差、百万分之一内浮点一致、正负偏差、±50% 边界、超过边界、过期修订，以及缺失、非正和非有限面积/距离；针对性测试 27/27、前端 200/200，生产构建和差异检查通过。真实 Worker 返回平面估算 1310.40、工具体积 1357.38、模型变化 1310.40 立方毫米，派生 +46.98 立方毫米、+3.58% 和 96.54%，Console 无错误。
+
+**下一阶段架构方向：**新增纯派生方向一致性检查，读取 `faceExtrusionMode` 与有符号 `validation.volumeDeltaMm3`，将加料/压入是否符合预期方向以及现有两类体积对照归纳为只读状态；异常时返回明确状态供界面警告，不修改 Worker 协议。
