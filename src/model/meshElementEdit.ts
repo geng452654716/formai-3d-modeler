@@ -635,6 +635,15 @@ export interface MeshPlanarRegionCodexDraftInspection {
   matchedBlock: string | null;
 }
 
+
+export interface MeshPlanarRegionCodexDraftBlockLocation {
+  start: number;
+  end: number;
+  lineCount: number;
+  operationMode: string;
+  directionStatus: string;
+}
+
 const MESH_PLANAR_REGION_CODEX_REQUEST_MARKERS = [
   '【共面区域几何诊断分析请求】',
   '请分析以下当前模型的共面区域几何诊断：',
@@ -704,6 +713,27 @@ export function inspectMeshPlanarRegionCodexAnalysisDraft(
     return { status: 'edited', completeBlockCount: 0, matchedBlock: null };
   }
   return { status: 'none', completeBlockCount: 0, matchedBlock: null };
+}
+
+/** 为唯一完整诊断块返回精确字符范围和只读摘要；不安全状态不猜测位置。 */
+export function createMeshPlanarRegionCodexDraftBlockLocation(
+  draft: string,
+  generatedBlocks: readonly string[]
+): MeshPlanarRegionCodexDraftBlockLocation | null {
+  const inspection = inspectMeshPlanarRegionCodexAnalysisDraft(draft, generatedBlocks);
+  if (inspection.status !== 'complete' || !inspection.matchedBlock) return null;
+  const start = draft.indexOf(inspection.matchedBlock);
+  if (start < 0) return null;
+  const lines = inspection.matchedBlock.split('\n');
+  const operationMode = lines.find((line) => line.startsWith('操作模式：'))?.slice('操作模式：'.length).trim() || '未识别';
+  const directionStatus = lines.find((line) => line.startsWith('方向状态：'))?.slice('方向状态：'.length).trim() || '未识别';
+  return {
+    start,
+    end: start + inspection.matchedBlock.length,
+    lineCount: lines.length,
+    operationMode,
+    directionStatus
+  };
 }
 
 /** 只移除唯一、完整且由本页注入的诊断块；其余情况保持草稿原样。 */

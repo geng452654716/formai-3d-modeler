@@ -1,7 +1,7 @@
-import { FormEvent, KeyboardEvent, useState } from 'react';
+import { FormEvent, KeyboardEvent, useRef, useState } from 'react';
 import { Bot, CornerDownLeft, MapPin, Sparkles, X } from 'lucide-react';
 import { describeCadEdgeGeometryType, describeCadSurfaceGeometryType } from '../model/localCadFeature';
-import { inspectMeshPlanarRegionCodexAnalysisDraft, removeMeshPlanarRegionCodexAnalysisDraftBlock } from '../model/meshElementEdit';
+import { createMeshPlanarRegionCodexDraftBlockLocation, inspectMeshPlanarRegionCodexAnalysisDraft, removeMeshPlanarRegionCodexAnalysisDraftBlock } from '../model/meshElementEdit';
 import { WALL_THICKNESS_LABELS } from '../model/wallThickness';
 import { useModelStore } from '../store/useModelStore';
 
@@ -34,6 +34,7 @@ interface CommandPanelProps {
 /** 展示当前页面的临时建模指令草稿；只有用户提交表单时才执行指令。 */
 export function CommandPanel({ command, generatedDiagnosticBlocks, onCommandChange }: CommandPanelProps) {
   const [diagnosticDraftNotice, setDiagnosticDraftNotice] = useState<string | null>(null);
+  const commandInputRef = useRef<HTMLTextAreaElement>(null);
   const messages = useModelStore((state) => state.messages);
   const executeCommand = useModelStore((state) => state.executeCommand);
   const aiStatus = useModelStore((state) => state.aiStatus);
@@ -83,6 +84,19 @@ export function CommandPanel({ command, generatedDiagnosticBlocks, onCommandChan
   };
 
   const diagnosticDraftInspection = inspectMeshPlanarRegionCodexAnalysisDraft(command, generatedDiagnosticBlocks);
+  const diagnosticBlockLocation = createMeshPlanarRegionCodexDraftBlockLocation(command, generatedDiagnosticBlocks);
+
+  /** 聚焦并精确选中唯一完整诊断块，只改变文本框视图和选择区。 */
+  const locateDiagnosticDraftBlock = () => {
+    const input = commandInputRef.current;
+    if (!input || !diagnosticBlockLocation) return;
+    const linesBefore = command.slice(0, diagnosticBlockLocation.start).split('\n').length - 1;
+    const lineHeight = Number.parseFloat(window.getComputedStyle(input).lineHeight) || 14;
+    input.focus();
+    input.setSelectionRange(diagnosticBlockLocation.start, diagnosticBlockLocation.end, 'forward');
+    input.scrollTop = Math.max(0, linesBefore * lineHeight - lineHeight);
+    setDiagnosticDraftNotice('已定位并选中完整诊断块，尚未执行任何指令。');
+  };
 
   /** 只移除唯一完整的本页系统诊断块，不提交或执行剩余建模指令。 */
   const removeDiagnosticDraftBlock = () => {
@@ -189,8 +203,8 @@ export function CommandPanel({ command, generatedDiagnosticBlocks, onCommandChan
           <div>
             <strong>几何诊断草稿</strong>
             <span>
-              {diagnosticDraftInspection.status === 'complete'
-                ? '已识别 1 个完整的本页诊断块，可单独移除且不会执行剩余指令。'
+              {diagnosticDraftInspection.status === 'complete' && diagnosticBlockLocation
+                ? `已识别 1 个完整的本页诊断块 · 共 ${diagnosticBlockLocation.lineCount} 行 · 操作模式：${diagnosticBlockLocation.operationMode} · 方向状态：${diagnosticBlockLocation.directionStatus}。`
                 : diagnosticDraftInspection.status === 'ambiguous'
                   ? `检测到 ${diagnosticDraftInspection.completeBlockCount || '多个'} 个完整或相互冲突的诊断块，为保护您的文字，不能自动移除。`
                   : diagnosticDraftInspection.status === 'edited'
@@ -199,18 +213,28 @@ export function CommandPanel({ command, generatedDiagnosticBlocks, onCommandChan
             </span>
           </div>
           {diagnosticDraftInspection.status !== 'none' && (
-            <button
-              type="button"
-              onClick={removeDiagnosticDraftBlock}
-              disabled={diagnosticDraftInspection.status !== 'complete'}
-            >
-              移除诊断块
-            </button>
+            <div className="command-diagnostic-actions">
+              <button
+                type="button"
+                onClick={locateDiagnosticDraftBlock}
+                disabled={!diagnosticBlockLocation}
+              >
+                定位诊断块
+              </button>
+              <button
+                type="button"
+                onClick={removeDiagnosticDraftBlock}
+                disabled={diagnosticDraftInspection.status !== 'complete'}
+              >
+                移除诊断块
+              </button>
+            </div>
           )}
         </div>
       )}
       <form onSubmit={submit} className="command-form">
         <textarea
+          ref={commandInputRef}
           value={command}
           onChange={(event) => updateDraft(event.target.value)}
           onKeyDown={submitWithShortcut}

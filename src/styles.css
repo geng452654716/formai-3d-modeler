@@ -119,7 +119,8 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .command-diagnostic-draft > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .command-diagnostic-draft strong { color: #addfd6; font-size: 8px; }
 .command-diagnostic-draft span { color: #82aaa3; font-size: 7px; line-height: 1.45; }
-.command-diagnostic-draft button { min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }
+.command-diagnostic-actions { display: flex; flex-direction: column; gap: 4px; }
+.command-diagnostic-draft button { min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; white-space: nowrap; cursor: pointer; }
 .command-diagnostic-draft button:hover:not(:disabled) { border-color: rgba(97, 230, 209, .72); color: #d6f7f0; background: rgba(25, 74, 66, .62); }
 .command-diagnostic-draft button:disabled { cursor: not-allowed; opacity: .45; }
 .command-diagnostic-draft.edited, .command-diagnostic-draft.ambiguous { border-color: rgba(235, 168, 91, .48); background: rgba(73, 49, 15, .34); }

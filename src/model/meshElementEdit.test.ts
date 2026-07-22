@@ -4,6 +4,7 @@ import {
   collectMeshElementBoxSelection,
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionCodexAnalysisRequest,
+  createMeshPlanarRegionCodexDraftBlockLocation,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
@@ -1011,5 +1012,50 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     const pasted = createMeshPlanarRegionCodexAnalysisRequest('用户自己粘贴的诊断')!;
     expect(inspectMeshPlanarRegionCodexAnalysisDraft(pasted, [])).toMatchObject({ status: 'edited' });
     expect(removeMeshPlanarRegionCodexAnalysisDraftBlock(pasted, [])).toEqual({ draft: pasted, status: 'unsafe' });
+  });
+
+
+  it('返回唯一完整诊断块在前后用户文字之间的精确字符范围和摘要', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest([
+      '共面区域几何诊断',
+      '操作模式：向外加料',
+      '方向状态：加料增量一致'
+    ].join('\n'))!;
+    const draft = `前方用户文字\n\n${block}\n\n后方用户文字`;
+    const location = createMeshPlanarRegionCodexDraftBlockLocation(draft, [block]);
+    expect(location).toEqual({
+      start: '前方用户文字\n\n'.length,
+      end: '前方用户文字\n\n'.length + block.length,
+      lineCount: 6,
+      operationMode: '向外加料',
+      directionStatus: '加料增量一致'
+    });
+    expect(draft.slice(location!.start, location!.end)).toBe(block);
+  });
+
+  it('诊断块位于草稿开头或多行文字之后时仍返回稳定范围', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n操作模式：向内压入\n方向状态：压入减量一致')!;
+    expect(createMeshPlanarRegionCodexDraftBlockLocation(block, [block])?.start).toBe(0);
+    const afterThreeLines = `第一行\n第二行\n第三行\n\n${block}`;
+    const location = createMeshPlanarRegionCodexDraftBlockLocation(afterThreeLines, [block])!;
+    expect(location.start).toBe('第一行\n第二行\n第三行\n\n'.length);
+    expect(location.operationMode).toBe('向内压入');
+  });
+
+  it('缺少操作或方向字段时摘要安全降级但范围保持精确', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('用户保留的其他诊断内容')!;
+    expect(createMeshPlanarRegionCodexDraftBlockLocation(block, [block])).toMatchObject({
+      start: 0,
+      end: block.length,
+      operationMode: '未识别',
+      directionStatus: '未识别'
+    });
+  });
+
+  it('编辑、残缺或重复诊断块不返回可猜测定位范围', () => {
+    const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n操作模式：向外加料\n方向状态：加料增量一致')!;
+    expect(createMeshPlanarRegionCodexDraftBlockLocation(block.replace('向外加料', '手工修改'), [block])).toBeNull();
+    expect(createMeshPlanarRegionCodexDraftBlockLocation('【共面区域几何诊断分析请求】', [block])).toBeNull();
+    expect(createMeshPlanarRegionCodexDraftBlockLocation(`${block}\n\n${block}`, [block])).toBeNull();
   });
 });
