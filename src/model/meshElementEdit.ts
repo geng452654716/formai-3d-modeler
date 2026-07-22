@@ -794,6 +794,23 @@ export async function copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(
   }
 }
 
+export interface MeshPlanarRegionCodexDiagnosticDifferencePreview {
+  toggleLabel: '预览复制内容' | '收起复制内容';
+  content: string | null;
+}
+
+/** 为差异复制区派生默认收起或展开的只读预览，正文始终复用同一摘要字符串。 */
+export function createMeshPlanarRegionCodexDiagnosticDifferencePreview(
+  summary: string | null,
+  expanded: boolean
+): MeshPlanarRegionCodexDiagnosticDifferencePreview | null {
+  if (!summary?.trim()) return null;
+  return {
+    toggleLabel: expanded ? '收起复制内容' : '预览复制内容',
+    content: expanded ? summary : null
+  };
+}
+
 /** 为唯一完整诊断块返回精确字符范围和只读摘要；不安全状态不猜测位置。 */
 export function createMeshPlanarRegionCodexDraftBlockLocation(
   draft: string,

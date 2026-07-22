@@ -748,4 +748,14 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：新增固定格式、字段顺序、完整正文排除、空差异、无效字段、剪贴板成功与异常测试；针对性测试 59/59、前端 232/232，生产构建和差异检查通过。真实浏览器捕获到 6 项有限差异文本，草稿与消息数不变，替换后组件派生摘要和反馈一并清除；干净验收页 Console 无错误。
 
-**下一阶段架构方向：**在不新增持久化状态的前提下，为同一 `diagnosticDifferenceSummary` 增加本地展开/收起预览；预览与复制必须复用同一字符串，并以摘要身份变化自动关闭，避免界面展示与剪贴板内容漂移。
+### 67. 连续共面区域诊断差异复制预览架构（已实现）
+
+- `createMeshPlanarRegionCodexDiagnosticDifferencePreview(summary, expanded)` 是无副作用纯函数：空摘要返回 `null`，收起时只返回中文入口标签，展开时把原始 `summary` 作为 `content` 原样返回，不做 `trim`、重新格式化或第二次字段拼接。
+- `MeshPlanarRegionDiagnosticDifferenceTools` 同时持有 `previewExpanded` 与 `copyStatus` 两项局部状态，并由父组件使用 `key={diagnosticDifferenceSummary}` 按摘要身份挂载；摘要变化会创建全新局部状态，差异卡隐藏会卸载组件。
+- 复制仍由既有 `copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(differences, writeText)` 生成相同摘要；预览展示使用父组件已经派生的 `diagnosticDifferenceSummary`，浏览器验收严格比较两者文本以防漂移。
+- 只读 `<pre>` 使用 `white-space: pre-wrap`、`user-select: text` 和 `tabIndex=0`，不注册编辑、复制或执行快捷键；新增样式只有细边框、滚动和语义颜色，无明显阴影。
+- 未新增 Zustand 字段、Tauri 命令、Python Worker 输出、项目版本、快照或持久化协议，也不改变诊断替换安全边界。
+
+2026-07-22 架构验证：针对性测试 62/62、前端 235/235、生产构建和差异检查通过。真实浏览器确认预览默认收起，展开正文与剪贴板捕获文本严格相同；收起、替换、摘要身份变化和卡片卸载均能清理局部状态，干净页面 Console 无错误。
+
+**下一阶段架构方向：**为当前只读预览增加显式“全选预览内容”交互。选择逻辑必须绑定当前预览 DOM 引用，仅设置浏览器 Selection 范围；不得触发 Clipboard API、修改 React 草稿状态、登记系统块或调用执行链。

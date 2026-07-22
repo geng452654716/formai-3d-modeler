@@ -3,6 +3,7 @@ import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling
 import {
   copyMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
+  createMeshPlanarRegionCodexDiagnosticDifferencePreview,
   createMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
@@ -95,6 +96,55 @@ interface MeshElementEditPanelProps {
   onApplyCodexDiagnostic: (summary: string) => CodexDiagnosticDraftApplyStatus;
 }
 
+interface MeshPlanarRegionDiagnosticDifferenceToolsProps {
+  differences: MeshPlanarRegionCodexDiagnosticFieldDifference[];
+  summary: string;
+}
+
+/** 差异摘要变化或卡片隐藏时通过 keyed 重新挂载，同时清除预览和复制反馈。 */
+function MeshPlanarRegionDiagnosticDifferenceTools({
+  differences,
+  summary
+}: MeshPlanarRegionDiagnosticDifferenceToolsProps) {
+  const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const preview = createMeshPlanarRegionCodexDiagnosticDifferencePreview(summary, previewExpanded);
+
+  /** 复制内容与预览共用当前摘要来源，仍由可注入剪贴板边界处理失败。 */
+  async function copyDifferences() {
+    const status = await copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(
+      differences,
+      writeDiagnosticTextToClipboard
+    );
+    setCopyStatus(status);
+  }
+
+  if (!preview) return null;
+  return (
+    <div className={`mesh-planar-region-diagnostic-copy diagnostic-difference-copy ${copyStatus}`} aria-live="polite">
+      <button
+        type="button"
+        className="codex-analysis"
+        aria-expanded={previewExpanded}
+        onClick={() => setPreviewExpanded((current) => !current)}
+      >
+        {preview.toggleLabel}
+      </button>
+      <button type="button" className="codex-analysis" onClick={() => void copyDifferences()}>
+        {copyStatus === 'copied' ? '已复制差异摘要' : '复制差异摘要'}
+      </button>
+      {copyStatus === 'copied' && <span>差异摘要已复制，不会自动发送或执行。</span>}
+      {copyStatus === 'failed' && <span role="alert">复制差异摘要失败，请检查剪贴板权限。</span>}
+      {preview.content ? (
+        <div className="mesh-planar-region-diagnostic-difference-preview">
+          <small>以下内容仅供检查，不会自动发送或执行。</small>
+          <pre aria-label="差异摘要复制内容预览" tabIndex={0}>{preview.content}</pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** 为精确 CAD 创建受管网格分支，并提供网格选择集合的受限变换入口。 */
 export function MeshElementEditPanel({
   codexDiagnosticDraftAction,
@@ -139,10 +189,6 @@ export function MeshElementEditPanel({
   const [rotationDegrees, setRotationDegrees] = useState('15');
   const [scaleFactor, setScaleFactor] = useState('1.1');
   const [diagnosticCopyFeedback, setDiagnosticCopyFeedback] = useState<{
-    summary: string;
-    status: 'copied' | 'failed';
-  } | null>(null);
-  const [diagnosticDifferenceCopyFeedback, setDiagnosticDifferenceCopyFeedback] = useState<{
     summary: string;
     status: 'copied' | 'failed';
   } | null>(null);
@@ -206,9 +252,6 @@ export function MeshElementEditPanel({
       ? createMeshPlanarRegionCodexDiagnosticDifferenceSummary(codexDiagnosticFieldDifferences)
       : null
   ), [codexDiagnosticDraftAction, codexDiagnosticFieldDifferences]);
-  const diagnosticDifferenceCopyStatus = diagnosticDifferenceCopyFeedback?.summary === diagnosticDifferenceSummary
-    ? diagnosticDifferenceCopyFeedback.status
-    : 'idle';
   const diagnosticDraftCurrent = diagnosticDraftFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
     && (
       !['appended', 'replaced'].includes(diagnosticDraftFeedback.status)
@@ -285,16 +328,6 @@ export function MeshElementEditPanel({
       writeDiagnosticTextToClipboard
     );
     setDiagnosticCopyFeedback({ summary: meshPlanarRegionExtrusionDiagnosticSummary, status });
-  }
-
-  /** 仅在安全替换状态下复制有限字段变化，不读取或复制完整诊断正文。 */
-  async function copyPlanarRegionDiagnosticDifferences() {
-    if (!codexDiagnosticFieldDifferences?.length || !diagnosticDifferenceSummary) return;
-    const status = await copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(
-      codexDiagnosticFieldDifferences,
-      writeDiagnosticTextToClipboard
-    );
-    setDiagnosticDifferenceCopyFeedback({ summary: diagnosticDifferenceSummary, status });
   }
 
   /** 仅把当前有效诊断追加或安全替换到页面草稿，仍由用户检查并手动执行。 */
@@ -625,7 +658,7 @@ export function MeshElementEditPanel({
                   </span>
                 </div>
               )}
-              {codexDiagnosticDraftAction === 'replace' && codexDiagnosticFieldDifferences?.length ? (
+              {codexDiagnosticDraftAction === 'replace' && codexDiagnosticFieldDifferences?.length && diagnosticDifferenceSummary ? (
                 <div className="mesh-planar-region-diagnostic-differences" aria-label="诊断字段变化">
                   <strong>最新诊断将更新 {codexDiagnosticFieldDifferences.length} 项</strong>
                   <ul>
@@ -637,17 +670,11 @@ export function MeshElementEditPanel({
                     ))}
                   </ul>
                   <small>这里只显示变化字段；点击替换前不会修改草稿或执行指令。</small>
-                  <div className={`mesh-planar-region-diagnostic-copy diagnostic-difference-copy ${diagnosticDifferenceCopyStatus}`} aria-live="polite">
-                    <button
-                      type="button"
-                      className="codex-analysis"
-                      onClick={() => void copyPlanarRegionDiagnosticDifferences()}
-                    >
-                      {diagnosticDifferenceCopyStatus === 'copied' ? '已复制差异摘要' : '复制差异摘要'}
-                    </button>
-                    {diagnosticDifferenceCopyStatus === 'copied' && <span>差异摘要已复制，不会自动发送或执行。</span>}
-                    {diagnosticDifferenceCopyStatus === 'failed' && <span role="alert">复制差异摘要失败，请检查剪贴板权限。</span>}
-                  </div>
+                  <MeshPlanarRegionDiagnosticDifferenceTools
+                    key={diagnosticDifferenceSummary}
+                    differences={codexDiagnosticFieldDifferences}
+                    summary={diagnosticDifferenceSummary}
+                  />
                 </div>
               ) : null}
               <div className={`mesh-planar-region-diagnostic-copy ${diagnosticCopyStatus}`} aria-live="polite">

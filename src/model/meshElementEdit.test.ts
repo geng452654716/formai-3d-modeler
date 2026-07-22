@@ -6,6 +6,7 @@ import {
   copyMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionCodexAnalysisRequest,
   createMeshPlanarRegionCodexDraftBlockLocation,
+  createMeshPlanarRegionCodexDiagnosticDifferencePreview,
   createMeshPlanarRegionCodexDiagnosticDifferenceSummary,
   createMeshPlanarRegionCodexDiagnosticFieldDifferences,
   createMeshPlanarRegionExtrusionDiagnosticSummary,
@@ -1054,6 +1055,27 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     await expect(copyMeshPlanarRegionCodexDiagnosticDifferenceSummary(differences, async () => {
       throw new Error('剪贴板不可用');
     })).resolves.toBe('failed');
+  });
+
+  it('复制内容预览默认收起且使用全中文入口', () => {
+    const summary = '【共面区域诊断字段差异】\n共 1 项变化';
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview(summary, false)).toEqual({
+      toggleLabel: '预览复制内容',
+      content: null
+    });
+  });
+
+  it('展开预览直接复用当前复制摘要并保留原始换行', () => {
+    const summary = '【共面区域诊断字段差异】\n共 1 项变化\n作用距离：2.00 毫米 → 3.00 毫米';
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview(summary, true)).toEqual({
+      toggleLabel: '收起复制内容',
+      content: summary
+    });
+  });
+
+  it('空摘要不生成预览，避免沿用失效或不安全内容', () => {
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview(null, false)).toBeNull();
+    expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview('  ', true)).toBeNull();
   });
 
   it('用最新诊断精确替换唯一旧块并原样保留前后用户文字和换行', () => {
