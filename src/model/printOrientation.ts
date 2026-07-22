@@ -54,6 +54,44 @@ export interface PrintBedPlacementPreview {
   alreadyOnBed: boolean;
 }
 
+export interface PrintPlatformBoundaryOptions extends PrintBedPlacementOptions {
+  platformSizeMm?: [number, number];
+}
+
+export interface PrintPlatformBoundaryPreview {
+  boundsMm: {
+    minimumX: number;
+    maximumX: number;
+    minimumZ: number;
+    maximumZ: number;
+    width: number;
+    depth: number;
+  };
+  platformBoundsMm: {
+    minimumX: number;
+    maximumX: number;
+    minimumZ: number;
+    maximumZ: number;
+  };
+  marginsMm: {
+    left: number;
+    right: number;
+    front: number;
+    back: number;
+  };
+  overflowMm: {
+    left: number;
+    right: number;
+    front: number;
+    back: number;
+  };
+  fitsPlatform: boolean;
+  minimumMarginMm: number;
+  centerDeltaMm: { x: number; z: number };
+  targetHorizontalPositionMm: { x: number; z: number };
+  alreadyCentered: boolean;
+}
+
 interface Vec3 {
   x: number;
   y: number;
@@ -90,6 +128,7 @@ const DEFAULT_OVERHANG_ANGLE_DEG = 45;
 const MIN_TRIANGLE_AREA_MM2 = 1e-9;
 const ROTATION_EQUIVALENCE_TOLERANCE_DEG = 1e-6;
 const BED_PLACEMENT_TOLERANCE_MM = 1e-4;
+const PLATFORM_BOUNDARY_TOLERANCE_MM = 1e-4;
 
 const PRINT_ORIENTATION_ROTATIONS_DEG: Record<PrintOrientationId, ObjectVector3> = {
   'positive-z': { x: 0, y: 0, z: 0 },
@@ -392,51 +431,57 @@ function validatePlacementVector(value: ObjectVector3, message: string) {
   }
 }
 
-/**
- * 按视口真实层级计算当前对象最低点：STL 原始 Z 轴先转为 Three.js Y 轴，
- * 再区分 CAD 的对象内归一化与上传 STL 的对象外归一化。
- */
-export function evaluatePrintBedPlacement(
+interface DisplayBounds {
+  minimum: ObjectVector3;
+  maximum: ObjectVector3;
+}
+
+/** 按视口真实层级变换全部 STL 顶点，统一供落床和平台边界计算复用。 */
+function evaluateTransformedDisplayBounds(
   input: PrintOrientationMeshInput,
   options: PrintBedPlacementOptions
-): PrintBedPlacementPreview {
+): DisplayBounds {
   const positions = input.positions;
   if (positions.length < 3 || positions.length % 3 !== 0) {
-    throw new Error('自动落床至少需要一个完整的三维顶点');
+    throw new Error('打印平台分析至少需要一个完整的三维顶点');
   }
   const uniformScale = options.uniformScale ?? 1;
   if (!Number.isFinite(uniformScale) || uniformScale <= 0) {
-    throw new Error('自动落床的均匀缩放必须是大于 0 的有限值');
+    throw new Error('打印平台分析的均匀缩放必须是大于 0 的有限值');
   }
-  validatePlacementVector(options.rotationDeg, '自动落床旋转必须是三个有限角度值');
-  validatePlacementVector(options.positionMm, '自动落床位置必须是三个有限毫米值');
+  validatePlacementVector(options.rotationDeg, '打印平台分析旋转必须是三个有限角度值');
+  validatePlacementVector(options.positionMm, '打印平台分析位置必须是三个有限毫米值');
   const basePosition = options.basePositionDisplayMm ?? { x: 0, y: 0, z: 0 };
-  validatePlacementVector(basePosition, '自动落床基础位置必须是三个有限毫米值');
+  validatePlacementVector(basePosition, '打印平台分析基础位置必须是三个有限毫米值');
+  if (options.normalizationSpace !== 'object-local' && options.normalizationSpace !== 'world') {
+    throw new Error('打印平台分析归一化空间无效');
+  }
 
   const displayPoints: ObjectVector3[] = [];
-  const minimum = { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY, z: Number.POSITIVE_INFINITY };
-  const maximum = { x: Number.NEGATIVE_INFINITY, y: Number.NEGATIVE_INFINITY, z: Number.NEGATIVE_INFINITY };
+  const sourceMinimum = { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY, z: Number.POSITIVE_INFINITY };
+  const sourceMaximum = { x: Number.NEGATIVE_INFINITY, y: Number.NEGATIVE_INFINITY, z: Number.NEGATIVE_INFINITY };
   for (let offset = 0; offset < positions.length; offset += 3) {
     const sourcePoint = {
       x: Number(positions[offset]),
       y: Number(positions[offset + 1]),
       z: Number(positions[offset + 2])
     };
-    validatePlacementVector(sourcePoint, '自动落床网格坐标必须是有限毫米值');
+    validatePlacementVector(sourcePoint, '打印平台分析网格坐标必须是有限毫米值');
     const displayPoint = sourceToDisplayPoint(sourcePoint);
     displayPoints.push(displayPoint);
     (['x', 'y', 'z'] as const).forEach((axis) => {
-      minimum[axis] = Math.min(minimum[axis], displayPoint[axis]);
-      maximum[axis] = Math.max(maximum[axis], displayPoint[axis]);
+      sourceMinimum[axis] = Math.min(sourceMinimum[axis], displayPoint[axis]);
+      sourceMaximum[axis] = Math.max(sourceMaximum[axis], displayPoint[axis]);
     });
   }
 
   const normalizationOffset = {
-    x: -(minimum.x + maximum.x) / 2,
-    y: -minimum.y,
-    z: -(minimum.z + maximum.z) / 2
+    x: -(sourceMinimum.x + sourceMaximum.x) / 2,
+    y: -sourceMinimum.y,
+    z: -(sourceMinimum.z + sourceMaximum.z) / 2
   };
-  let minimumHeightMm = Number.POSITIVE_INFINITY;
+  const minimum = { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY, z: Number.POSITIVE_INFINITY };
+  const maximum = { x: Number.NEGATIVE_INFINITY, y: Number.NEGATIVE_INFINITY, z: Number.NEGATIVE_INFINITY };
   displayPoints.forEach((displayPoint) => {
     const localPoint = options.normalizationSpace === 'object-local'
       ? {
@@ -450,13 +495,45 @@ export function evaluatePrintBedPlacement(
       y: localPoint.y * uniformScale,
       z: localPoint.z * uniformScale
     }, options.rotationDeg);
-    const outsideNormalizationY = options.normalizationSpace === 'world' ? normalizationOffset.y : 0;
-    minimumHeightMm = Math.min(
-      minimumHeightMm,
-      rotated.y + options.positionMm.y + basePosition.y + outsideNormalizationY
-    );
+    const outsideNormalization = options.normalizationSpace === 'world'
+      ? normalizationOffset
+      : { x: 0, y: 0, z: 0 };
+    const transformed = {
+      x: rotated.x + options.positionMm.x + basePosition.x + outsideNormalization.x,
+      y: rotated.y + options.positionMm.y + basePosition.y + outsideNormalization.y,
+      z: rotated.z + options.positionMm.z + basePosition.z + outsideNormalization.z
+    };
+    (['x', 'y', 'z'] as const).forEach((axis) => {
+      minimum[axis] = Math.min(minimum[axis], transformed[axis]);
+      maximum[axis] = Math.max(maximum[axis], transformed[axis]);
+    });
   });
+  return { minimum, maximum };
+}
 
+/**
+ * 按视口真实层级计算当前对象最低点：STL 原始 Z 轴先转为 Three.js Y 轴，
+ * 再区分 CAD 的对象内归一化与上传 STL 的对象外归一化。
+ */
+export function evaluatePrintBedPlacement(
+  input: PrintOrientationMeshInput,
+  options: PrintBedPlacementOptions
+): PrintBedPlacementPreview {
+  let bounds: DisplayBounds;
+  try {
+    bounds = evaluateTransformedDisplayBounds(input, options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    throw new Error(message
+      .replace('打印平台分析至少', '自动落床至少')
+      .replace('打印平台分析的均匀缩放', '自动落床的均匀缩放')
+      .replace('打印平台分析旋转', '自动落床旋转')
+      .replace('打印平台分析位置', '自动落床位置')
+      .replace('打印平台分析基础位置', '自动落床基础位置')
+      .replace('打印平台分析网格坐标', '自动落床网格坐标')
+      .replace('打印平台分析归一化空间', '自动落床归一化空间'));
+  }
+  const minimumHeightMm = bounds.minimum.y;
   const requiredVerticalDeltaMm = -minimumHeightMm;
   return {
     minimumHeightMm,
@@ -464,6 +541,63 @@ export function evaluatePrintBedPlacement(
     requiredVerticalDeltaMm,
     targetVerticalPositionMm: options.positionMm.y + requiredVerticalDeltaMm,
     alreadyOnBed: Math.abs(minimumHeightMm) <= BED_PLACEMENT_TOLERANCE_MM
+  };
+}
+
+/** 计算当前对象相对居中打印平台的 X/Z 边界、四边余量、越界量和只读居中建议。 */
+export function evaluatePrintPlatformBoundary(
+  input: PrintOrientationMeshInput,
+  options: PrintPlatformBoundaryOptions
+): PrintPlatformBoundaryPreview {
+  const platformSizeMm = options.platformSizeMm ?? [DEFAULT_BUILD_VOLUME_MM[0], DEFAULT_BUILD_VOLUME_MM[1]];
+  if (platformSizeMm.length !== 2 || platformSizeMm.some((value) => !Number.isFinite(value) || value <= 0)) {
+    throw new Error('打印平台尺寸必须是两个大于 0 的有限毫米值');
+  }
+  const bounds = evaluateTransformedDisplayBounds(input, options);
+  const platformBoundsMm = {
+    minimumX: -platformSizeMm[0] / 2,
+    maximumX: platformSizeMm[0] / 2,
+    minimumZ: -platformSizeMm[1] / 2,
+    maximumZ: platformSizeMm[1] / 2
+  };
+  const marginsMm = {
+    left: bounds.minimum.x - platformBoundsMm.minimumX,
+    right: platformBoundsMm.maximumX - bounds.maximum.x,
+    front: platformBoundsMm.maximumZ - bounds.maximum.z,
+    back: bounds.minimum.z - platformBoundsMm.minimumZ
+  };
+  const overflowMm = {
+    left: Math.max(0, -marginsMm.left),
+    right: Math.max(0, -marginsMm.right),
+    front: Math.max(0, -marginsMm.front),
+    back: Math.max(0, -marginsMm.back)
+  };
+  const centerDeltaMm = {
+    x: -(bounds.minimum.x + bounds.maximum.x) / 2,
+    z: -(bounds.minimum.z + bounds.maximum.z) / 2
+  };
+  const minimumMarginMm = Math.min(...Object.values(marginsMm));
+  return {
+    boundsMm: {
+      minimumX: bounds.minimum.x,
+      maximumX: bounds.maximum.x,
+      minimumZ: bounds.minimum.z,
+      maximumZ: bounds.maximum.z,
+      width: bounds.maximum.x - bounds.minimum.x,
+      depth: bounds.maximum.z - bounds.minimum.z
+    },
+    platformBoundsMm,
+    marginsMm,
+    overflowMm,
+    fitsPlatform: minimumMarginMm >= -PLATFORM_BOUNDARY_TOLERANCE_MM,
+    minimumMarginMm,
+    centerDeltaMm,
+    targetHorizontalPositionMm: {
+      x: options.positionMm.x + centerDeltaMm.x,
+      z: options.positionMm.z + centerDeltaMm.z
+    },
+    alreadyCentered: Math.abs(centerDeltaMm.x) <= PLATFORM_BOUNDARY_TOLERANCE_MM
+      && Math.abs(centerDeltaMm.z) <= PLATFORM_BOUNDARY_TOLERANCE_MM
   };
 }
 

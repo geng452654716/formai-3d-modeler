@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, LoaderCircle, MoveDown, Printer, Rotate3D, RotateCcw, X } from 'lucide-react';
+import { CheckCircle2, LoaderCircle, Move, MoveDown, Printer, Rotate3D, RotateCcw, X } from 'lucide-react';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { resolveGeneratedModelUrl } from '../model/cad';
 import { normalizeObjectPresentation, type ObjectVector3 } from '../model/objectTransform';
@@ -8,10 +8,12 @@ import {
   createPrintOrientationPresentation,
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
+  evaluatePrintPlatformBoundary,
   isPrintOrientationRotationApplied,
   type PrintBedNormalizationSpace,
   type PrintBedPlacementPreview,
-  type PrintOrientationAnalysis
+  type PrintOrientationAnalysis,
+  type PrintPlatformBoundaryPreview
 } from '../model/printOrientation';
 import { useModelStore } from '../store/useModelStore';
 
@@ -44,6 +46,7 @@ type AnalysisState =
       sourceIdentity: string;
       result: PrintOrientationAnalysis;
       bedPlacement: PrintBedPlacementPreview;
+      platformBoundary: PrintPlatformBoundaryPreview;
     };
 
 function errorMessage(error: unknown) {
@@ -107,8 +110,19 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
           normalizationSpace: source.bedNormalizationSpace,
           basePositionDisplayMm: source.basePositionDisplayMm
         });
+        const platformBoundary = evaluatePrintPlatformBoundary({
+          positions: positions.array,
+          indices: geometry.getIndex()?.array ?? null
+        }, {
+          rotationDeg: source.currentRotationDeg,
+          positionMm: source.currentPositionMm,
+          uniformScale: source.uniformScale,
+          normalizationSpace: source.bedNormalizationSpace,
+          basePositionDisplayMm: source.basePositionDisplayMm,
+          platformSizeMm: [source.buildVolumeMm[0], source.buildVolumeMm[1]]
+        });
         if (serial !== requestSerial.current || sourceIdentity !== source.identity) return;
-        setAnalysisState({ status: 'ready', sourceIdentity, result, bedPlacement });
+        setAnalysisState({ status: 'ready', sourceIdentity, result, bedPlacement, platformBoundary });
       } finally {
         geometry.dispose();
       }
@@ -126,6 +140,9 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
   const recommended = result?.candidates.find((candidate) => candidate.id === result.recommendedId) ?? null;
   const bedPlacement = analysisState.status === 'ready' && analysisState.sourceIdentity === source?.identity
     ? analysisState.bedPlacement
+    : null;
+  const platformBoundary = analysisState.status === 'ready' && analysisState.sourceIdentity === source?.identity
+    ? analysisState.platformBoundary
     : null;
   const alreadyApplied = Boolean(source && recommended && isPrintOrientationRotationApplied(
     source.currentRotationDeg,
@@ -249,6 +266,22 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
       ? `向上移动 ${Math.abs(bedPlacement.requiredVerticalDeltaMm).toFixed(2)} 毫米`
       : `向下移动 ${Math.abs(bedPlacement.requiredVerticalDeltaMm).toFixed(2)} 毫米`
     : '';
+  const centerMoveXDescription = platformBoundary
+    ? Math.abs(platformBoundary.centerDeltaMm.x) <= 1e-4
+      ? 'X 方向无需移动'
+      : `${platformBoundary.centerDeltaMm.x > 0 ? '向右（X 正）' : '向左（X 负）'}移动 ${Math.abs(platformBoundary.centerDeltaMm.x).toFixed(2)} 毫米`
+    : '';
+  const centerMoveZDescription = platformBoundary
+    ? Math.abs(platformBoundary.centerDeltaMm.z) <= 1e-4
+      ? 'Z 方向无需移动'
+      : `${platformBoundary.centerDeltaMm.z > 0 ? '向前（Z 正）' : '向后（Z 负）'}移动 ${Math.abs(platformBoundary.centerDeltaMm.z).toFixed(2)} 毫米`
+    : '';
+
+  function marginDescription(label: string, marginMm: number) {
+    return marginMm >= -1e-4
+      ? `${label}余量 ${Math.max(0, marginMm).toFixed(2)} 毫米`
+      : `${label}越界 ${Math.abs(marginMm).toFixed(2)} 毫米`;
+  }
 
   return (
     <section className="parameter-section print-orientation-section">
@@ -363,6 +396,41 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
                   </div>
                 </div>
               )}
+            </div>
+          )}
+          {recommended && source && alreadyApplied && bedPlacement?.alreadyOnBed && platformBoundary && (
+            <div className={`print-platform-boundary ${platformBoundary.fitsPlatform ? 'fits' : 'overflow'}`}>
+              <div className="print-platform-boundary-heading">
+                <strong><Move size={14} /> 平台边界与居中预览</strong>
+                <b>{platformBoundary.fitsPlatform ? '完整适配' : '存在越界'}</b>
+              </div>
+              <span>
+                当前占地：{platformBoundary.boundsMm.width.toFixed(2)} × {platformBoundary.boundsMm.depth.toFixed(2)} 毫米
+              </span>
+              <div className="print-platform-margin-grid" aria-label="打印平台四边余量">
+                {([
+                  ['左（X 负）', platformBoundary.marginsMm.left],
+                  ['右（X 正）', platformBoundary.marginsMm.right],
+                  ['前（Z 正）', platformBoundary.marginsMm.front],
+                  ['后（Z 负）', platformBoundary.marginsMm.back]
+                ] as const).map(([label, marginMm]) => (
+                  <span key={label} className={marginMm < -1e-4 ? 'overflow' : ''}>
+                    {marginDescription(label, marginMm)}
+                  </span>
+                ))}
+              </div>
+              {platformBoundary.fitsPlatform && (
+                <span>最小安全余量：{Math.max(0, platformBoundary.minimumMarginMm).toFixed(2)} 毫米</span>
+              )}
+              <div className="print-platform-center-preview">
+                <strong>{platformBoundary.alreadyCentered ? '当前对象已水平居中' : '只读居中建议'}</strong>
+                <span>{centerMoveXDescription}</span>
+                <span>{centerMoveZDescription}</span>
+                <span>
+                  目标位置：X {platformBoundary.targetHorizontalPositionMm.x.toFixed(2)}，Z {platformBoundary.targetHorizontalPositionMm.z.toFixed(2)} 毫米
+                </span>
+              </div>
+              <small>本预览不会移动对象、创建版本、排列其他零件或修改几何文件。</small>
             </div>
           )}
           <ul className="print-orientation-candidate-list" aria-label="六向打印方向候选">

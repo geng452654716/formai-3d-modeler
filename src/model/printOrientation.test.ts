@@ -4,6 +4,7 @@ import {
   createPrintOrientationPresentation,
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
+  evaluatePrintPlatformBoundary,
   getPrintOrientationRotationDeg,
   isPrintOrientationRotationApplied
 } from './printOrientation';
@@ -191,6 +192,102 @@ describe('六向打印方向评估', () => {
       uniformScale: 0,
       normalizationSpace: 'object-local'
     })).toThrow('自动落床的均匀缩放必须是大于 0 的有限值');
+  });
+
+  it('对象内归一化会按当前水平位置计算四边余量和居中目标', () => {
+    const preview = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: getPrintOrientationRotationDeg('positive-z'),
+      positionMm: { x: 10, y: 0, z: -20 },
+      normalizationSpace: 'object-local',
+      platformSizeMm: [256, 256]
+    });
+
+    expect(preview.boundsMm).toMatchObject({
+      minimumX: 0,
+      maximumX: 20,
+      minimumZ: -25,
+      maximumZ: -15,
+      width: 20,
+      depth: 10
+    });
+    expect(preview.marginsMm).toEqual({ left: 128, right: 108, front: 143, back: 103 });
+    expect(preview.fitsPlatform).toBe(true);
+    expect(preview.minimumMarginMm).toBe(103);
+    expect(preview.centerDeltaMm).toEqual({ x: -10, z: 20 });
+    expect(preview.targetHorizontalPositionMm).toEqual({ x: 0, z: 0 });
+    expect(preview.alreadyCentered).toBe(false);
+  });
+
+  it('旋转与均匀缩放后的真实 X/Z 包围范围会识别右侧越界', () => {
+    const preview = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 90, z: 0 },
+      positionMm: { x: 120, y: 0, z: 0 },
+      uniformScale: 2,
+      normalizationSpace: 'object-local'
+    });
+
+    expect(preview.boundsMm.width).toBeCloseTo(20);
+    expect(preview.boundsMm.depth).toBeCloseTo(40);
+    expect(preview.boundsMm.minimumX).toBeCloseTo(110);
+    expect(preview.boundsMm.maximumX).toBeCloseTo(130);
+    expect(preview.marginsMm.right).toBeCloseTo(-2);
+    expect(preview.overflowMm).toEqual({ left: 0, right: 2, front: 0, back: 0 });
+    expect(preview.fitsPlatform).toBe(false);
+    expect(preview.centerDeltaMm.x).toBeCloseTo(-120);
+  });
+
+  it('任意上传 STL 使用对象外归一化计算居中的平台范围', () => {
+    const source = boxMesh(20, 10, 5);
+    const translatedPositions = source.positions.map((value, index) => {
+      if (index % 3 === 0) return value + 50;
+      if (index % 3 === 1) return value - 30;
+      return value + 12;
+    });
+    const preview = evaluatePrintPlatformBoundary({ positions: translatedPositions, indices: source.indices }, {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'world'
+    });
+
+    expect(preview.boundsMm.minimumX).toBeCloseTo(-10);
+    expect(preview.boundsMm.maximumX).toBeCloseTo(10);
+    expect(preview.boundsMm.minimumZ).toBeCloseTo(-5);
+    expect(preview.boundsMm.maximumZ).toBeCloseTo(5);
+    expect(preview.alreadyCentered).toBe(true);
+    expect(preview.targetHorizontalPositionMm).toEqual({ x: 0, z: 0 });
+  });
+
+  it('分别识别左、右、前、后四个方向的越界量', () => {
+    const positions = [
+      { x: -125, z: 0, side: 'left', overflow: 7 },
+      { x: 125, z: 0, side: 'right', overflow: 7 },
+      { x: 0, z: 125, side: 'front', overflow: 2 },
+      { x: 0, z: -125, side: 'back', overflow: 2 }
+    ] as const;
+
+    positions.forEach(({ x, z, side, overflow }) => {
+      const preview = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        positionMm: { x, y: 0, z },
+        normalizationSpace: 'object-local'
+      });
+      expect(preview.overflowMm[side]).toBeCloseTo(overflow);
+      expect(preview.fitsPlatform).toBe(false);
+    });
+  });
+
+  it('拒绝无效平台尺寸和平台边界分析输入', () => {
+    expect(() => evaluatePrintPlatformBoundary(boxMesh(1, 1, 1), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local',
+      platformSizeMm: [256, 0]
+    })).toThrow('打印平台尺寸必须是两个大于 0 的有限毫米值');
+    expect(() => evaluatePrintPlatformBoundary({ positions: [0, 0] }, {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    })).toThrow('打印平台分析至少需要一个完整的三维顶点');
   });
 
   it('均匀缩放同步作用于尺寸、面积和体积', () => {
