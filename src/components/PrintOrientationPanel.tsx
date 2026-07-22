@@ -10,6 +10,7 @@ import {
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
   evaluatePrintPlatformBoundary,
+  evaluatePrintPlatformSafetyArea,
   isPrintOrientationRotationApplied,
   type PrintBedNormalizationSpace,
   type PrintBedPlacementPreview,
@@ -60,6 +61,7 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [bedConfirmationOpen, setBedConfirmationOpen] = useState(false);
   const [centerConfirmationOpen, setCenterConfirmationOpen] = useState(false);
+  const [safetyMarginInput, setSafetyMarginInput] = useState('5');
   const [applicationNotice, setApplicationNotice] = useState<string | null>(null);
   const requestSerial = useRef(0);
   const pendingPresentationNotice = useRef<string | null>(null);
@@ -152,6 +154,17 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
     source.currentRotationDeg,
     recommended.id
   ));
+
+  const safetyMarginValue = safetyMarginInput.trim() ? Number(safetyMarginInput) : Number.NaN;
+  let safetyArea: ReturnType<typeof evaluatePrintPlatformSafetyArea> | null = null;
+  let safetyMarginError: string | null = null;
+  if (platformBoundary) {
+    try {
+      safetyArea = evaluatePrintPlatformSafetyArea(platformBoundary, safetyMarginValue);
+    } catch (error) {
+      safetyMarginError = errorMessage(error);
+    }
+  }
 
   /** 写入前核对 Store 中的实时对象变换仍与本次分析来源严格一致。 */
   function sourceTransformStillCurrent(current: ReturnType<typeof normalizeObjectPresentation>) {
@@ -373,6 +386,12 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
       : `${label}越界 ${Math.abs(marginMm).toFixed(2)} 毫米`;
   }
 
+  function correctionDescription(axis: 'X' | 'Z', deltaMm: number) {
+    if (Math.abs(deltaMm) <= 1e-4) return `${axis} 方向无需修正`;
+    if (axis === 'X') return `${deltaMm > 0 ? '向右（X 正）' : '向左（X 负）'}修正 ${Math.abs(deltaMm).toFixed(2)} 毫米`;
+    return `${deltaMm > 0 ? '向前（Z 正）' : '向后（Z 负）'}修正 ${Math.abs(deltaMm).toFixed(2)} 毫米`;
+  }
+
   return (
     <section className="parameter-section print-orientation-section">
       <h3>
@@ -497,6 +516,59 @@ export function PrintOrientationPanel({ source, unavailableReason }: PrintOrient
               <span>
                 当前占地：{platformBoundary.boundsMm.width.toFixed(2)} × {platformBoundary.boundsMm.depth.toFixed(2)} 毫米
               </span>
+              <span>
+                物理平台：{(platformBoundary.platformBoundsMm.maximumX - platformBoundary.platformBoundsMm.minimumX).toFixed(2)} × {(platformBoundary.platformBoundsMm.maximumZ - platformBoundary.platformBoundsMm.minimumZ).toFixed(2)} 毫米
+              </span>
+              <div className="print-platform-safety-controls">
+                <label>
+                  <span>平台安全边距</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="127.99"
+                    step="0.5"
+                    value={safetyMarginInput}
+                    aria-label="平台安全边距 毫米"
+                    onChange={(event) => setSafetyMarginInput(event.target.value)}
+                  />
+                  <small>毫米</small>
+                </label>
+                <small>默认 5 毫米；只缩减只读有效区域，不移动对象或创建版本。</small>
+              </div>
+              {safetyMarginError ? (
+                <p className="print-platform-safety-error">{safetyMarginError}</p>
+              ) : safetyArea && (
+                <div className={`print-platform-safety-preview ${safetyArea.fitsEffectiveArea ? 'fits' : 'overflow'}`}>
+                  <div>
+                    <strong>安全可打印区域</strong>
+                    <b>{safetyArea.fitsEffectiveArea ? '位于安全区域' : '超出安全区域'}</b>
+                  </div>
+                  <span>有效区域：{safetyArea.effectivePlatformBoundsMm.width.toFixed(2)} × {safetyArea.effectivePlatformBoundsMm.depth.toFixed(2)} 毫米</span>
+                  <div className="print-platform-margin-grid" aria-label="安全可打印区域四边余量">
+                    {([
+                      ['左（X 负）', safetyArea.marginsMm.left],
+                      ['右（X 正）', safetyArea.marginsMm.right],
+                      ['前（Z 正）', safetyArea.marginsMm.front],
+                      ['后（Z 负）', safetyArea.marginsMm.back]
+                    ] as const).map(([label, marginMm]) => (
+                      <span key={label} className={marginMm < -1e-4 ? 'overflow' : ''}>
+                        {marginDescription(label, marginMm)}
+                      </span>
+                    ))}
+                  </div>
+                  {safetyArea.fitsEffectiveArea ? (
+                    <span>最小安全区域余量：{Math.max(0, safetyArea.minimumMarginMm).toFixed(2)} 毫米</span>
+                  ) : safetyArea.canFitEffectiveArea ? (
+                    <div className="print-platform-safety-correction">
+                      <strong>只读修正建议</strong>
+                      <span>{correctionDescription('X', safetyArea.correctionDeltaMm.x)}</span>
+                      <span>{correctionDescription('Z', safetyArea.correctionDeltaMm.z)}</span>
+                    </div>
+                  ) : (
+                    <p className="print-platform-safety-error">当前对象尺寸大于安全有效区域，单纯移动无法完全进入。</p>
+                  )}
+                </div>
+              )}
               <div className="print-platform-margin-grid" aria-label="打印平台四边余量">
                 {([
                   ['左（X 负）', platformBoundary.marginsMm.left],

@@ -58,6 +58,34 @@ export interface PrintPlatformBoundaryOptions extends PrintBedPlacementOptions {
   platformSizeMm?: [number, number];
 }
 
+export interface PrintPlatformSafetyAreaPreview {
+  safetyMarginMm: number;
+  effectivePlatformBoundsMm: {
+    minimumX: number;
+    maximumX: number;
+    minimumZ: number;
+    maximumZ: number;
+    width: number;
+    depth: number;
+  };
+  marginsMm: {
+    left: number;
+    right: number;
+    front: number;
+    back: number;
+  };
+  overflowMm: {
+    left: number;
+    right: number;
+    front: number;
+    back: number;
+  };
+  fitsEffectiveArea: boolean;
+  canFitEffectiveArea: boolean;
+  minimumMarginMm: number;
+  correctionDeltaMm: { x: number; z: number };
+}
+
 export interface PrintPlatformBoundaryPreview {
   boundsMm: {
     minimumX: number;
@@ -598,6 +626,82 @@ export function evaluatePrintPlatformBoundary(
     },
     alreadyCentered: Math.abs(centerDeltaMm.x) <= PLATFORM_BOUNDARY_TOLERANCE_MM
       && Math.abs(centerDeltaMm.z) <= PLATFORM_BOUNDARY_TOLERANCE_MM
+  };
+}
+
+/** 在物理平台内缩安全边距，计算单个对象相对有效可打印区域的余量和最小修正量。 */
+export function evaluatePrintPlatformSafetyArea(
+  preview: PrintPlatformBoundaryPreview,
+  safetyMarginMm: number
+): PrintPlatformSafetyAreaPreview {
+  const platformWidth = preview.platformBoundsMm.maximumX - preview.platformBoundsMm.minimumX;
+  const platformDepth = preview.platformBoundsMm.maximumZ - preview.platformBoundsMm.minimumZ;
+  if (!Number.isFinite(safetyMarginMm) || safetyMarginMm < 0) {
+    throw new Error('平台安全边距必须是大于或等于 0 的有限毫米值');
+  }
+  if (safetyMarginMm * 2 >= platformWidth || safetyMarginMm * 2 >= platformDepth) {
+    throw new Error('平台安全边距过大，必须保留大于 0 的有效可打印区域');
+  }
+
+  const effectivePlatformBoundsMm = {
+    minimumX: preview.platformBoundsMm.minimumX + safetyMarginMm,
+    maximumX: preview.platformBoundsMm.maximumX - safetyMarginMm,
+    minimumZ: preview.platformBoundsMm.minimumZ + safetyMarginMm,
+    maximumZ: preview.platformBoundsMm.maximumZ - safetyMarginMm,
+    width: platformWidth - safetyMarginMm * 2,
+    depth: platformDepth - safetyMarginMm * 2
+  };
+  const marginsMm = {
+    left: preview.boundsMm.minimumX - effectivePlatformBoundsMm.minimumX,
+    right: effectivePlatformBoundsMm.maximumX - preview.boundsMm.maximumX,
+    front: effectivePlatformBoundsMm.maximumZ - preview.boundsMm.maximumZ,
+    back: preview.boundsMm.minimumZ - effectivePlatformBoundsMm.minimumZ
+  };
+  const overflowMm = {
+    left: Math.max(0, -marginsMm.left),
+    right: Math.max(0, -marginsMm.right),
+    front: Math.max(0, -marginsMm.front),
+    back: Math.max(0, -marginsMm.back)
+  };
+  const canFitEffectiveArea = preview.boundsMm.width <= effectivePlatformBoundsMm.width + PLATFORM_BOUNDARY_TOLERANCE_MM
+    && preview.boundsMm.depth <= effectivePlatformBoundsMm.depth + PLATFORM_BOUNDARY_TOLERANCE_MM;
+
+  function minimumAxisCorrection(
+    objectMinimum: number,
+    objectMaximum: number,
+    areaMinimum: number,
+    areaMaximum: number
+  ) {
+    if (objectMinimum >= areaMinimum - PLATFORM_BOUNDARY_TOLERANCE_MM
+      && objectMaximum <= areaMaximum + PLATFORM_BOUNDARY_TOLERANCE_MM) return 0;
+    if (objectMinimum < areaMinimum && objectMaximum <= areaMaximum) return areaMinimum - objectMinimum;
+    if (objectMaximum > areaMaximum && objectMinimum >= areaMinimum) return areaMaximum - objectMaximum;
+    return (areaMinimum + areaMaximum - objectMinimum - objectMaximum) / 2;
+  }
+
+  const minimumMarginMm = Math.min(...Object.values(marginsMm));
+  return {
+    safetyMarginMm,
+    effectivePlatformBoundsMm,
+    marginsMm,
+    overflowMm,
+    fitsEffectiveArea: minimumMarginMm >= -PLATFORM_BOUNDARY_TOLERANCE_MM,
+    canFitEffectiveArea,
+    minimumMarginMm,
+    correctionDeltaMm: {
+      x: minimumAxisCorrection(
+        preview.boundsMm.minimumX,
+        preview.boundsMm.maximumX,
+        effectivePlatformBoundsMm.minimumX,
+        effectivePlatformBoundsMm.maximumX
+      ),
+      z: minimumAxisCorrection(
+        preview.boundsMm.minimumZ,
+        preview.boundsMm.maximumZ,
+        effectivePlatformBoundsMm.minimumZ,
+        effectivePlatformBoundsMm.maximumZ
+      )
+    }
   };
 }
 

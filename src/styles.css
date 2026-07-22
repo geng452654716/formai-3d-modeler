@@ -1436,3 +1436,19 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 
 .print-platform-center-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 1px solid rgba(83, 199, 180, .5); border-radius: 5px; color: #d7eee8; background: rgba(31, 92, 80, .36); }
 .print-platform-center-button:hover { border-color: rgba(83, 199, 180, .78); background: rgba(38, 111, 96, .48); }
+
+.print-platform-safety-controls { display: grid; gap: 4px; padding: 6px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 4px; background: rgba(255, 255, 255, .025); }
+.print-platform-safety-controls > label { display: grid; grid-template-columns: 1fr 58px auto; align-items: center; gap: 6px; color: #c7d8d3; font-size: 9px; }
+.print-platform-safety-controls input { width: 100%; min-width: 0; padding: 4px 5px; border: 1px solid rgba(112, 163, 151, .32); border-radius: 4px; color: #e4efec; background: rgba(13, 31, 28, .72); font: inherit; font-variant-numeric: tabular-nums; }
+.print-platform-safety-controls > small, .print-platform-safety-controls label > small { color: #91a9a2; font-size: 8px; line-height: 1.35; }
+.print-platform-safety-preview { display: grid; gap: 5px; padding: 6px; border: 1px solid rgba(83, 199, 180, .24); border-radius: 4px; background: rgba(19, 62, 54, .24); }
+.print-platform-safety-preview.overflow { border-color: rgba(227, 146, 91, .38); background: rgba(88, 52, 31, .18); }
+.print-platform-safety-preview > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.print-platform-safety-preview > div:first-child strong { color: #d5e8e2; font-size: 9px; }
+.print-platform-safety-preview > div:first-child b { color: #66d2bd; font-size: 8px; font-weight: 600; }
+.print-platform-safety-preview.overflow > div:first-child b { color: #f0a36f; }
+.print-platform-safety-preview > span { color: #b8cbc5; font-size: 8px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.print-platform-safety-correction { display: grid !important; justify-content: stretch !important; gap: 3px !important; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .08); }
+.print-platform-safety-correction > strong { color: #f0c09f; font-size: 8px; }
+.print-platform-safety-correction > span { color: #d4b49e; font-size: 8px; font-variant-numeric: tabular-nums; }
+.print-platform-safety-error { margin: 0; color: #f3b184; font-size: 8px; line-height: 1.4; }

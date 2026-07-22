@@ -6,6 +6,7 @@ import {
   evaluateAxisAlignedPrintOrientations,
   evaluatePrintBedPlacement,
   evaluatePrintPlatformBoundary,
+  evaluatePrintPlatformSafetyArea,
   getPrintOrientationRotationDeg,
   isPrintOrientationRotationApplied
 } from './printOrientation';
@@ -275,6 +276,107 @@ describe('六向打印方向评估', () => {
       expect(preview.overflowMm[side]).toBeCloseTo(overflow);
       expect(preview.fitsPlatform).toBe(false);
     });
+  });
+
+  it('默认 5 毫米安全边距会把 P1S 有效区域缩减为 246 × 246 毫米', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+
+    expect(safety.effectivePlatformBoundsMm).toEqual({
+      minimumX: -123,
+      maximumX: 123,
+      minimumZ: -123,
+      maximumZ: 123,
+      width: 246,
+      depth: 246
+    });
+    expect(safety.marginsMm).toEqual({ left: 113, right: 113, front: 118, back: 118 });
+    expect(safety.fitsEffectiveArea).toBe(true);
+    expect(safety.minimumMarginMm).toBe(113);
+    expect(safety.correctionDeltaMm).toEqual({ x: 0, z: 0 });
+  });
+
+  it('零安全边距与物理平台余量一致且不改变原平台预览', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 18, y: 0, z: -12 },
+      normalizationSpace: 'object-local'
+    });
+    const original = structuredClone(boundary);
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 0);
+
+    expect(safety.marginsMm).toEqual(boundary.marginsMm);
+    expect(safety.fitsEffectiveArea).toBe(boundary.fitsPlatform);
+    expect(boundary).toEqual(original);
+    expect(boundary.targetHorizontalPositionMm).toEqual({ x: 0, z: 0 });
+  });
+
+  it('安全区域单轴越界时给出最小 X 修正量', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 120, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+
+    expect(safety.overflowMm).toEqual({ left: 0, right: 7, front: 0, back: 0 });
+    expect(safety.fitsEffectiveArea).toBe(false);
+    expect(safety.canFitEffectiveArea).toBe(true);
+    expect(safety.correctionDeltaMm).toEqual({ x: -7, z: 0 });
+  });
+
+  it('安全区域双轴越界时分别给出 X/Z 最小修正量', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: -120, y: 0, z: 120 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+
+    expect(safety.overflowMm).toEqual({ left: 7, right: 0, front: 2, back: 0 });
+    expect(safety.correctionDeltaMm).toEqual({ x: 7, z: -2 });
+  });
+
+  it('对象尺寸大于安全有效区域时标记无法仅靠移动适配', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(250, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 5);
+
+    expect(safety.fitsEffectiveArea).toBe(false);
+    expect(safety.canFitEffectiveArea).toBe(false);
+    expect(safety.correctionDeltaMm).toEqual({ x: 0, z: 0 });
+  });
+
+  it('接近平台半宽的合法安全边距仍保留正有效区域', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(0.1, 0.1, 0.1), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+    const safety = evaluatePrintPlatformSafetyArea(boundary, 127.9);
+
+    expect(safety.effectivePlatformBoundsMm.width).toBeCloseTo(0.2);
+    expect(safety.effectivePlatformBoundsMm.depth).toBeCloseTo(0.2);
+    expect(safety.fitsEffectiveArea).toBe(true);
+  });
+
+  it('非法安全边距使用中文错误拒绝', () => {
+    const boundary = evaluatePrintPlatformBoundary(boxMesh(20, 10, 5), {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 0, y: 0, z: 0 },
+      normalizationSpace: 'object-local'
+    });
+
+    expect(() => evaluatePrintPlatformSafetyArea(boundary, -1)).toThrow('平台安全边距必须是大于或等于 0 的有限毫米值');
+    expect(() => evaluatePrintPlatformSafetyArea(boundary, Number.NaN)).toThrow('平台安全边距必须是大于或等于 0 的有限毫米值');
+    expect(() => evaluatePrintPlatformSafetyArea(boundary, 128)).toThrow('平台安全边距过大，必须保留大于 0 的有效可打印区域');
   });
 
   it('平台居中展示状态只替换 X/Z 并保留 Y、旋转、缩放和颜色', () => {
