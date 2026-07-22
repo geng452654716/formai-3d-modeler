@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectMeshElementBoxSelection,
+  copyMeshPlanarRegionExtrusionDiagnosticSummary,
+  createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
   createMeshPlanarRegionExtrusionToolVolumeComparison,
@@ -841,5 +843,72 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
       resultWithDirection('add', 201),
       '修订-偏差'
     )).toBeNull();
+  });
+
+  it('生成不包含路径和账号信息的全中文几何诊断摘要', () => {
+    const summary = createMeshPlanarRegionExtrusionDiagnosticSummary(
+      resultWithDirection('add', 180, 206),
+      '修订-偏差'
+    );
+    expect(summary).toBe([
+      '共面区域几何诊断',
+      '操作模式：向外加料',
+      '区域面积：100.00 平方毫米',
+      '作用距离：2.00 毫米',
+      '执行前平面估算：200.00 立方毫米',
+      '实际工具体积：206.00 立方毫米',
+      '工具体构造偏差：高于 6.00 立方毫米（+3.00%）',
+      '模型体积变化：+180.00 立方毫米',
+      '实际作用比例：87.38%',
+      '方向状态：加料增量一致'
+    ].join('\n'));
+    expect(summary).not.toContain('任意模型.stl');
+    expect(summary).not.toContain('sourceFile');
+  });
+
+  it('摘要明确写出方向矛盾，不把异常结果描述为正常加料', () => {
+    const summary = createMeshPlanarRegionExtrusionDiagnosticSummary(
+      resultWithDirection('add', -50),
+      '修订-偏差'
+    );
+    expect(summary).toContain('模型体积变化：-50.00 立方毫米');
+    expect(summary).toContain('实际作用比例：25.00%');
+    expect(summary).toContain('方向状态：加料却发生减量');
+  });
+
+  it('摘要把公差内变化归一为零并标记体积近似未变化', () => {
+    const summary = createMeshPlanarRegionExtrusionDiagnosticSummary(
+      resultWithDirection('add', 0.0001),
+      '修订-偏差'
+    );
+    expect(summary).toContain('模型体积变化：0.00 立方毫米');
+    expect(summary).toContain('实际作用比例：0.00%');
+    expect(summary).toContain('方向状态：体积近似未变化');
+    expect(summary).not.toContain('+0.00 立方毫米');
+  });
+
+  it('摘要在平面数据不可用时保留真实执行结果并安全降级', () => {
+    const summary = createMeshPlanarRegionExtrusionDiagnosticSummary(
+      resultWithDirection('cut', -180, 200),
+      '修订-偏差'
+    );
+    expect(summary).toContain('方向状态：压入减量一致');
+    const missingArea = resultWithDirection('cut', -180, 200);
+    missingArea.regionAreaMm2 = undefined;
+    expect(createMeshPlanarRegionExtrusionDiagnosticSummary(missingArea, '修订-偏差')).toContain('区域面积：暂不可用');
+    expect(createMeshPlanarRegionExtrusionDiagnosticSummary(missingArea, '修订-偏差')).toContain('工具体构造偏差：暂不可用');
+    expect(createMeshPlanarRegionExtrusionDiagnosticSummary(missingArea, '其他修订')).toBeNull();
+  });
+
+  it('复制边界返回成功并吞掉 Clipboard 写入失败', async () => {
+    let copiedText = '';
+    await expect(copyMeshPlanarRegionExtrusionDiagnosticSummary('诊断文本', async (text) => {
+      copiedText = text;
+    })).resolves.toBe('copied');
+    expect(copiedText).toBe('诊断文本');
+    await expect(copyMeshPlanarRegionExtrusionDiagnosticSummary('', async () => undefined)).resolves.toBe('failed');
+    await expect(copyMeshPlanarRegionExtrusionDiagnosticSummary('诊断文本', async () => {
+      throw new Error('剪贴板不可用');
+    })).resolves.toBe('failed');
   });
 });

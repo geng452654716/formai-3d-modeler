@@ -585,6 +585,60 @@ export function createMeshPlanarRegionExtrusionDirectionConsistency(
   };
 }
 
+/** 生成当前单次共面布尔结果的全中文诊断文本，不包含文件路径或账号信息。 */
+export function createMeshPlanarRegionExtrusionDiagnosticSummary(
+  result: MeshElementEditResult,
+  currentRevision: string
+): string | null {
+  const resultComparison = createMeshPlanarRegionExtrusionResultComparison(result, currentRevision);
+  const directionConsistency = createMeshPlanarRegionExtrusionDirectionConsistency(result, currentRevision);
+  if (!resultComparison || !directionConsistency) return null;
+  const toolComparison = createMeshPlanarRegionExtrusionToolVolumeComparison(result, currentRevision);
+  const regionAreaText = Number.isFinite(result.regionAreaMm2) && result.regionAreaMm2! > 0
+    ? `${result.regionAreaMm2!.toFixed(2)} 平方毫米`
+    : '暂不可用';
+  const distanceText = Number.isFinite(result.distanceMm) && result.distanceMm! > 0
+    ? `${result.distanceMm!.toFixed(2)} 毫米`
+    : '暂不可用';
+  const toolDifferenceText = toolComparison
+    ? toolComparison.direction === 'equal'
+      ? '与平面估算一致（0.00%）'
+      : `${toolComparison.direction === 'higher' ? '高于' : '低于'} ${Math.abs(toolComparison.differenceMm3).toFixed(2)} 立方毫米（${toolComparison.differencePercent > 0 ? '+' : ''}${toolComparison.differencePercent.toFixed(2)}%）`
+    : '暂不可用';
+  const directionText = directionConsistency.status === 'consistent'
+    ? directionConsistency.mode === 'add' ? '加料增量一致' : '压入减量一致'
+    : directionConsistency.status === 'unchanged'
+      ? '体积近似未变化'
+      : directionConsistency.mode === 'add' ? '加料却发生减量' : '压入却发生增量';
+  const signedVolumeDelta = directionConsistency.volumeDeltaMm3;
+  return [
+    '共面区域几何诊断',
+    `操作模式：${resultComparison.mode === 'add' ? '向外加料' : '向内压入'}`,
+    `区域面积：${regionAreaText}`,
+    `作用距离：${distanceText}`,
+    `执行前平面估算：${toolComparison ? `${toolComparison.planarEstimatedVolumeMm3.toFixed(2)} 立方毫米` : '暂不可用'}`,
+    `实际工具体积：${resultComparison.toolVolumeMm3.toFixed(2)} 立方毫米`,
+    `工具体构造偏差：${toolDifferenceText}`,
+    `模型体积变化：${signedVolumeDelta > 0 ? '+' : ''}${signedVolumeDelta.toFixed(2)} 立方毫米`,
+    `实际作用比例：${resultComparison.effectRatioPercent.toFixed(2)}%`,
+    `方向状态：${directionText}`
+  ].join('\n');
+}
+
+/** 通过调用方提供的写入函数复制诊断文本，便于测试并隔离 Clipboard API。 */
+export async function copyMeshPlanarRegionExtrusionDiagnosticSummary(
+  summary: string,
+  writeText: (text: string) => Promise<void>
+): Promise<'copied' | 'failed'> {
+  if (!summary.trim()) return 'failed';
+  try {
+    await writeText(summary);
+    return 'copied';
+  } catch {
+    return 'failed';
+  }
+}
+
 /** 从二维 profile 派生工具体起止端闭合轮廓和只读方向端点十字，不参与布尔计算。 */
 export function createMeshPlanarRegionExtrusionPreviewGuides(
   profile: MeshPlanarRegionExtrusionPreviewProfile

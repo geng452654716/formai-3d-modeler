@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
+  copyMeshPlanarRegionExtrusionDiagnosticSummary,
+  createMeshPlanarRegionExtrusionDiagnosticSummary,
   createMeshPlanarRegionExtrusionDirectionConsistency,
   createMeshPlanarRegionExtrusionResultComparison,
   createMeshPlanarRegionExtrusionToolVolumeComparison,
@@ -50,6 +52,37 @@ function parseFinite(value: string) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** 在用户点击后优先使用 Clipboard API；受限预览环境超时或拒绝时退回本地选择复制。 */
+async function writeDiagnosticTextToClipboard(text: string) {
+  const clipboardWrite = typeof navigator !== 'undefined'
+    ? navigator.clipboard?.writeText?.bind(navigator.clipboard)
+    : undefined;
+  if (clipboardWrite) {
+    try {
+      await Promise.race([
+        clipboardWrite(text),
+        new Promise<never>((_, reject) => window.setTimeout(
+          () => reject(new Error('剪贴板写入超时')),
+          1200
+        ))
+      ]);
+      return;
+    } catch {
+      // 继续尝试只在当前页面存活的兼容复制，不保存诊断文本。
+    }
+  }
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.setAttribute('readonly', '');
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand('copy');
+  textArea.remove();
+  if (!copied) throw new Error('当前环境拒绝复制诊断文本');
+}
+
 /** 为精确 CAD 创建受管网格分支，并提供网格选择集合的受限变换入口。 */
 export function MeshElementEditPanel() {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
@@ -89,6 +122,10 @@ export function MeshElementEditPanel() {
   const [rotationAxis, setRotationAxis] = useState<MeshTransformAxis>('z');
   const [rotationDegrees, setRotationDegrees] = useState('15');
   const [scaleFactor, setScaleFactor] = useState('1.1');
+  const [diagnosticCopyFeedback, setDiagnosticCopyFeedback] = useState<{
+    summary: string;
+    status: 'copied' | 'failed';
+  } | null>(null);
 
   const displacement = useMemo<MeshPointMm | null>(() => {
     const values = [parseFinite(x), parseFinite(y), parseFinite(z)];
@@ -132,6 +169,14 @@ export function MeshElementEditPanel() {
       ? createMeshPlanarRegionExtrusionDirectionConsistency(meshElementEditResult, importedStlModel.revision)
       : null
   ), [importedStlModel, meshElementEditResult]);
+  const meshPlanarRegionExtrusionDiagnosticSummary = useMemo(() => (
+    meshElementEditResult && importedStlModel
+      ? createMeshPlanarRegionExtrusionDiagnosticSummary(meshElementEditResult, importedStlModel.revision)
+      : null
+  ), [importedStlModel, meshElementEditResult]);
+  const diagnosticCopyStatus = diagnosticCopyFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
+    ? diagnosticCopyFeedback.status
+    : 'idle';
   const meshPlanarRegionChainStatus = meshPlanarRegionExtrusionDirectionConsistency
     ? {
         planar: meshPlanarRegionExtrusionToolVolumeComparison ? '平面估算已计算' : '平面估算不可用',
@@ -192,6 +237,16 @@ export function MeshElementEditPanel() {
     : !selectedCadPart
       ? '当前 CAD 修订没有可转换的零件。'
       : null;
+
+  /** 仅在用户主动点击时把当前几何诊断写入系统剪贴板，不保存或发送文本。 */
+  async function copyPlanarRegionDiagnostic() {
+    if (!meshPlanarRegionExtrusionDiagnosticSummary) return;
+    const status = await copyMeshPlanarRegionExtrusionDiagnosticSummary(
+      meshPlanarRegionExtrusionDiagnosticSummary,
+      writeDiagnosticTextToClipboard
+    );
+    setDiagnosticCopyFeedback({ summary: meshPlanarRegionExtrusionDiagnosticSummary, status });
+  }
 
   async function submitCadMeshBranch() {
     if (!selectedCadPart || cadBranchBlockedReason || isCreatingBranch) return;
@@ -514,6 +569,17 @@ export function MeshElementEditPanel() {
                   </span>
                 </div>
               )}
+              <div className={`mesh-planar-region-diagnostic-copy ${diagnosticCopyStatus}`} aria-live="polite">
+                <button
+                  type="button"
+                  onClick={() => void copyPlanarRegionDiagnostic()}
+                  disabled={!meshPlanarRegionExtrusionDiagnosticSummary}
+                >
+                  {diagnosticCopyStatus === 'copied' ? '已复制几何诊断' : '复制几何诊断'}
+                </button>
+                {diagnosticCopyStatus === 'copied' && <span>已复制到系统剪贴板，不会自动发送或保存。</span>}
+                {diagnosticCopyStatus === 'failed' && <span role="alert">复制失败，请检查剪贴板权限。</span>}
+              </div>
               <small className="mesh-planar-region-result-note">
                 {meshPlanarRegionExtrusionToolVolumeComparison
                   && '平面估算与实际工具体的差异可能来自 Wire 重建和几何容差。'}

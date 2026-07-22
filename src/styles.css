@@ -1243,6 +1243,14 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-result-comparison.cut .mesh-planar-region-chain-status span { background: rgba(38, 20, 17, .44); }
 .mesh-planar-region-direction-warning { display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid rgba(235, 105, 105, .58); border-radius: 4px; color: #d99a9a; background: rgba(72, 20, 20, .46); font-size: 7px; line-height: 1.45; }
 .mesh-planar-region-direction-warning strong { color: #f19a9a; font-size: 7px; }
+.mesh-planar-region-diagnostic-copy { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.mesh-planar-region-diagnostic-copy button { flex: 0 0 auto; min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }
+.mesh-planar-region-diagnostic-copy button:hover:not(:disabled) { border-color: rgba(97, 230, 209, .72); color: #d6f7f0; background: rgba(25, 74, 66, .62); }
+.mesh-planar-region-diagnostic-copy button:disabled { cursor: not-allowed; opacity: .42; }
+.mesh-planar-region-diagnostic-copy span { min-width: 0; color: #79a89f; font-size: 6px; line-height: 1.4; }
+.mesh-planar-region-diagnostic-copy.failed button { border-color: rgba(235, 105, 105, .58); color: #f0a0a0; background: rgba(72, 20, 20, .4); }
+.mesh-planar-region-diagnostic-copy.failed span { color: #e78f8f; }
+.mesh-planar-region-result-comparison.cut .mesh-planar-region-diagnostic-copy button { border-color: rgba(255, 159, 135, .5); color: #ffd1c6; background: rgba(58, 29, 23, .56); }
 .mesh-planar-region-result-note { color: #79928a; font-size: 7px; line-height: 1.45; }
 .mesh-element-actions { display: grid; grid-template-columns: 1.4fr 1fr; gap: 6px; padding: 0 10px 8px; }
 .mesh-element-actions .mesh-element-apply { color: #2a2112; border-color: #d29424; background: #e0a12e; font-weight: 700; }
