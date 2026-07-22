@@ -628,25 +628,36 @@ function LoadedCadMesh({
     selectedMeshElementGeometries.faces?.dispose();
   }, [selectedMeshElementGeometries]);
 
-  const meshPlanarRegionBoundaryGeometry = useMemo(() => {
+  const meshPlanarRegionBoundaryGeometries = useMemo(() => {
     if (
       meshElementTransformKind !== 'extrude-face'
       || !importedStlModel
       || meshPlanarRegionPreview?.revision !== importedStlModel.revision
-      || !meshPlanarRegionPreview.boundaryLoopsMm.length
-    ) return null;
-    const positions = meshPlanarRegionPreview.boundaryLoopsMm.flatMap((loop) => loop.flatMap((point, index) => {
-      const next = loop[(index + 1) % loop.length];
-      const start = new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform);
-      const end = new Vector3(next.x, next.y, next.z).applyMatrix4(coordinateTransform);
-      return [start.x, start.y, start.z, end.x, end.y, end.z];
-    }));
-    if (!positions.length) return null;
-    const boundaryGeometry = new BufferGeometry();
-    boundaryGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-    return boundaryGeometry;
+      || !meshPlanarRegionPreview.boundaryLoops.length
+    ) return { outer: null, hole: null };
+    const createBoundaryGeometry = (kind: 'outer' | 'hole') => {
+      const positions = meshPlanarRegionPreview.boundaryLoops
+        .filter((loop) => loop.kind === kind)
+        .flatMap((loop) => loop.pointsMm.flatMap((point, index) => {
+          const next = loop.pointsMm[(index + 1) % loop.pointsMm.length];
+          const start = new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform);
+          const end = new Vector3(next.x, next.y, next.z).applyMatrix4(coordinateTransform);
+          return [start.x, start.y, start.z, end.x, end.y, end.z];
+        }));
+      if (!positions.length) return null;
+      const boundaryGeometry = new BufferGeometry();
+      boundaryGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+      return boundaryGeometry;
+    };
+    return {
+      outer: createBoundaryGeometry('outer'),
+      hole: createBoundaryGeometry('hole')
+    };
   }, [coordinateTransform, importedStlModel, meshElementTransformKind, meshPlanarRegionPreview]);
-  useEffect(() => () => meshPlanarRegionBoundaryGeometry?.dispose(), [meshPlanarRegionBoundaryGeometry]);
+  useEffect(() => () => {
+    meshPlanarRegionBoundaryGeometries.outer?.dispose();
+    meshPlanarRegionBoundaryGeometries.hole?.dispose();
+  }, [meshPlanarRegionBoundaryGeometries]);
 
   const selectedMarker = useMemo(() => {
     if (
@@ -1015,9 +1026,15 @@ function LoadedCadMesh({
         </mesh>
       )}
 
-      {meshPlanarRegionBoundaryGeometry && (
-        <lineSegments geometry={meshPlanarRegionBoundaryGeometry} renderOrder={13}>
+      {meshPlanarRegionBoundaryGeometries.outer && (
+        <lineSegments geometry={meshPlanarRegionBoundaryGeometries.outer} renderOrder={13}>
           <lineBasicMaterial color="#52e0c4" depthTest={false} depthWrite={false} />
+        </lineSegments>
+      )}
+
+      {meshPlanarRegionBoundaryGeometries.hole && (
+        <lineSegments geometry={meshPlanarRegionBoundaryGeometries.hole} renderOrder={14}>
+          <lineBasicMaterial color="#ff8f70" depthTest={false} depthWrite={false} />
         </lineSegments>
       )}
 

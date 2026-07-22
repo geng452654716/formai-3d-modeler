@@ -56,6 +56,17 @@ export interface MeshPlanarRegionTopology {
   pointByKey: Map<string, MeshPointMm>;
 }
 
+export type MeshPlanarRegionBoundaryKind = 'outer' | 'hole';
+
+/** 单个平面边界环的语义和二维测量结果。 */
+export interface MeshPlanarRegionBoundaryLoop {
+  kind: MeshPlanarRegionBoundaryKind;
+  pointsMm: MeshPointMm[];
+  perimeterMm: number;
+  boundsMm: { widthMm: number; heightMm: number };
+  nestingDepth: number;
+}
+
 /** 连续共面区域在正式调用 Worker 前的只读预览和测量结果。 */
 export interface MeshPlanarRegionPreview {
   revision: string;
@@ -64,7 +75,10 @@ export interface MeshPlanarRegionPreview {
   affectedTriangleCount: number;
   regionAreaMm2: number;
   boundaryLoopCount: number;
+  outerBoundaryLoopCount: number;
+  holeBoundaryLoopCount: number;
   boundaryLoopsMm: MeshPointMm[][];
+  boundaryLoops: MeshPlanarRegionBoundaryLoop[];
   normalToleranceDegrees: number;
   planeToleranceMm: number;
 }
@@ -202,6 +216,100 @@ function triangleUnitNormal(triangle: [MeshPointMm, MeshPointMm, MeshPointMm]) {
   return { x: normal.x / length, y: normal.y / length, z: normal.z / length };
 }
 
+
+interface MeshPlanePoint {
+  x: number;
+  y: number;
+}
+
+/** 使用全局轴投影创建稳定的种子平面二维坐标系，避免测量随种子边方向变化。 */
+function createMeshPlanarBasis(normal: MeshPointMm) {
+  const axes: MeshPointMm[] = [
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 1, z: 0 },
+    { x: 0, y: 0, z: 1 }
+  ];
+  const projected = axes.map((axis) => {
+    const dot = axis.x * normal.x + axis.y * normal.y + axis.z * normal.z;
+    const vector = {
+      x: axis.x - normal.x * dot,
+      y: axis.y - normal.y * dot,
+      z: axis.z - normal.z * dot
+    };
+    return { vector, length: Math.hypot(vector.x, vector.y, vector.z) };
+  }).sort((left, right) => right.length - left.length)[0];
+  if (!projected || projected.length <= 1e-9) throw new Error('共面区域预览无法建立稳定的平面测量坐标系');
+  const u = {
+    x: projected.vector.x / projected.length,
+    y: projected.vector.y / projected.length,
+    z: projected.vector.z / projected.length
+  };
+  const v = {
+    x: normal.y * u.z - normal.z * u.y,
+    y: normal.z * u.x - normal.x * u.z,
+    z: normal.x * u.y - normal.y * u.x
+  };
+  return { u, v };
+}
+
+function projectMeshPlanarPoint(
+  point: MeshPointMm,
+  origin: MeshPointMm,
+  basis: ReturnType<typeof createMeshPlanarBasis>
+): MeshPlanePoint {
+  const offset = { x: point.x - origin.x, y: point.y - origin.y, z: point.z - origin.z };
+  return {
+    x: offset.x * basis.u.x + offset.y * basis.u.y + offset.z * basis.u.z,
+    y: offset.x * basis.v.x + offset.y * basis.v.y + offset.z * basis.v.z
+  };
+}
+
+/** 用二维射线法判断一个边界顶点是否位于另一个闭合环内部。 */
+function meshPlanarPointInsideLoop(point: MeshPlanePoint, loop: MeshPlanePoint[]) {
+  let inside = false;
+  for (let index = 0, previous = loop.length - 1; index < loop.length; previous = index++) {
+    const start = loop[previous];
+    const end = loop[index];
+    const crosses = (start.y > point.y) !== (end.y > point.y)
+      && point.x < ((end.x - start.x) * (point.y - start.y)) / (end.y - start.y) + start.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+/** 基于二维环包含关系分类外环与孔洞，并计算周长和包围尺寸。 */
+function measureMeshPlanarBoundaryLoops(
+  loopsMm: MeshPointMm[][],
+  origin: MeshPointMm,
+  normal: MeshPointMm
+): MeshPlanarRegionBoundaryLoop[] {
+  const basis = createMeshPlanarBasis(normal);
+  const projectedLoops = loopsMm.map((loop) => loop.map((point) => projectMeshPlanarPoint(point, origin, basis)));
+  return loopsMm.map((pointsMm, loopIndex) => {
+    const projected = projectedLoops[loopIndex];
+    const nestingDepth = projectedLoops.reduce((depth, candidate, candidateIndex) => (
+      candidateIndex !== loopIndex && meshPlanarPointInsideLoop(projected[0], candidate) ? depth + 1 : depth
+    ), 0);
+    if (nestingDepth > 1) throw new Error('共面区域预览暂不支持嵌套岛结构，请先拆分平面区域');
+    const xs = projected.map((point) => point.x);
+    const ys = projected.map((point) => point.y);
+    const perimeterMm = pointsMm.reduce((sum, point, index) => {
+      const next = pointsMm[(index + 1) % pointsMm.length];
+      return sum + Math.hypot(next.x - point.x, next.y - point.y, next.z - point.z);
+    }, 0);
+    return {
+      kind: nestingDepth === 0 ? 'outer' : 'hole',
+      pointsMm: pointsMm.map((point) => ({ ...point })),
+      perimeterMm,
+      boundsMm: {
+        widthMm: Math.max(...xs) - Math.min(...xs),
+        heightMm: Math.max(...ys) - Math.min(...ys)
+      },
+      nestingDepth
+    };
+  });
+}
+
 /** 为同一上传模型修订构建可复用的三角面索引和共享边拓扑。 */
 export function createMeshPlanarRegionTopology(
   triangles: Iterable<MeshPlanarRegionTriangle>
@@ -337,6 +445,7 @@ export function expandMeshPlanarRegion(
       return { ...point };
     }));
   }
+  const boundaryLoops = measureMeshPlanarBoundaryLoops(boundaryLoopsMm, seedOrigin, seedNormal);
   const triangleIndexes = [...region].sort((left, right) => left - right);
   return {
     revision,
@@ -344,8 +453,11 @@ export function expandMeshPlanarRegion(
     triangleIndexes,
     affectedTriangleCount: triangleIndexes.length,
     regionAreaMm2,
-    boundaryLoopCount: boundaryLoopsMm.length,
+    boundaryLoopCount: boundaryLoops.length,
+    outerBoundaryLoopCount: boundaryLoops.filter((loop) => loop.kind === 'outer').length,
+    holeBoundaryLoopCount: boundaryLoops.filter((loop) => loop.kind === 'hole').length,
     boundaryLoopsMm,
+    boundaryLoops,
     normalToleranceDegrees: PLANAR_REGION_NORMAL_TOLERANCE_DEGREES,
     planeToleranceMm
   };

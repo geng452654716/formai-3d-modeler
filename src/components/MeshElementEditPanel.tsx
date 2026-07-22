@@ -329,11 +329,27 @@ export function MeshElementEditPanel() {
                   <span>预计三角面<strong>{meshPlanarRegionPreview.affectedTriangleCount} 个</strong></span>
                   <span>区域面积<strong>{meshPlanarRegionPreview.regionAreaMm2.toFixed(2)} 平方毫米</strong></span>
                   <span>边界环<strong>{meshPlanarRegionPreview.boundaryLoopCount} 个</strong></span>
+                  <span>外环<strong>{meshPlanarRegionPreview.outerBoundaryLoopCount} 个</strong></span>
+                  <span>孔洞<strong>{meshPlanarRegionPreview.holeBoundaryLoopCount} 个</strong></span>
                   <span>法线夹角公差<strong>{meshPlanarRegionPreview.normalToleranceDegrees.toFixed(1)}°</strong></span>
                   <span>平面距离公差<strong>{meshPlanarRegionPreview.planeToleranceMm.toFixed(5)} 毫米</strong></span>
                 </div>
-                <small className="mesh-planar-region-boundary-legend"><i />青绿色线框表示区域外环和孔洞环，可用于检查是否误跨区域。</small>
-                <small>这里只用于执行前反馈；桌面 Worker 仍会独立重新扩展区域并完成全部安全校验。</small>
+                <div className="mesh-planar-region-loop-list">
+                  {meshPlanarRegionPreview.boundaryLoops.map((loop, index) => {
+                    const ordinal = meshPlanarRegionPreview.boundaryLoops
+                      .slice(0, index + 1)
+                      .filter((candidate) => candidate.kind === loop.kind).length;
+                    return (
+                      <span key={`${loop.kind}-${index}`}>
+                        <strong>{loop.kind === 'outer' ? '外环' : '孔洞'} {ordinal}</strong>
+                        <em>周长 {loop.perimeterMm.toFixed(2)} 毫米 · 包围 {loop.boundsMm.widthMm.toFixed(2)} × {loop.boundsMm.heightMm.toFixed(2)} 毫米</em>
+                      </span>
+                    );
+                  })}
+                </div>
+                <small className="mesh-planar-region-boundary-legend outer"><i />青绿色线框表示外环。</small>
+                {meshPlanarRegionPreview.holeBoundaryLoopCount > 0 && <small className="mesh-planar-region-boundary-legend hole"><i />珊瑚色线框表示孔洞环。</small>}
+                <small>环语义由种子平面二维包含关系判断；桌面 Worker 仍会独立重新扩展区域并完成全部安全校验。</small>
               </div>
             )}
             {meshPlanarRegionPreviewError && <div className="mesh-element-error">{meshPlanarRegionPreviewError}</div>}

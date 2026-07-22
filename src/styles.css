@@ -1201,8 +1201,14 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-preview-grid span { display: flex; min-width: 0; flex-direction: column; gap: 2px; color: #7d938a; font-size: 7px; }
 .mesh-planar-region-preview-grid strong { overflow-wrap: anywhere; color: #c6e7da; font-size: 8px; }
 .mesh-planar-region-preview small { color: #6f877e; font-size: 7px; line-height: 1.4; }
+.mesh-planar-region-loop-list { display: flex; max-height: 74px; flex-direction: column; gap: 4px; overflow-y: auto; }
+.mesh-planar-region-loop-list span { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 6px; padding: 4px 5px; border-radius: 4px; background: rgba(10, 27, 23, .55); }
+.mesh-planar-region-loop-list strong { flex: 0 0 auto; color: #b9dcd0; font-size: 7px; }
+.mesh-planar-region-loop-list em { min-width: 0; color: #7f9c92; font-size: 7px; font-style: normal; text-align: right; overflow-wrap: anywhere; }
 .mesh-planar-region-boundary-legend { display: flex; align-items: center; gap: 5px; color: #83bdb2 !important; }
 .mesh-planar-region-boundary-legend i { width: 13px; height: 2px; flex: 0 0 auto; border-radius: 999px; background: #52e0c4; box-shadow: 0 0 5px rgba(82, 224, 196, .55); }
+.mesh-planar-region-boundary-legend.hole { color: #d7a08f !important; }
+.mesh-planar-region-boundary-legend.hole i { background: #ff8f70; box-shadow: 0 0 5px rgba(255, 143, 112, .55); }
 .mesh-element-actions { display: grid; grid-template-columns: 1.4fr 1fr; gap: 6px; padding: 0 10px 8px; }
 .mesh-element-actions .mesh-element-apply { color: #2a2112; border-color: #d29424; background: #e0a12e; font-weight: 700; }
 .mesh-element-actions .mesh-element-apply:hover:not(:disabled) { background: #efb442; }

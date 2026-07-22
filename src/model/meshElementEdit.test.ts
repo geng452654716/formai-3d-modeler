@@ -184,6 +184,14 @@ describe('连续共面区域执行前预览', () => {
     expect(preview.boundaryLoopCount).toBe(1);
     expect(preview.boundaryLoopsMm).toHaveLength(1);
     expect(preview.boundaryLoopsMm[0]).toHaveLength(4);
+    expect(preview.outerBoundaryLoopCount).toBe(1);
+    expect(preview.holeBoundaryLoopCount).toBe(0);
+    expect(preview.boundaryLoops[0]).toMatchObject({
+      kind: 'outer',
+      nestingDepth: 0,
+      boundsMm: { widthMm: 30, heightMm: 24 }
+    });
+    expect(preview.boundaryLoops[0].perimeterMm).toBeCloseTo(108, 8);
     expect(preview.normalToleranceDegrees).toBe(0.5);
     expect(preview.planeToleranceMm).toBeCloseTo(Math.hypot(30, 24, 12) * 0.000001, 10);
   });
@@ -216,6 +224,32 @@ describe('连续共面区域执行前预览', () => {
     expect(preview.boundaryLoopCount).toBe(2);
     expect(preview.boundaryLoopsMm).toHaveLength(2);
     expect(preview.boundaryLoopsMm.every((loop) => loop.length === 4)).toBe(true);
+    expect(preview.outerBoundaryLoopCount).toBe(1);
+    expect(preview.holeBoundaryLoopCount).toBe(1);
+    const outerLoop = preview.boundaryLoops.find((loop) => loop.kind === 'outer');
+    const holeLoop = preview.boundaryLoops.find((loop) => loop.kind === 'hole');
+    expect(outerLoop).toMatchObject({ nestingDepth: 0, boundsMm: { widthMm: 10, heightMm: 10 } });
+    expect(outerLoop?.perimeterMm).toBeCloseTo(40, 8);
+    expect(holeLoop).toMatchObject({ nestingDepth: 1, boundsMm: { widthMm: 2, heightMm: 2 } });
+    expect(holeLoop?.perimeterMm).toBeCloseTo(8, 8);
+  });
+
+  it('反转三角面绕序后仍按包含关系识别外环和孔洞', async () => {
+    const { expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const outer = [[0, 0, 0], [12, 0, 0], [12, 8, 0], [0, 8, 0]] as const;
+    const inner = [[3, 2, 0], [9, 2, 0], [9, 6, 0], [3, 6, 0]] as const;
+    const faces = outer.flatMap((point, index) => {
+      const next = (index + 1) % 4;
+      return [
+        face(index * 2, inner[next], outer[next], point),
+        face(index * 2 + 1, inner[index], inner[next], point)
+      ];
+    });
+    const preview = expandMeshPlanarRegion('修订-反向绕序', 0, faces, 20);
+    expect(preview.outerBoundaryLoopCount).toBe(1);
+    expect(preview.holeBoundaryLoopCount).toBe(1);
+    expect(preview.boundaryLoops.find((loop) => loop.kind === 'outer')?.perimeterMm).toBeCloseTo(40, 8);
+    expect(preview.boundaryLoops.find((loop) => loop.kind === 'hole')?.perimeterMm).toBeCloseTo(20, 8);
   });
 
   it('同一拓扑可由不同种子复用且支持不连续三角面索引', async () => {

@@ -546,3 +546,23 @@ Three.js 点击命中或当前摄像机屏幕投影框选
 缓存键由模型修订、Three.js `BufferGeometry` 实例、逆坐标变换和视图来源共同约束。修订、导入、恢复、几何或视图变化时立即失效；切换操作模式只清除预览，不强制重建仍然有效的当前修订拓扑。`expandMeshPlanarRegion()` 同时接受三角面迭代器和已构建 topology，确保纯函数测试与视口缓存使用同一套区域扩展、面积上限和边界拒绝逻辑。
 
 前端 topology 与边界线框仅用于交互反馈。桌面 Worker 不读取或信任缓存，仍从当前工作 STL 独立建立邻接、复核非流形和边界闭合性，并由 OpenCascade 判断平面 Face、外环/孔洞 Wire、布尔结果有效性、封闭性和单 Solid 约束。
+
+## 连续共面区域环语义与测量协议
+
+第 48 阶段在前端预览协议中新增可序列化的 `MeshPlanarRegionBoundaryLoop`：
+
+```text
+kind: outer | hole
+pointsMm: 源毫米闭合环点序列
+perimeterMm: 三维真实闭合周长
+boundsMm: 种子平面二维包围宽度与高度
+nestingDepth: 二维包含深度
+```
+
+测量器从种子三角面法线建立稳定二维基底，把全部边界环投影到同一平面，并通过二维射线法判断一个环顶点是否位于其他环内部。包含深度为 0 的环分类为外环，深度为 1 的环分类为孔洞；该协议不依赖 STL 绕序、边界数组顺序或有符号面积方向。深度大于 1 表示第一版不支持的嵌套岛，预览在进入 Worker 前以中文拒绝。
+
+`MeshPlanarRegionPreview` 新增 `outerBoundaryLoopCount`、`holeBoundaryLoopCount` 和 `boundaryLoops`，继续保留 `boundaryLoopCount` 与 `boundaryLoopsMm` 兼容字段。周长使用源毫米三维点逐段求和；包围尺寸使用共同二维基底计算，避免种子三角面的任意边方向改变测量结果。
+
+渲染层从同一个 `boundaryLoops` 分别生成外环和孔洞 `BufferGeometry`。外环使用青绿色 `#52e0c4`，孔洞使用珊瑚色 `#ff8f70`，两者都关闭深度读写并使用独立 `renderOrder`；预览或组件生命周期变化时分别释放 GPU 几何。Store 只保存可序列化预览，不保存 Three.js 对象。
+
+上述语义和尺寸仍不是安全边界，也不进入网格编辑请求。桌面 Worker 从当前工作 STL 独立重建邻接、边界环和 OpenCascade Wire，继续执行非流形、资源上限、有效性、封闭性、单 Solid 与原子回滚检查。
