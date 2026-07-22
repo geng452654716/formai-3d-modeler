@@ -245,6 +245,7 @@ describe('连续共面区域执行前预览', () => {
     const {
       createMeshPlanarRegionDimensionGuides,
       createMeshPlanarRegionExtrusionPreviewGuides,
+      createMeshPlanarRegionExtrusionPreviewMetrics,
       createMeshPlanarRegionExtrusionPreviewProfile,
       expandMeshPlanarRegion
     } = await import('./meshElementEdit');
@@ -307,6 +308,54 @@ describe('连续共面区域执行前预览', () => {
     }, 'add', 2);
     expect(reorderedProfile?.outer).toEqual(addProfile?.outer);
     expect(reorderedProfile?.holes).toEqual(addProfile?.holes);
+
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics(addProfile!)).toEqual({
+      outerAreaMm2: 100,
+      holeAreaMm2: 4,
+      netAreaMm2: 96,
+      estimatedVolumeMm3: 192
+    });
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({
+      ...addProfile!,
+      outer: [...addProfile!.outer].reverse(),
+      holes: [[...addProfile!.holes[0]].reverse()]
+    })).toEqual({
+      outerAreaMm2: 100,
+      holeAreaMm2: 4,
+      netAreaMm2: 96,
+      estimatedVolumeMm3: 192
+    });
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({
+      ...addProfile!,
+      holes: [
+        ...addProfile!.holes,
+        [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 1.5, y: 2 }]
+      ]
+    })).toEqual({
+      outerAreaMm2: 100,
+      holeAreaMm2: 4.5,
+      netAreaMm2: 95.5,
+      estimatedVolumeMm3: 191
+    });
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({
+      ...addProfile!,
+      outer: addProfile!.outer.slice(0, 2)
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({
+      ...addProfile!,
+      outer: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: Number.NaN, y: 1 }]
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({
+      ...addProfile!,
+      outer: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }]
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({
+      ...addProfile!,
+      holes: [[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]]
+    })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({ ...addProfile!, distanceMm: 0 })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({ ...addProfile!, distanceMm: -2 })).toBeNull();
+    expect(createMeshPlanarRegionExtrusionPreviewMetrics({ ...addProfile!, distanceMm: Number.NaN })).toBeNull();
 
     const guides = createMeshPlanarRegionExtrusionPreviewGuides(addProfile!);
     expect(guides?.loops).toHaveLength(2);

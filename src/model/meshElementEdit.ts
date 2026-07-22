@@ -165,6 +165,13 @@ export interface MeshPlanarRegionExtrusionPreviewProfile {
   labelPointMm: MeshPointMm;
 }
 
+export interface MeshPlanarRegionExtrusionPreviewMetrics {
+  outerAreaMm2: number;
+  holeAreaMm2: number;
+  netAreaMm2: number;
+  estimatedVolumeMm3: number;
+}
+
 export interface MeshPlanarRegionExtrusionPreviewLoopGuide {
   kind: MeshPlanarRegionBoundaryKind;
   startLoopMm: MeshPointMm[];
@@ -419,6 +426,44 @@ export function createMeshPlanarRegionExtrusionPreviewProfile(
   };
 }
 
+function meshPlanarLoopAreaMm2(loop: { x: number; y: number }[]) {
+  if (loop.length < 3 || loop.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    return null;
+  }
+  const signedAreaTwice = loop.reduce((area, point, index) => {
+    const next = loop[(index + 1) % loop.length];
+    return area + point.x * next.y - next.x * point.y;
+  }, 0);
+  const areaMm2 = Math.abs(signedAreaTwice) / 2;
+  return Number.isFinite(areaMm2) && areaMm2 > 1e-9 ? areaMm2 : null;
+}
+
+/** 计算执行前工具体的二维净面积和理论体积，不代表布尔后的净体积或材料用量。 */
+export function createMeshPlanarRegionExtrusionPreviewMetrics(
+  profile: MeshPlanarRegionExtrusionPreviewProfile
+): MeshPlanarRegionExtrusionPreviewMetrics | null {
+  if (!Number.isFinite(profile.distanceMm) || profile.distanceMm <= 0) return null;
+  const outerAreaMm2 = meshPlanarLoopAreaMm2(profile.outer);
+  if (outerAreaMm2 === null) return null;
+  const holeAreasMm2: number[] = [];
+  for (const hole of profile.holes) {
+    const holeAreaMm2 = meshPlanarLoopAreaMm2(hole);
+    if (holeAreaMm2 === null) return null;
+    holeAreasMm2.push(holeAreaMm2);
+  }
+  const holeAreaMm2 = holeAreasMm2.reduce((total, area) => total + area, 0);
+  const netAreaMm2 = outerAreaMm2 - holeAreaMm2;
+  const estimatedVolumeMm3 = netAreaMm2 * profile.distanceMm;
+  if (
+    !Number.isFinite(holeAreaMm2)
+    || !Number.isFinite(netAreaMm2)
+    || netAreaMm2 <= 1e-9
+    || !Number.isFinite(estimatedVolumeMm3)
+    || estimatedVolumeMm3 <= 0
+  ) return null;
+  return { outerAreaMm2, holeAreaMm2, netAreaMm2, estimatedVolumeMm3 };
+}
+
 /** 从二维 profile 派生工具体起止端闭合轮廓和只读方向端点十字，不参与布尔计算。 */
 export function createMeshPlanarRegionExtrusionPreviewGuides(
   profile: MeshPlanarRegionExtrusionPreviewProfile
@@ -432,14 +477,10 @@ export function createMeshPlanarRegionExtrusionPreviewGuides(
     profile.directionNormalMm,
     profile.directionEndMm
   ];
-  const signedAreaTwice = (loop: { x: number; y: number }[]) => loop.reduce((area, point, index) => {
-    const next = loop[(index + 1) % loop.length];
-    return area + point.x * next.y - next.x * point.y;
-  }, 0);
   if (
     !Number.isFinite(profile.distanceMm)
     || profile.distanceMm <= 0
-    || loops2d.some((loop) => loop.length < 3 || Math.abs(signedAreaTwice(loop)) <= 1e-9)
+    || loops2d.some((loop) => meshPlanarLoopAreaMm2(loop) === null)
     || allPlanePoints.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))
     || sourceBasisPoints.some((point) => (
       !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)

@@ -641,4 +641,14 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：测试覆盖外环 4 条、孔洞 4 条及第二个三角孔 3 条连接线，验证对应端点、作用距离与全部有限坐标；针对性测试 20/20、前端 193/193，生产构建和差异检查通过。浏览器验证加料 2.00 毫米、压入 6.00 毫米、多角度层级与零 Console 错误。仅保留既有 Vite 大分块警告。
 
-**下一阶段架构方向：**新增无 Three.js 依赖的工具体度量纯函数，以二维环有符号面积绝对值计算唯一外环面积并减去任意孔洞面积，再乘 `distanceMm` 得到理论工具体体积；必须拒绝非有限或非正净面积，并把结果限定为前端只读摘要，不改变 Worker 或最终模型体积语义。
+### 56. 连续共面区域工具体度量架构（已实现）
+
+- `createMeshPlanarRegionExtrusionPreviewMetrics(profile)` 是无 Three.js 依赖的纯函数。私有环面积函数使用鞋带公式并取有符号面积绝对值，因此外环和孔洞绕序反转不改变数值。
+- 度量结果包含 `outerAreaMm2`、`holeAreaMm2`、`netAreaMm2` 和 `estimatedVolumeMm3`；孔洞按任意数量累加，净面积必须大于零，体积固定为净面积乘正有限 `distanceMm`。
+- 任一环少于三个点、含非有限坐标、面积退化，或孔洞总面积不小于外环时返回 `null`。指南线生成复用同一环面积校验，避免渲染层和度量层接受范围不一致。
+- `MeshElementEditPanel` 从当前导入修订、区域、方向和距离即时重建 profile 与 metrics；`LoadedCadMesh` 在创建 Three.js 工具体前同时要求 guides 与 metrics 有效，并把同一个 metrics 对象交给视口中文标签。
+- 扩展后的标签使用 `createMeshPlanarDimensionHtmlPosition(176, 52)` 预留安全区，并保持 `pointer-events: none`。所有度量均为 React 派生数据，不进入 Zustand 持久状态、Tauri/Python Worker、项目版本、精确快照或恢复协议。
+
+2026-07-22 架构验证：自动测试覆盖 100 平方毫米外环、4 平方毫米单孔、额外 0.5 平方毫米三角孔、双向绕序和退化输入；针对性测试 20/20、前端 193/193，生产构建和差异检查通过。浏览器验证面板/视口同步、2.00 与 6.00 毫米实时重算、0.10 毫米清除、安全区和零 Console 错误。仅保留既有 Vite 大分块警告。
+
+**下一阶段架构方向：**复用现有 `meshElementEditResult.toolVolumeMm3` 与 `validation.volumeDeltaMm3` 派生只读执行结果对照，不新增 Worker 契约；仅当结果属于当前修订的 `extrude-face` 时显示，并对零值、非有限值和异常比例安全降级。

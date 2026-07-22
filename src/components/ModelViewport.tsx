@@ -38,6 +38,7 @@ import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
   createMeshPlanarRegionExtrusionPreviewGuides,
+  createMeshPlanarRegionExtrusionPreviewMetrics,
   createMeshPlanarRegionExtrusionPreviewProfile,
   createMeshPlanarRegionDimensionGuides,
   createMeshPlanarRegionTopology,
@@ -90,7 +91,7 @@ function createMeshPlanarDimensionHtmlPosition(labelWidthPx: number, labelHeight
 
 const calculateMeshPlanarAxisLabelPosition = createMeshPlanarDimensionHtmlPosition(104, 20);
 const calculateMeshPlanarSummaryLabelPosition = createMeshPlanarDimensionHtmlPosition(104, 38);
-const calculateMeshPlanarExtrusionLabelPosition = createMeshPlanarDimensionHtmlPosition(118, 24);
+const calculateMeshPlanarExtrusionLabelPosition = createMeshPlanarDimensionHtmlPosition(176, 52);
 
 interface FeaturePreviewGeometryProps {
   profile: 'circle' | 'rectangle' | 'slot';
@@ -750,7 +751,8 @@ function LoadedCadMesh({
     );
     if (!profile) return null;
     const guides = createMeshPlanarRegionExtrusionPreviewGuides(profile);
-    if (!guides) return null;
+    const metrics = createMeshPlanarRegionExtrusionPreviewMetrics(profile);
+    if (!guides || !metrics) return null;
     const shape = new Shape();
     shape.moveTo(profile.outer[0].x, profile.outer[0].y);
     profile.outer.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
@@ -803,6 +805,7 @@ function LoadedCadMesh({
       geometry: extrusionGeometry,
       mode: meshFaceExtrusionMode,
       distanceMm: profile.distanceMm,
+      metrics,
       color: meshFaceExtrusionMode === 'add' ? '#2dd4bf' : '#ff8066',
       directionLine: [transformPoint(profile.directionStartMm), transformPoint(profile.directionEndMm)] as [Vector3, Vector3],
       labelPoint: transformPoint(profile.labelPointMm),
@@ -1360,8 +1363,12 @@ function LoadedCadMesh({
               data-mesh-planar-extrusion-preview={meshPlanarRegionExtrusionPreview.mode}
               data-distance-mm={meshPlanarRegionExtrusionPreview.distanceMm.toFixed(2)}
             >
-              {meshPlanarRegionExtrusionPreview.mode === 'add' ? '向外加料预演' : '向内压入预演'}
-              <strong>{meshPlanarRegionExtrusionPreview.distanceMm.toFixed(2)} 毫米</strong>
+              <span className="mesh-planar-region-extrusion-title">
+                {meshPlanarRegionExtrusionPreview.mode === 'add' ? '向外加料预演' : '向内压入预演'}
+                <strong>{meshPlanarRegionExtrusionPreview.distanceMm.toFixed(2)} 毫米</strong>
+              </span>
+              <span>净作用面积 {meshPlanarRegionExtrusionPreview.metrics.netAreaMm2.toFixed(2)} 平方毫米</span>
+              <span>工具体估算 {meshPlanarRegionExtrusionPreview.metrics.estimatedVolumeMm3.toFixed(2)} 立方毫米</span>
             </div>
           </Html>
         </>

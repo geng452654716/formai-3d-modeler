@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
+  createMeshPlanarRegionExtrusionPreviewMetrics,
+  createMeshPlanarRegionExtrusionPreviewProfile,
   cycleMeshPlanarRegionLoopIndex,
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
@@ -92,6 +94,25 @@ export function MeshElementEditPanel() {
   const parsedRotation = parseFinite(rotationDegrees);
   const parsedScale = parseFinite(scaleFactor);
   const parsedFaceExtrusionDistance = parseFinite(faceExtrusionDistance);
+  const meshPlanarRegionExtrusionMetrics = useMemo(() => {
+    if (
+      !meshPlanarRegionPreview
+      || !importedStlModel
+      || meshPlanarRegionPreview.revision !== importedStlModel.revision
+      || parsedFaceExtrusionDistance === null
+    ) return null;
+    const profile = createMeshPlanarRegionExtrusionPreviewProfile(
+      meshPlanarRegionPreview,
+      faceExtrusionMode,
+      parsedFaceExtrusionDistance
+    );
+    return profile ? createMeshPlanarRegionExtrusionPreviewMetrics(profile) : null;
+  }, [
+    faceExtrusionMode,
+    importedStlModel,
+    meshPlanarRegionPreview,
+    parsedFaceExtrusionDistance
+  ]);
   const moveInvalid = !displacement
     || [displacement.x, displacement.y, displacement.z].every((value) => value === 0)
     || [displacement.x, displacement.y, displacement.z].some((value) => Math.abs(value) > 500);
@@ -342,6 +363,14 @@ export function MeshElementEditPanel() {
                 <div className="mesh-planar-region-preview-grid">
                   <span>预计三角面<strong>{meshPlanarRegionPreview.affectedTriangleCount} 个</strong></span>
                   <span>区域面积<strong>{meshPlanarRegionPreview.regionAreaMm2.toFixed(2)} 平方毫米</strong></span>
+                  {meshPlanarRegionExtrusionMetrics && (
+                    <>
+                      <span>外环面积<strong>{meshPlanarRegionExtrusionMetrics.outerAreaMm2.toFixed(2)} 平方毫米</strong></span>
+                      <span>孔洞总面积<strong>{meshPlanarRegionExtrusionMetrics.holeAreaMm2.toFixed(2)} 平方毫米</strong></span>
+                      <span>净作用面积<strong>{meshPlanarRegionExtrusionMetrics.netAreaMm2.toFixed(2)} 平方毫米</strong></span>
+                      <span>工具体估算<strong>{meshPlanarRegionExtrusionMetrics.estimatedVolumeMm3.toFixed(2)} 立方毫米</strong></span>
+                    </>
+                  )}
                   <span>边界环<strong>{meshPlanarRegionPreview.boundaryLoopCount} 个</strong></span>
                   <span>外环<strong>{meshPlanarRegionPreview.outerBoundaryLoopCount} 个</strong></span>
                   <span>孔洞<strong>{meshPlanarRegionPreview.holeBoundaryLoopCount} 个</strong></span>
