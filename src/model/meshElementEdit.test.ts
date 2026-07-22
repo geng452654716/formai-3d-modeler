@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectMeshElementBoxSelection,
+  createMeshPlanarRegionExtrusionResultComparison,
   createMeshElementSelectionSet,
   meshElementSelectionKey,
   meshElementSelectionPivot,
   uniqueMeshElementSelectionPoints,
   nearestMeshElementIndex,
   selectedMeshElementPoints,
+  type MeshElementEditResult,
   type MeshElementSelection
 } from './meshElementEdit';
 
@@ -564,5 +566,95 @@ describe('连续共面区域执行前预览', () => {
     const triangles = [face(0, [0, 0, 0], [1, 0, 0], [0, 1, 0])];
     expect(expandMeshPlanarRegion('小模型', 0, triangles, 1).planeToleranceMm).toBe(0.00001);
     expect(expandMeshPlanarRegion('大模型', 0, triangles, 1_000_000).planeToleranceMm).toBe(0.02);
+  });
+});
+
+describe('连续共面区域执行结果体积对照', () => {
+  function extrusionResult(overrides: {
+    revision?: string;
+    operation?: MeshElementEditResult['operation'];
+    mode?: MeshElementEditResult['faceExtrusionMode'];
+    toolVolumeMm3?: number;
+    volumeDeltaMm3?: number;
+  } = {}): MeshElementEditResult {
+    const revision = overrides.revision ?? '修订-结果';
+    return {
+      status: 'ok',
+      revision,
+      selectionRevision: '修订-执行前',
+      sourcePartId: 'uploaded-model',
+      kind: 'face',
+      selectionMethod: 'click',
+      selectedElementCount: 1,
+      operation: overrides.operation ?? 'extrude-face',
+      pivotMm: { x: 0, y: 0, z: 0 },
+      faceExtrusionMode: overrides.mode === undefined ? 'add' : overrides.mode,
+      toolVolumeMm3: overrides.toolVolumeMm3 === undefined ? 200 : overrides.toolVolumeMm3,
+      movedCoordinateCount: 0,
+      movedVertexOccurrenceCount: 0,
+      sourceFile: '任意模型.stl',
+      stepFile: '任意模型.step',
+      outputs: ['任意模型.stl', '任意模型.step'],
+      units: 'mm',
+      kernel: 'OpenCascade 测试内核',
+      validation: {
+        valid: true,
+        watertight: true,
+        solidCountBefore: 1,
+        solidCountAfter: 1,
+        volumeBeforeMm3: 1_000,
+        volumeAfterMm3: 1_180,
+        volumeDeltaMm3: overrides.volumeDeltaMm3 === undefined ? 180 : overrides.volumeDeltaMm3,
+        boundsBeforeMm: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 10, x: 10, y: 10, z: 10 },
+        boundsAfterMm: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 12, x: 10, y: 10, z: 12 }
+      },
+      updatedModel: {} as MeshElementEditResult['updatedModel'],
+      limitations: []
+    };
+  }
+
+  it('加料与压入都使用模型体积变化绝对值计算实际作用比例', () => {
+    expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult(), '修订-结果')).toEqual({
+      mode: 'add',
+      toolVolumeMm3: 200,
+      modelVolumeChangeMm3: 180,
+      effectRatioPercent: 90
+    });
+    expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult({
+      mode: 'cut',
+      volumeDeltaMm3: -150
+    }), '修订-结果')).toEqual({
+      mode: 'cut',
+      toolVolumeMm3: 200,
+      modelVolumeChangeMm3: 150,
+      effectRatioPercent: 75
+    });
+  });
+
+  it('轻微浮点超出会夹紧为百分之百并可稳定格式化', () => {
+    const comparison = createMeshPlanarRegionExtrusionResultComparison(extrusionResult({
+      toolVolumeMm3: 200,
+      volumeDeltaMm3: 200.000_001
+    }), '修订-结果');
+    expect(comparison?.effectRatioPercent).toBe(100);
+    expect(comparison?.effectRatioPercent.toFixed(2)).toBe('100.00');
+  });
+
+  it('拒绝非挤出、过期修订、缺失模式和明显异常比例', () => {
+    expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult({ operation: 'move' }), '修订-结果')).toBeNull();
+    expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult(), '其他修订')).toBeNull();
+    const missingMode = extrusionResult();
+    missingMode.faceExtrusionMode = undefined;
+    expect(createMeshPlanarRegionExtrusionResultComparison(missingMode, '修订-结果')).toBeNull();
+    expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult({ volumeDeltaMm3: 201 }), '修订-结果')).toBeNull();
+  });
+
+  it('拒绝零值、负值和非有限工具体积以及非有限体积变化', () => {
+    for (const toolVolumeMm3 of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult({ toolVolumeMm3 }), '修订-结果')).toBeNull();
+    }
+    for (const volumeDeltaMm3 of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(createMeshPlanarRegionExtrusionResultComparison(extrusionResult({ volumeDeltaMm3 }), '修订-结果')).toBeNull();
+    }
   });
 });

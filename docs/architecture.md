@@ -651,4 +651,13 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：自动测试覆盖 100 平方毫米外环、4 平方毫米单孔、额外 0.5 平方毫米三角孔、双向绕序和退化输入；针对性测试 20/20、前端 193/193，生产构建和差异检查通过。浏览器验证面板/视口同步、2.00 与 6.00 毫米实时重算、0.10 毫米清除、安全区和零 Console 错误。仅保留既有 Vite 大分块警告。
 
-**下一阶段架构方向：**复用现有 `meshElementEditResult.toolVolumeMm3` 与 `validation.volumeDeltaMm3` 派生只读执行结果对照，不新增 Worker 契约；仅当结果属于当前修订的 `extrude-face` 时显示，并对零值、非有限值和异常比例安全降级。
+### 57. 连续共面区域执行结果体积对照架构（已实现）
+
+- `createMeshPlanarRegionExtrusionResultComparison(result, currentRevision)` 是纯派生边界：只接受当前修订的 `extrude-face` 成功结果、合法 `faceExtrusionMode`、正有限 `toolVolumeMm3` 和有限 `validation.volumeDeltaMm3`。
+- 模型体积变化统一使用 `Math.abs(volumeDeltaMm3)`；实际作用比例为体积变化绝对值除以工具体积。最多 0.1 个百分点的浮点越界会夹紧为 100%，更明显的超过工具体积结果返回 `null`。
+- `MeshElementEditPanel` 只订阅已有 `meshElementEditResult` 和 `importedStlModel.revision`，通过 `useMemo` 即时生成对照卡；没有新增 Store 字段、Tauri 命令、Python 输出、项目版本数据或快照恢复协议。
+- 卡片按加料和压入使用不同边框与说明，但数值格式统一为两位小数；说明限定为几何重叠或裁剪，不把比例扩展成材料、耗材或切片语义。
+
+2026-07-22 架构验证：纯函数覆盖加料 90%、压入 75%、轻微浮点夹紧、明显异常比例、过期修订、其他操作、缺失模式、零值、负值和非有限数；针对性测试 24/24、前端 197/197，生产构建和差异检查通过。浏览器真实 Worker 返回 103.58 立方毫米工具体与 100.00 立方毫米模型变化，派生 96.54%，Console 无错误。
+
+**下一阶段架构方向：**在同一成功结果上复用 `regionAreaMm2` 与 `distanceMm` 计算执行前平面理论体积，再与 `toolVolumeMm3` 派生绝对偏差和百分比；继续保持纯函数、当前修订绑定和零协议变更。

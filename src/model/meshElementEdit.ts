@@ -253,6 +253,13 @@ export interface MeshElementEditResult {
   limitations: string[];
 }
 
+export interface MeshPlanarRegionExtrusionResultComparison {
+  mode: MeshFaceExtrusionMode;
+  toolVolumeMm3: number;
+  modelVolumeChangeMm3: number;
+  effectRatioPercent: number;
+}
+
 export const MESH_ELEMENT_LABELS: Record<MeshElementKind, string> = {
   vertex: '顶点',
   edge: '边',
@@ -462,6 +469,37 @@ export function createMeshPlanarRegionExtrusionPreviewMetrics(
     || estimatedVolumeMm3 <= 0
   ) return null;
   return { outerAreaMm2, holeAreaMm2, netAreaMm2, estimatedVolumeMm3 };
+}
+
+/** 对照当前修订的真实布尔结果；该比例仅描述单次几何作用，不代表材料或耗材用量。 */
+export function createMeshPlanarRegionExtrusionResultComparison(
+  result: MeshElementEditResult,
+  currentRevision: string
+): MeshPlanarRegionExtrusionResultComparison | null {
+  if (
+    result.operation !== 'extrude-face'
+    || result.revision !== currentRevision
+    || (result.faceExtrusionMode !== 'add' && result.faceExtrusionMode !== 'cut')
+  ) return null;
+  const toolVolumeMm3 = result.toolVolumeMm3;
+  const volumeDeltaMm3 = result.validation.volumeDeltaMm3;
+  if (
+    toolVolumeMm3 === undefined
+    || !Number.isFinite(toolVolumeMm3)
+    || toolVolumeMm3 <= 0
+    || !Number.isFinite(volumeDeltaMm3)
+  ) return null;
+  const modelVolumeChangeMm3 = Math.abs(volumeDeltaMm3);
+  const rawEffectRatioPercent = modelVolumeChangeMm3 / toolVolumeMm3 * 100;
+  if (!Number.isFinite(rawEffectRatioPercent) || rawEffectRatioPercent < 0 || rawEffectRatioPercent > 100.1) {
+    return null;
+  }
+  return {
+    mode: result.faceExtrusionMode,
+    toolVolumeMm3,
+    modelVolumeChangeMm3,
+    effectRatioPercent: Math.min(100, rawEffectRatioPercent)
+  };
 }
 
 /** 从二维 profile 派生工具体起止端闭合轮廓和只读方向端点十字，不参与布尔计算。 */

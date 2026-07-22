@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
+  createMeshPlanarRegionExtrusionResultComparison,
   createMeshPlanarRegionExtrusionPreviewMetrics,
   createMeshPlanarRegionExtrusionPreviewProfile,
   cycleMeshPlanarRegionLoopIndex,
@@ -62,6 +63,7 @@ export function MeshElementEditPanel() {
   const meshElementSelection = useModelStore((state) => state.meshElementSelection);
   const meshElementEditStatus = useModelStore((state) => state.meshElementEditStatus);
   const meshElementEditError = useModelStore((state) => state.meshElementEditError);
+  const meshElementEditResult = useModelStore((state) => state.meshElementEditResult);
   const setMeshElementEditMode = useModelStore((state) => state.setMeshElementEditMode);
   const setMeshElementSelectionMethod = useModelStore((state) => state.setMeshElementSelectionMethod);
   const clearMeshElementSelection = useModelStore((state) => state.clearMeshElementSelection);
@@ -113,6 +115,11 @@ export function MeshElementEditPanel() {
     meshPlanarRegionPreview,
     parsedFaceExtrusionDistance
   ]);
+  const meshPlanarRegionExtrusionResultComparison = useMemo(() => (
+    meshElementEditResult && importedStlModel
+      ? createMeshPlanarRegionExtrusionResultComparison(meshElementEditResult, importedStlModel.revision)
+      : null
+  ), [importedStlModel, meshElementEditResult]);
   const moveInvalid = !displacement
     || [displacement.x, displacement.y, displacement.z].every((value) => value === 0)
     || [displacement.x, displacement.y, displacement.z].some((value) => Math.abs(value) > 500);
@@ -435,6 +442,23 @@ export function MeshElementEditPanel() {
           {transformKind === 'scale' && scaleInvalid && <div className="mesh-element-error">缩放比例必须在 0.25 至 4 倍之间，且不能等于 1</div>}
           {transformKind === 'extrude-face' && faceExtrusionDistanceInvalid && <div className="mesh-element-error">作用距离必须在 0.20 至 100.00 毫米之间</div>}
           {transformKind === 'extrude-face' && faceExtrusionSelectionInvalid && <div className="mesh-element-error">请点击选择当前修订中的一个种子三角面</div>}
+
+          {meshPlanarRegionExtrusionResultComparison && (
+            <section className={`mesh-planar-region-result-comparison ${meshPlanarRegionExtrusionResultComparison.mode}`} aria-label="OpenCascade 执行结果体积对照">
+              <strong>OpenCascade 执行结果</strong>
+              <div className="mesh-planar-region-result-grid">
+                <span>实际工具体积<strong>{meshPlanarRegionExtrusionResultComparison.toolVolumeMm3.toFixed(2)} 立方毫米</strong></span>
+                <span>模型体积变化<strong>{meshPlanarRegionExtrusionResultComparison.modelVolumeChangeMm3.toFixed(2)} 立方毫米</strong></span>
+                <span>实际作用比例<strong>{meshPlanarRegionExtrusionResultComparison.effectRatioPercent.toFixed(2)}%</strong></span>
+              </div>
+              <small className="mesh-planar-region-result-note">
+                {meshPlanarRegionExtrusionResultComparison.mode === 'add'
+                  ? '向外加料时，工具体可能与已有实体重叠。'
+                  : '向内压入时，工具体可能超出实体厚度并被裁剪。'}
+                模型体积变化因此可能小于工具体积；该比例不是打印材料用量。
+              </small>
+            </section>
+          )}
 
           <div className="mesh-element-actions">
             <button type="button" className="mesh-element-apply" onClick={() => void submitTransform()} disabled={!selectionCurrent || operationInvalid || isEditing}>
