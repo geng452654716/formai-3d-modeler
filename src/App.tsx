@@ -30,7 +30,13 @@ import { SceneTree } from './components/SceneTree';
 import { VersionHistoryDialog } from './components/VersionHistoryDialog';
 import { generatedDownloadUrl } from './model/cad';
 import { getOuterDimensions } from './model/defaults';
-import { appendMeshPlanarRegionCodexAnalysisDraft, createMeshPlanarRegionCodexAnalysisRequest } from './model/meshElementEdit';
+import {
+  appendMeshPlanarRegionCodexAnalysisDraft,
+  createMeshPlanarRegionCodexAnalysisRequest,
+  createMeshPlanarRegionExtrusionDiagnosticSummary,
+  inspectMeshPlanarRegionCodexAnalysisDraft,
+  replaceMeshPlanarRegionCodexAnalysisDraftBlock
+} from './model/meshElementEdit';
 import {
   createTransformedExportObject,
   manufacturingSplitPresentationId,
@@ -91,16 +97,44 @@ function App() {
   const setCadFaceSelectionMode = useModelStore((state) => state.setCadFaceSelectionMode);
   const clearCadFaceSelection = useModelStore((state) => state.clearCadFaceSelection);
   const versionGeometryComparisonMode = useModelStore((state) => state.versionGeometryComparisonMode);
+  const meshElementEditResult = useModelStore((state) => state.meshElementEditResult);
+  const currentCodexDiagnosticSummary = meshElementEditResult && importedStlModel
+    ? createMeshPlanarRegionExtrusionDiagnosticSummary(meshElementEditResult, importedStlModel.revision)
+    : null;
+  const currentCodexDiagnosticBlock = currentCodexDiagnosticSummary
+    ? createMeshPlanarRegionCodexAnalysisRequest(currentCodexDiagnosticSummary)
+    : null;
+  const commandDiagnosticInspection = inspectMeshPlanarRegionCodexAnalysisDraft(
+    commandDraft,
+    commandDiagnosticBlocks
+  );
+  const codexDiagnosticDraftAction: 'append' | 'replace' | 'duplicate' | 'unsafe' = !currentCodexDiagnosticBlock
+    ? 'unsafe'
+    : commandDiagnosticInspection.status === 'complete' && commandDiagnosticInspection.matchedBlock
+      ? commandDiagnosticInspection.matchedBlock === currentCodexDiagnosticBlock ? 'duplicate' : 'replace'
+      : commandDiagnosticInspection.status === 'none' ? 'append' : 'unsafe';
 
-  /** 保留当前页面已有指令，并登记本页实际注入的完整诊断块供安全识别与移除。 */
-  const appendCodexDiagnostic = (summary: string) => {
-    const result = appendMeshPlanarRegionCodexAnalysisDraft(commandDraft, summary);
-    setCommandDraft(result.draft);
-    if (result.status !== 'appended') return;
-    const generatedBlock = createMeshPlanarRegionCodexAnalysisRequest(summary);
-    if (generatedBlock) {
-      setCommandDiagnosticBlocks((current) => current.includes(generatedBlock) ? current : [...current, generatedBlock]);
+  /** 追加首个诊断或安全替换唯一旧块，并同步更新当前页面的完整块登记。 */
+  const applyCodexDiagnostic = (summary: string) => {
+    const latestBlock = createMeshPlanarRegionCodexAnalysisRequest(summary);
+    if (!latestBlock) return 'invalid' as const;
+    const inspection = inspectMeshPlanarRegionCodexAnalysisDraft(commandDraft, commandDiagnosticBlocks);
+    if (inspection.status === 'complete' && inspection.matchedBlock) {
+      const result = replaceMeshPlanarRegionCodexAnalysisDraftBlock(commandDraft, commandDiagnosticBlocks, summary);
+      if (result.status !== 'replaced') return result.status;
+      setCommandDraft(result.draft);
+      setCommandDiagnosticBlocks((current) => {
+        const withoutOldBlock = current.filter((block) => block !== inspection.matchedBlock);
+        return withoutOldBlock.includes(latestBlock) ? withoutOldBlock : [...withoutOldBlock, latestBlock];
+      });
+      return result.status;
     }
+    if (inspection.status !== 'none') return 'unsafe' as const;
+    const result = appendMeshPlanarRegionCodexAnalysisDraft(commandDraft, summary);
+    if (result.status !== 'appended') return result.status;
+    setCommandDraft(result.draft);
+    setCommandDiagnosticBlocks((current) => current.includes(latestBlock) ? current : [...current, latestBlock]);
+    return result.status;
   };
 
   /** 更新当前页草稿；全部清空时同步丢弃只属于本页的诊断块登记。 */
@@ -530,7 +564,10 @@ function App() {
             <span>{viewportModelSource === 'uploaded-stl' ? '上传 STL 实体' : viewportModelSource === 'cad' ? 'OpenCascade 实体' : '快速预览'}</span>
           </div>
           <ModelViewport />
-          <MeshElementEditPanel onAppendCodexDiagnostic={appendCodexDiagnostic} />
+          <MeshElementEditPanel
+            codexDiagnosticDraftAction={codexDiagnosticDraftAction}
+            onApplyCodexDiagnostic={applyCodexDiagnostic}
+          />
           <CommandPanel command={commandDraft} generatedDiagnosticBlocks={commandDiagnosticBlocks} onCommandChange={updateCommandDraft} />
           <button
             type="button"

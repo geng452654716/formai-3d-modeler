@@ -16,6 +16,7 @@ import {
   uniqueMeshElementSelectionPoints,
   nearestMeshElementIndex,
   removeMeshPlanarRegionCodexAnalysisDraftBlock,
+  replaceMeshPlanarRegionCodexAnalysisDraftBlock,
   selectedMeshElementPoints,
   type MeshElementEditResult,
   type MeshElementSelection
@@ -962,6 +963,55 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
     });
   });
 
+
+  it('用最新诊断精确替换唯一旧块并原样保留前后用户文字和换行', () => {
+    const oldBlock = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n作用距离：2.00 毫米')!;
+    const draft = `前方用户文字  \n\n${oldBlock}\n\n  后方用户文字`;
+    const result = replaceMeshPlanarRegionCodexAnalysisDraftBlock(
+      draft,
+      [oldBlock],
+      '共面区域几何诊断\n作用距离：3.00 毫米'
+    );
+    const latestBlock = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n作用距离：3.00 毫米')!;
+    expect(result).toEqual({
+      draft: `前方用户文字  \n\n${latestBlock}\n\n  后方用户文字`,
+      status: 'replaced'
+    });
+  });
+
+  it('最新诊断与唯一完整块相同时不修改草稿', () => {
+    const summary = '共面区域几何诊断\n方向状态：加料增量一致';
+    const block = createMeshPlanarRegionCodexAnalysisRequest(summary)!;
+    expect(replaceMeshPlanarRegionCodexAnalysisDraftBlock(block, [block], summary)).toEqual({
+      draft: block,
+      status: 'duplicate'
+    });
+  });
+
+  it('旧诊断被编辑或重复时拒绝替换', () => {
+    const oldBlock = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n作用距离：2.00 毫米')!;
+    const edited = oldBlock.replace('2.00', '2.50');
+    expect(replaceMeshPlanarRegionCodexAnalysisDraftBlock(
+      edited,
+      [oldBlock],
+      '共面区域几何诊断\n作用距离：3.00 毫米'
+    )).toEqual({ draft: edited, status: 'unsafe' });
+
+    const repeated = `${oldBlock}\n\n${oldBlock}`;
+    expect(replaceMeshPlanarRegionCodexAnalysisDraftBlock(
+      repeated,
+      [oldBlock],
+      '共面区域几何诊断\n作用距离：3.00 毫米'
+    )).toEqual({ draft: repeated, status: 'unsafe' });
+  });
+
+  it('最新诊断为空时拒绝替换且保留旧草稿', () => {
+    const oldBlock = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n作用距离：2.00 毫米')!;
+    expect(replaceMeshPlanarRegionCodexAnalysisDraftBlock(oldBlock, [oldBlock], '  ')).toEqual({
+      draft: oldBlock,
+      status: 'invalid'
+    });
+  });
 
   it('识别唯一完整诊断块并在移除时保留前后用户文字', () => {
     const block = createMeshPlanarRegionCodexAnalysisRequest('共面区域几何诊断\n方向状态：加料增量一致')!;

@@ -83,12 +83,19 @@ async function writeDiagnosticTextToClipboard(text: string) {
   if (!copied) throw new Error('当前环境拒绝复制诊断文本');
 }
 
+type CodexDiagnosticDraftAction = 'append' | 'replace' | 'duplicate' | 'unsafe';
+type CodexDiagnosticDraftApplyStatus = 'appended' | 'replaced' | 'duplicate' | 'unsafe' | 'invalid';
+
 interface MeshElementEditPanelProps {
-  onAppendCodexDiagnostic: (summary: string) => void;
+  codexDiagnosticDraftAction: CodexDiagnosticDraftAction;
+  onApplyCodexDiagnostic: (summary: string) => CodexDiagnosticDraftApplyStatus;
 }
 
 /** 为精确 CAD 创建受管网格分支，并提供网格选择集合的受限变换入口。 */
-export function MeshElementEditPanel({ onAppendCodexDiagnostic }: MeshElementEditPanelProps) {
+export function MeshElementEditPanel({
+  codexDiagnosticDraftAction,
+  onApplyCodexDiagnostic
+}: MeshElementEditPanelProps) {
   const viewportModelSource = useModelStore((state) => state.viewportModelSource);
   const importedStlModel = useModelStore((state) => state.importedStlModel);
   const importedStlStatus = useModelStore((state) => state.importedStlStatus);
@@ -130,7 +137,10 @@ export function MeshElementEditPanel({ onAppendCodexDiagnostic }: MeshElementEdi
     summary: string;
     status: 'copied' | 'failed';
   } | null>(null);
-  const [diagnosticDraftFeedback, setDiagnosticDraftFeedback] = useState<string | null>(null);
+  const [diagnosticDraftFeedback, setDiagnosticDraftFeedback] = useState<{
+    summary: string;
+    status: CodexDiagnosticDraftApplyStatus;
+  } | null>(null);
 
   const displacement = useMemo<MeshPointMm | null>(() => {
     const values = [parseFinite(x), parseFinite(y), parseFinite(z)];
@@ -182,7 +192,13 @@ export function MeshElementEditPanel({ onAppendCodexDiagnostic }: MeshElementEdi
   const diagnosticCopyStatus = diagnosticCopyFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
     ? diagnosticCopyFeedback.status
     : 'idle';
-  const diagnosticDraftCurrent = diagnosticDraftFeedback === meshPlanarRegionExtrusionDiagnosticSummary;
+  const diagnosticDraftCurrent = diagnosticDraftFeedback?.summary === meshPlanarRegionExtrusionDiagnosticSummary
+    && (
+      !['appended', 'replaced'].includes(diagnosticDraftFeedback.status)
+      || codexDiagnosticDraftAction === 'duplicate'
+    )
+    ? diagnosticDraftFeedback.status
+    : null;
   const meshPlanarRegionChainStatus = meshPlanarRegionExtrusionDirectionConsistency
     ? {
         planar: meshPlanarRegionExtrusionToolVolumeComparison ? '平面估算已计算' : '平面估算不可用',
@@ -254,11 +270,11 @@ export function MeshElementEditPanel({ onAppendCodexDiagnostic }: MeshElementEdi
     setDiagnosticCopyFeedback({ summary: meshPlanarRegionExtrusionDiagnosticSummary, status });
   }
 
-  /** 仅把当前有效诊断追加到页面内草稿，仍由用户检查并手动执行。 */
-  function appendPlanarRegionDiagnosticToCodexDraft() {
+  /** 仅把当前有效诊断追加或安全替换到页面草稿，仍由用户检查并手动执行。 */
+  function applyPlanarRegionDiagnosticToCodexDraft() {
     if (!meshPlanarRegionExtrusionDiagnosticSummary) return;
-    onAppendCodexDiagnostic(meshPlanarRegionExtrusionDiagnosticSummary);
-    setDiagnosticDraftFeedback(meshPlanarRegionExtrusionDiagnosticSummary);
+    const status = onApplyCodexDiagnostic(meshPlanarRegionExtrusionDiagnosticSummary);
+    setDiagnosticDraftFeedback({ summary: meshPlanarRegionExtrusionDiagnosticSummary, status });
   }
 
   async function submitCadMeshBranch() {
@@ -593,14 +609,24 @@ export function MeshElementEditPanel({ onAppendCodexDiagnostic }: MeshElementEdi
                 <button
                   type="button"
                   className="codex-analysis"
-                  onClick={appendPlanarRegionDiagnosticToCodexDraft}
-                  disabled={!meshPlanarRegionExtrusionDiagnosticSummary}
+                  onClick={applyPlanarRegionDiagnosticToCodexDraft}
+                  disabled={!meshPlanarRegionExtrusionDiagnosticSummary || codexDiagnosticDraftAction === 'duplicate' || codexDiagnosticDraftAction === 'unsafe'}
                 >
-                  交给 Codex 分析
+                  {codexDiagnosticDraftAction === 'replace'
+                    ? '替换为最新诊断'
+                    : codexDiagnosticDraftAction === 'duplicate'
+                      ? '当前诊断已在草稿'
+                      : codexDiagnosticDraftAction === 'unsafe'
+                        ? '诊断草稿需手工处理'
+                        : '交给 Codex 分析'}
                 </button>
                 {diagnosticCopyStatus === 'copied' && <span>已复制到系统剪贴板，不会自动发送或保存。</span>}
                 {diagnosticCopyStatus === 'failed' && <span role="alert">复制失败，请检查剪贴板权限。</span>}
-                {diagnosticDraftCurrent && <span>已填入本地指令草稿，请检查后手动执行。</span>}
+                {diagnosticDraftCurrent === 'appended' && <span>已填入本地指令草稿，请检查后手动执行。</span>}
+                {diagnosticDraftCurrent === 'replaced' && <span>已替换为最新诊断，请检查后手动执行。</span>}
+                {diagnosticDraftCurrent === 'duplicate' && <span>当前诊断已在草稿中，无需替换。</span>}
+                {diagnosticDraftCurrent === 'unsafe' && <span role="alert">旧诊断块已编辑或存在歧义，未覆盖您的文字。</span>}
+                {diagnosticDraftCurrent === 'invalid' && <span role="alert">当前诊断为空，未修改指令草稿。</span>}
               </div>
               <small className="mesh-planar-region-result-note">
                 {meshPlanarRegionExtrusionToolVolumeComparison

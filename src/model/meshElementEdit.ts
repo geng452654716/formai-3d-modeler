@@ -628,6 +628,7 @@ export function createMeshPlanarRegionExtrusionDiagnosticSummary(
 export type MeshPlanarRegionCodexDraftAppendStatus = 'appended' | 'duplicate' | 'invalid';
 export type MeshPlanarRegionCodexDraftBlockStatus = 'none' | 'complete' | 'edited' | 'ambiguous';
 export type MeshPlanarRegionCodexDraftRemoveStatus = 'removed' | 'not-found' | 'unsafe';
+export type MeshPlanarRegionCodexDraftReplaceStatus = 'replaced' | 'duplicate' | 'unsafe' | 'invalid';
 
 export interface MeshPlanarRegionCodexDraftInspection {
   status: MeshPlanarRegionCodexDraftBlockStatus;
@@ -733,6 +734,29 @@ export function createMeshPlanarRegionCodexDraftBlockLocation(
     lineCount: lines.length,
     operationMode,
     directionStatus
+  };
+}
+
+/** 只把唯一完整的本页旧诊断块替换为最新请求，并原样保留块外用户文字与换行。 */
+export function replaceMeshPlanarRegionCodexAnalysisDraftBlock(
+  draft: string,
+  generatedBlocks: readonly string[],
+  latestSummary: string
+): { draft: string; status: MeshPlanarRegionCodexDraftReplaceStatus } {
+  const latestRequest = createMeshPlanarRegionCodexAnalysisRequest(latestSummary);
+  if (!latestRequest) return { draft, status: 'invalid' };
+  const inspection = inspectMeshPlanarRegionCodexAnalysisDraft(draft, generatedBlocks);
+  if (inspection.status !== 'complete' || !inspection.matchedBlock) {
+    return { draft, status: 'unsafe' };
+  }
+  if (inspection.matchedBlock === latestRequest) {
+    return { draft, status: 'duplicate' };
+  }
+  const blockIndex = draft.indexOf(inspection.matchedBlock);
+  if (blockIndex < 0) return { draft, status: 'unsafe' };
+  return {
+    draft: `${draft.slice(0, blockIndex)}${latestRequest}${draft.slice(blockIndex + inspection.matchedBlock.length)}`,
+    status: 'replaced'
   };
 }
 
