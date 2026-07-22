@@ -478,6 +478,7 @@ function LoadedCadMesh({
   const meshElementSelection = useModelStore((state) => state.meshElementSelection);
   const meshElementTransformKind = useModelStore((state) => state.meshElementTransformKind);
   const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
+  const meshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.meshPlanarRegionFocusedLoopIndex);
   const setMeshPlanarRegionPreview = useModelStore((state) => state.setMeshPlanarRegionPreview);
   const selectMeshElement = useModelStore((state) => state.selectMeshElement);
   const prepared = useMemo(() => {
@@ -658,6 +659,37 @@ function LoadedCadMesh({
     meshPlanarRegionBoundaryGeometries.outer?.dispose();
     meshPlanarRegionBoundaryGeometries.hole?.dispose();
   }, [meshPlanarRegionBoundaryGeometries]);
+
+  const focusedMeshPlanarRegionLoop = useMemo(() => {
+    if (
+      meshElementTransformKind !== 'extrude-face'
+      || !importedStlModel
+      || meshPlanarRegionPreview?.revision !== importedStlModel.revision
+      || meshPlanarRegionFocusedLoopIndex === null
+    ) return null;
+    const loop = meshPlanarRegionPreview.boundaryLoops[meshPlanarRegionFocusedLoopIndex];
+    if (!loop || loop.pointsMm.length < 3) return null;
+    const points = loop.pointsMm.map((point) => (
+      new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform)
+    ));
+    const center = points.reduce((sum, point) => sum.add(point), new Vector3()).multiplyScalar(1 / points.length);
+    const ordinal = meshPlanarRegionPreview.boundaryLoops
+      .slice(0, meshPlanarRegionFocusedLoopIndex + 1)
+      .filter((candidate) => candidate.kind === loop.kind).length;
+    return {
+      loop,
+      label: `${loop.kind === 'outer' ? '外环' : '孔洞'} ${ordinal}`,
+      color: loop.kind === 'outer' ? '#52e0c4' : '#ff8f70',
+      points: [...points, points[0]],
+      center
+    };
+  }, [
+    coordinateTransform,
+    importedStlModel,
+    meshElementTransformKind,
+    meshPlanarRegionFocusedLoopIndex,
+    meshPlanarRegionPreview
+  ]);
 
   const selectedMarker = useMemo(() => {
     if (
@@ -1028,14 +1060,49 @@ function LoadedCadMesh({
 
       {meshPlanarRegionBoundaryGeometries.outer && (
         <lineSegments geometry={meshPlanarRegionBoundaryGeometries.outer} renderOrder={13}>
-          <lineBasicMaterial color="#52e0c4" depthTest={false} depthWrite={false} />
+          <lineBasicMaterial
+            color="#52e0c4"
+            transparent={Boolean(focusedMeshPlanarRegionLoop)}
+            opacity={focusedMeshPlanarRegionLoop ? 0.22 : 1}
+            depthTest={false}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
 
       {meshPlanarRegionBoundaryGeometries.hole && (
         <lineSegments geometry={meshPlanarRegionBoundaryGeometries.hole} renderOrder={14}>
-          <lineBasicMaterial color="#ff8f70" depthTest={false} depthWrite={false} />
+          <lineBasicMaterial
+            color="#ff8f70"
+            transparent={Boolean(focusedMeshPlanarRegionLoop)}
+            opacity={focusedMeshPlanarRegionLoop ? 0.22 : 1}
+            depthTest={false}
+            depthWrite={false}
+          />
         </lineSegments>
+      )}
+
+      {focusedMeshPlanarRegionLoop && (
+        <>
+          <Line
+            points={focusedMeshPlanarRegionLoop.points}
+            color={focusedMeshPlanarRegionLoop.color}
+            lineWidth={3.5}
+            transparent
+            opacity={1}
+            depthTest={false}
+            depthWrite={false}
+            renderOrder={15}
+          />
+          <Html position={focusedMeshPlanarRegionLoop.center} center distanceFactor={9}>
+            <div className={`mesh-planar-region-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
+              <strong>{focusedMeshPlanarRegionLoop.label}</strong>
+              <span>周长 {focusedMeshPlanarRegionLoop.loop.perimeterMm.toFixed(2)} 毫米</span>
+              <span>宽度 {focusedMeshPlanarRegionLoop.loop.boundsMm.widthMm.toFixed(2)} 毫米</span>
+              <span>高度 {focusedMeshPlanarRegionLoop.loop.boundsMm.heightMm.toFixed(2)} 毫米</span>
+            </div>
+          </Html>
+        </>
       )}
 
       {highlightGeometry && (

@@ -67,7 +67,9 @@ export function MeshElementEditPanel() {
   const [cadPartSelection, setCadPartSelection] = useState('');
   const transformKind = useModelStore((state) => state.meshElementTransformKind);
   const meshPlanarRegionPreview = useModelStore((state) => state.meshPlanarRegionPreview);
+  const meshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.meshPlanarRegionFocusedLoopIndex);
   const meshPlanarRegionPreviewError = useModelStore((state) => state.meshPlanarRegionPreviewError);
+  const setMeshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.setMeshPlanarRegionFocusedLoopIndex);
   const setMeshElementTransformKind = useModelStore((state) => state.setMeshElementTransformKind);
   const [x, setX] = useState('0');
   const [y, setY] = useState('0');
@@ -339,11 +341,20 @@ export function MeshElementEditPanel() {
                     const ordinal = meshPlanarRegionPreview.boundaryLoops
                       .slice(0, index + 1)
                       .filter((candidate) => candidate.kind === loop.kind).length;
+                    const label = `${loop.kind === 'outer' ? '外环' : '孔洞'} ${ordinal}`;
+                    const focused = meshPlanarRegionFocusedLoopIndex === index;
                     return (
-                      <span key={`${loop.kind}-${index}`}>
-                        <strong>{loop.kind === 'outer' ? '外环' : '孔洞'} {ordinal}</strong>
+                      <button
+                        type="button"
+                        key={`${loop.kind}-${index}`}
+                        className={focused ? 'active' : undefined}
+                        aria-pressed={focused}
+                        aria-label={`${focused ? '取消聚焦' : '聚焦'}${label}`}
+                        onClick={() => setMeshPlanarRegionFocusedLoopIndex(focused ? null : index)}
+                      >
+                        <strong>{label}<small>{focused ? '已聚焦' : '点击定位'}</small></strong>
                         <em>周长 {loop.perimeterMm.toFixed(2)} 毫米 · 包围 {loop.boundsMm.widthMm.toFixed(2)} × {loop.boundsMm.heightMm.toFixed(2)} 毫米</em>
-                      </span>
+                      </button>
                     );
                   })}
                 </div>

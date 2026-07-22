@@ -566,3 +566,11 @@ nestingDepth: 二维包含深度
 渲染层从同一个 `boundaryLoops` 分别生成外环和孔洞 `BufferGeometry`。外环使用青绿色 `#52e0c4`，孔洞使用珊瑚色 `#ff8f70`，两者都关闭深度读写并使用独立 `renderOrder`；预览或组件生命周期变化时分别释放 GPU 几何。Store 只保存可序列化预览，不保存 Three.js 对象。
 
 上述语义和尺寸仍不是安全边界，也不进入网格编辑请求。桌面 Worker 从当前工作 STL 独立重建邻接、边界环和 OpenCascade Wire，继续执行非流形、资源上限、有效性、封闭性、单 Solid 与原子回滚检查。
+
+## 连续共面区域环聚焦与视口标注协议
+
+第 49 阶段在 Zustand Store 新增 `meshPlanarRegionFocusedLoopIndex` 和受限 setter。Setter 只接受当前 `meshPlanarRegionPreview.boundaryLoops` 中存在的整数索引；设置新预览时始终重置聚焦，所有会使预览失效的模型、选择、视图和操作状态转换也同步写入 `null`，防止旧索引引用新修订的环。
+
+`LoadedCadMesh` 仅在以下条件全部成立时创建聚焦表示：当前操作为共面区域、上传模型存在、预览修订等于当前模型修订、聚焦索引有效且环至少包含三个点。环点在渲染层应用当前 `coordinateTransform`，闭合后交给 Drei `Line` 以加粗线宽显示；原外环和孔洞 `LineSegments` 暂时降低透明度。标注锚点使用转换后环点中心，并通过 `Html` 显示全中文周长、宽度和高度。
+
+聚焦状态、Drei 线条和 HTML 标注都不持久化、不进入版本快照，也不发送给 `edit_mesh_element.py`。Worker 的区域扩展、Wire 判断、OpenCascade 布尔、安全校验和原子回滚协议保持不变。
