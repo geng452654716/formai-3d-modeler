@@ -535,3 +535,14 @@ Three.js 点击命中或当前摄像机屏幕投影框选
 ## 连续共面区域前端预览协议
 
 第 46 阶段在 `meshElementEdit.ts` 增加纯函数区域扩展器。视口从当前 Three.js 几何按 `faceIndex` 顺序恢复全部源毫米三角面，使用六位小数坐标键建立共享无向边邻接，再以种子面执行 BFS、面积累计和边界环遍历。Store 保存绑定上传模型修订的预览及中文错误；完整区域仅用于黄色高亮和面板测量。任何状态切换都会清除预览，后端 `edit_mesh_element.py` 仍独立读取工作 STL、重新扩展并执行 OpenCascade 布尔与原子回滚，因此前端结果不是安全边界。
+
+
+## 连续共面区域边界线框与拓扑缓存协议
+
+第 47 阶段新增 `MeshPlanarRegionTopology`，保存当前视口几何恢复出的 `triangleByIndex`、共享无向边 `edgeOwners` 与 `pointByKey`。该对象包含 `Map`，只属于 `LoadedCadMesh` 当前修订的 `useRef` 缓存，不进入 Zustand Store，也不参与持久化、版本快照或 Worker 请求。Store 只保存可序列化的 `MeshPlanarRegionPreview`。
+
+`MeshPlanarRegionPreview.boundaryLoopsMm` 保存源毫米坐标下的闭合边界环点序列；渲染层创建独立 `BufferGeometry` 时才应用 `coordinateTransform`，从而兼容装配、拆分和 CAD 派生网格视图。线框使用不写深度的青绿色 `LineSegments` 叠加，生命周期与当前预览绑定，并在依赖变化或组件清理时显式 `dispose()`。
+
+缓存键由模型修订、Three.js `BufferGeometry` 实例、逆坐标变换和视图来源共同约束。修订、导入、恢复、几何或视图变化时立即失效；切换操作模式只清除预览，不强制重建仍然有效的当前修订拓扑。`expandMeshPlanarRegion()` 同时接受三角面迭代器和已构建 topology，确保纯函数测试与视口缓存使用同一套区域扩展、面积上限和边界拒绝逻辑。
+
+前端 topology 与边界线框仅用于交互反馈。桌面 Worker 不读取或信任缓存，仍从当前工作 STL 独立建立邻接、复核非流形和边界闭合性，并由 OpenCascade 判断平面 Face、外环/孔洞 Wire、布尔结果有效性、封闭性和单 Solid 约束。

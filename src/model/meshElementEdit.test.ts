@@ -182,6 +182,8 @@ describe('连续共面区域执行前预览', () => {
     expect(preview.affectedTriangleCount).toBe(2);
     expect(preview.regionAreaMm2).toBeCloseTo(720, 8);
     expect(preview.boundaryLoopCount).toBe(1);
+    expect(preview.boundaryLoopsMm).toHaveLength(1);
+    expect(preview.boundaryLoopsMm[0]).toHaveLength(4);
     expect(preview.normalToleranceDegrees).toBe(0.5);
     expect(preview.planeToleranceMm).toBeCloseTo(Math.hypot(30, 24, 12) * 0.000001, 10);
   });
@@ -212,6 +214,32 @@ describe('连续共面区域执行前预览', () => {
     expect(preview.affectedTriangleCount).toBe(8);
     expect(preview.regionAreaMm2).toBeCloseTo(96, 8);
     expect(preview.boundaryLoopCount).toBe(2);
+    expect(preview.boundaryLoopsMm).toHaveLength(2);
+    expect(preview.boundaryLoopsMm.every((loop) => loop.length === 4)).toBe(true);
+  });
+
+  it('同一拓扑可由不同种子复用且支持不连续三角面索引', async () => {
+    const { createMeshPlanarRegionTopology, expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const triangles = [
+      face(10, [0, 0, 0], [10, 0, 0], [10, 10, 0]),
+      face(30, [0, 0, 0], [10, 10, 0], [0, 10, 0]),
+      face(90, [20, 0, 0], [30, 0, 0], [20, 10, 0])
+    ];
+    const topology = createMeshPlanarRegionTopology(triangles);
+    expect(expandMeshPlanarRegion('修订-缓存', 10, topology, 40).triangleIndexes).toEqual([10, 30]);
+    expect(expandMeshPlanarRegion('修订-缓存', 30, topology, 40).triangleIndexes).toEqual([10, 30]);
+    expect(expandMeshPlanarRegion('修订-缓存', 90, topology, 40).triangleIndexes).toEqual([90]);
+  });
+
+  it('可复用拓扑与三角面迭代入口返回相同边界坐标', async () => {
+    const { createMeshPlanarRegionTopology, expandMeshPlanarRegion } = await import('./meshElementEdit');
+    const triangles = [
+      face(5, [0, 0, 0], [8, 0, 0], [8, 6, 0]),
+      face(8, [0, 0, 0], [8, 6, 0], [0, 6, 0])
+    ];
+    const direct = expandMeshPlanarRegion('修订-兼容', 5, triangles, 20);
+    const cached = expandMeshPlanarRegion('修订-兼容', 5, createMeshPlanarRegionTopology(triangles), 20);
+    expect(cached).toEqual(direct);
   });
 
   it('遇到三个三角面共享同一无向边时用中文拒绝', async () => {

@@ -49,6 +49,13 @@ export interface MeshPlanarRegionTriangle {
   triangleMm: [MeshPointMm, MeshPointMm, MeshPointMm];
 }
 
+/** 上传模型当前修订可复用的三角面索引、共享边和源坐标拓扑。 */
+export interface MeshPlanarRegionTopology {
+  triangleByIndex: Map<number, MeshPlanarRegionTriangle>;
+  edgeOwners: Map<string, number[]>;
+  pointByKey: Map<string, MeshPointMm>;
+}
+
 /** 连续共面区域在正式调用 Worker 前的只读预览和测量结果。 */
 export interface MeshPlanarRegionPreview {
   revision: string;
@@ -57,6 +64,7 @@ export interface MeshPlanarRegionPreview {
   affectedTriangleCount: number;
   regionAreaMm2: number;
   boundaryLoopCount: number;
+  boundaryLoopsMm: MeshPointMm[][];
   normalToleranceDegrees: number;
   planeToleranceMm: number;
 }
@@ -194,27 +202,52 @@ function triangleUnitNormal(triangle: [MeshPointMm, MeshPointMm, MeshPointMm]) {
   return { x: normal.x / length, y: normal.y / length, z: normal.z / length };
 }
 
+/** 为同一上传模型修订构建可复用的三角面索引和共享边拓扑。 */
+export function createMeshPlanarRegionTopology(
+  triangles: Iterable<MeshPlanarRegionTriangle>
+): MeshPlanarRegionTopology {
+  const triangleByIndex = new Map<number, MeshPlanarRegionTriangle>();
+  const edgeOwners = new Map<string, number[]>();
+  const pointByKey = new Map<string, MeshPointMm>();
+  for (const triangle of triangles) triangleByIndex.set(triangle.triangleIndex, triangle);
+  for (const triangle of triangleByIndex.values()) {
+    for (const point of triangle.triangleMm) {
+      const key = coordinateKey(point);
+      if (!pointByKey.has(key)) pointByKey.set(key, { ...point });
+    }
+    for (const [start, end] of MESH_EDGE_VERTEX_INDEXES) {
+      const key = planarRegionEdgeKey(triangle.triangleMm[start], triangle.triangleMm[end]);
+      const owners = edgeOwners.get(key);
+      if (owners) owners.push(triangle.triangleIndex);
+      else edgeOwners.set(key, [triangle.triangleIndex]);
+    }
+  }
+  return { triangleByIndex, edgeOwners, pointByKey };
+}
+
+function isMeshPlanarRegionTopology(
+  value: Iterable<MeshPlanarRegionTriangle> | MeshPlanarRegionTopology
+): value is MeshPlanarRegionTopology {
+  return 'triangleByIndex' in value && 'edgeOwners' in value && 'pointByKey' in value;
+}
+
 /** 使用与桌面 Worker 一致的拓扑、公差和资源上限扩展连续共面区域。 */
 export function expandMeshPlanarRegion(
   revision: string,
   seedTriangleIndex: number,
-  triangles: Iterable<MeshPlanarRegionTriangle>,
+  trianglesOrTopology: Iterable<MeshPlanarRegionTriangle> | MeshPlanarRegionTopology,
   modelDiagonalMm: number
 ): MeshPlanarRegionPreview {
-  const triangleByIndex = new Map(Array.from(triangles, (triangle) => [triangle.triangleIndex, triangle]));
+  const topology = isMeshPlanarRegionTopology(trianglesOrTopology)
+    ? trianglesOrTopology
+    : createMeshPlanarRegionTopology(trianglesOrTopology);
+  const { triangleByIndex, edgeOwners, pointByKey } = topology;
   const seed = triangleByIndex.get(seedTriangleIndex);
   if (!seed) throw new Error('没有找到种子三角面，请重新点击模型');
   const seedNormal = triangleUnitNormal(seed.triangleMm);
   const seedOrigin = seed.triangleMm[0];
   const cosineLimit = Math.cos(PLANAR_REGION_NORMAL_TOLERANCE_DEGREES * Math.PI / 180);
   const planeToleranceMm = Math.max(0.00001, Math.min(0.02, modelDiagonalMm * 0.000001));
-  const edgeOwners = new Map<string, number[]>();
-  for (const triangle of triangleByIndex.values()) {
-    for (const [start, end] of MESH_EDGE_VERTEX_INDEXES) {
-      const key = planarRegionEdgeKey(triangle.triangleMm[start], triangle.triangleMm[end]);
-      edgeOwners.set(key, [...(edgeOwners.get(key) ?? []), triangle.triangleIndex]);
-    }
-  }
   const isCoplanar = (triangle: MeshPlanarRegionTriangle) => {
     const normal = triangleUnitNormal(triangle.triangleMm);
     const dot = Math.abs(normal.x * seedNormal.x + normal.y * seedNormal.y + normal.z * seedNormal.z);
@@ -277,15 +310,16 @@ export function expandMeshPlanarRegion(
     throw new Error('共面区域预览边界存在分叉或开口');
   }
   const unused = new Set(boundaryEdges);
-  let boundaryLoopCount = 0;
+  const boundaryLoopsMm: MeshPointMm[][] = [];
   while (unused.size) {
     const firstEdge = unused.values().next().value as string;
     const [start, first] = firstEdge.split('|');
+    const loopKeys = [start];
     let current = first;
     let previous = start;
     unused.delete(firstEdge);
-    let pointCount = 1;
     while (current !== start) {
+      loopKeys.push(current);
       const following = (adjacency.get(current) ?? []).find((candidate) => {
         const key = [current, candidate].sort().join('|');
         return candidate !== previous && unused.has(key);
@@ -294,11 +328,14 @@ export function expandMeshPlanarRegion(
       unused.delete([current, following].sort().join('|'));
       previous = current;
       current = following;
-      pointCount += 1;
-      if (pointCount > boundaryEdges.length + 1) throw new Error('共面区域预览边界遍历异常');
+      if (loopKeys.length > boundaryEdges.length + 1) throw new Error('共面区域预览边界遍历异常');
     }
-    if (pointCount < 3) throw new Error('共面区域预览边界退化');
-    boundaryLoopCount += 1;
+    if (loopKeys.length < 3) throw new Error('共面区域预览边界退化');
+    boundaryLoopsMm.push(loopKeys.map((key) => {
+      const point = pointByKey.get(key);
+      if (!point) throw new Error('共面区域预览边界坐标缺失');
+      return { ...point };
+    }));
   }
   const triangleIndexes = [...region].sort((left, right) => left - right);
   return {
@@ -307,7 +344,8 @@ export function expandMeshPlanarRegion(
     triangleIndexes,
     affectedTriangleCount: triangleIndexes.length,
     regionAreaMm2,
-    boundaryLoopCount,
+    boundaryLoopCount: boundaryLoopsMm.length,
+    boundaryLoopsMm,
     normalToleranceDegrees: PLANAR_REGION_NORMAL_TOLERANCE_DEGREES,
     planeToleranceMm
   };

@@ -332,6 +332,7 @@ export function MeshElementEditPanel() {
                   <span>法线夹角公差<strong>{meshPlanarRegionPreview.normalToleranceDegrees.toFixed(1)}°</strong></span>
                   <span>平面距离公差<strong>{meshPlanarRegionPreview.planeToleranceMm.toFixed(5)} 毫米</strong></span>
                 </div>
+                <small className="mesh-planar-region-boundary-legend"><i />青绿色线框表示区域外环和孔洞环，可用于检查是否误跨区域。</small>
                 <small>这里只用于执行前反馈；桌面 Worker 仍会独立重新扩展区域并完成全部安全校验。</small>
               </div>
             )}

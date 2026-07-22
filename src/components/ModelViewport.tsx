@@ -37,12 +37,14 @@ import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '
 import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
+  createMeshPlanarRegionTopology,
   expandMeshPlanarRegion,
   MAX_MESH_ELEMENT_SELECTIONS,
   nearestMeshElementIndex,
   selectedMeshElementPoints,
   type MeshElementSelection,
   type MeshElementSelectionSet,
+  type MeshPlanarRegionTopology,
   type MeshPlanarRegionTriangle
 } from '../model/meshElementEdit';
 import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
@@ -528,30 +530,20 @@ function LoadedCadMesh({
       ? meshElementSelection
       : null
   ), [id, importedStlModel, meshElementSelection]);
-  const meshPlanarRegionTriangles = useMemo<MeshPlanarRegionTriangle[]>(() => {
-    if (id !== 'uploaded-model' || meshElementTransformKind !== 'extrude-face') return [];
-    const positions = geometry.getAttribute('position');
-    if (!positions) return [];
-    const index = geometry.getIndex();
-    const triangleCount = index ? Math.floor(index.count / 3) : Math.floor(positions.count / 3);
-    return Array.from({ length: triangleCount }, (_, triangleIndex) => {
-      const vertexIndexes = [0, 1, 2].map((corner) => (
-        index ? index.getX(triangleIndex * 3 + corner) : triangleIndex * 3 + corner
-      ));
-      return {
-        triangleIndex,
-        triangleMm: vertexIndexes.map((vertexIndex) => {
-          const point = new Vector3(
-            positions.getX(vertexIndex), positions.getY(vertexIndex), positions.getZ(vertexIndex)
-          ).applyMatrix4(inverseCoordinateTransform);
-          return { x: point.x, y: point.y, z: point.z };
-        }) as MeshElementSelection['triangleMm']
-      };
-    });
-  }, [geometry, id, inverseCoordinateTransform, meshElementTransformKind]);
+  const meshPlanarRegionTopologyCache = useRef<{
+    revision: string;
+    geometry: BufferGeometry;
+    inverseCoordinateTransform: Matrix4;
+    topology: MeshPlanarRegionTopology;
+  } | null>(null);
+  useEffect(() => {
+    meshPlanarRegionTopologyCache.current = null;
+  }, [geometry, id, importedStlModel?.revision, inverseCoordinateTransform, viewportModelSource]);
   useEffect(() => {
     if (
-      meshElementTransformKind !== 'extrude-face'
+      id !== 'uploaded-model'
+      || viewportModelSource !== 'uploaded-stl'
+      || meshElementTransformKind !== 'extrude-face'
       || !importedStlModel
       || currentMeshElementSelection?.kind !== 'face'
       || currentMeshElementSelection.selectionMethod !== 'click'
@@ -559,22 +551,61 @@ function LoadedCadMesh({
     ) return;
     const bounds = importedStlModel.metrics.boundsMm;
     try {
+      let cached = meshPlanarRegionTopologyCache.current;
+      if (
+        !cached
+        || cached.revision !== importedStlModel.revision
+        || cached.geometry !== geometry
+        || cached.inverseCoordinateTransform !== inverseCoordinateTransform
+      ) {
+        const positions = geometry.getAttribute('position');
+        if (!positions) throw new Error('上传模型缺少三角面坐标，无法预览连续共面区域');
+        const index = geometry.getIndex();
+        const triangleCount = index ? Math.floor(index.count / 3) : Math.floor(positions.count / 3);
+        const triangles = Array.from({ length: triangleCount }, (_, triangleIndex): MeshPlanarRegionTriangle => {
+          const vertexIndexes = [0, 1, 2].map((corner) => (
+            index ? index.getX(triangleIndex * 3 + corner) : triangleIndex * 3 + corner
+          ));
+          return {
+            triangleIndex,
+            triangleMm: vertexIndexes.map((vertexIndex) => {
+              const point = new Vector3(
+                positions.getX(vertexIndex), positions.getY(vertexIndex), positions.getZ(vertexIndex)
+              ).applyMatrix4(inverseCoordinateTransform);
+              return { x: point.x, y: point.y, z: point.z };
+            }) as MeshElementSelection['triangleMm']
+          };
+        });
+        cached = {
+          revision: importedStlModel.revision,
+          geometry,
+          inverseCoordinateTransform,
+          topology: createMeshPlanarRegionTopology(triangles)
+        };
+        meshPlanarRegionTopologyCache.current = cached;
+      }
       setMeshPlanarRegionPreview(expandMeshPlanarRegion(
         importedStlModel.revision,
         currentMeshElementSelection.elements[0].triangleIndex,
-        meshPlanarRegionTriangles,
+        cached.topology,
         Math.hypot(bounds.x, bounds.y, bounds.z)
       ));
     } catch (error) {
       setMeshPlanarRegionPreview(null, error instanceof Error ? error.message : '连续共面区域预览失败');
     }
-  }, [currentMeshElementSelection, importedStlModel, meshElementTransformKind, meshPlanarRegionTriangles, setMeshPlanarRegionPreview]);
+  }, [currentMeshElementSelection, geometry, id, importedStlModel, inverseCoordinateTransform, meshElementTransformKind, setMeshPlanarRegionPreview, viewportModelSource]);
   const selectedMeshElementGeometries = useMemo(() => {
     if (!currentMeshElementSelection) return { vertices: null, edges: null, faces: null };
+    const cachedTopology = meshPlanarRegionTopologyCache.current;
     const previewFaces = currentMeshElementSelection.kind === 'face'
       && meshElementTransformKind === 'extrude-face'
       && meshPlanarRegionPreview?.revision === currentMeshElementSelection.revision
-      ? meshPlanarRegionPreview.triangleIndexes.map((triangleIndex) => meshPlanarRegionTriangles[triangleIndex]?.triangleMm).filter(Boolean)
+      && cachedTopology?.revision === currentMeshElementSelection.revision
+      && cachedTopology.geometry === geometry
+      ? meshPlanarRegionPreview.triangleIndexes.flatMap((triangleIndex) => {
+        const triangle = cachedTopology.topology.triangleByIndex.get(triangleIndex);
+        return triangle ? [triangle.triangleMm] : [];
+      })
       : null;
     const transformed = (previewFaces ?? currentMeshElementSelection.elements.map(selectedMeshElementPoints)).map((points) => (
       points.map((point) => (
@@ -590,12 +621,32 @@ function LoadedCadMesh({
       edges: currentMeshElementSelection.kind === 'edge' ? selectedGeometry : null,
       faces: currentMeshElementSelection.kind === 'face' ? selectedGeometry : null
     };
-  }, [coordinateTransform, currentMeshElementSelection, meshElementTransformKind, meshPlanarRegionPreview, meshPlanarRegionTriangles]);
+  }, [coordinateTransform, currentMeshElementSelection, geometry, meshElementTransformKind, meshPlanarRegionPreview]);
   useEffect(() => () => {
     selectedMeshElementGeometries.vertices?.dispose();
     selectedMeshElementGeometries.edges?.dispose();
     selectedMeshElementGeometries.faces?.dispose();
   }, [selectedMeshElementGeometries]);
+
+  const meshPlanarRegionBoundaryGeometry = useMemo(() => {
+    if (
+      meshElementTransformKind !== 'extrude-face'
+      || !importedStlModel
+      || meshPlanarRegionPreview?.revision !== importedStlModel.revision
+      || !meshPlanarRegionPreview.boundaryLoopsMm.length
+    ) return null;
+    const positions = meshPlanarRegionPreview.boundaryLoopsMm.flatMap((loop) => loop.flatMap((point, index) => {
+      const next = loop[(index + 1) % loop.length];
+      const start = new Vector3(point.x, point.y, point.z).applyMatrix4(coordinateTransform);
+      const end = new Vector3(next.x, next.y, next.z).applyMatrix4(coordinateTransform);
+      return [start.x, start.y, start.z, end.x, end.y, end.z];
+    }));
+    if (!positions.length) return null;
+    const boundaryGeometry = new BufferGeometry();
+    boundaryGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+    return boundaryGeometry;
+  }, [coordinateTransform, importedStlModel, meshElementTransformKind, meshPlanarRegionPreview]);
+  useEffect(() => () => meshPlanarRegionBoundaryGeometry?.dispose(), [meshPlanarRegionBoundaryGeometry]);
 
   const selectedMarker = useMemo(() => {
     if (
@@ -962,6 +1013,12 @@ function LoadedCadMesh({
             depthWrite={false}
           />
         </mesh>
+      )}
+
+      {meshPlanarRegionBoundaryGeometry && (
+        <lineSegments geometry={meshPlanarRegionBoundaryGeometry} renderOrder={13}>
+          <lineBasicMaterial color="#52e0c4" depthTest={false} depthWrite={false} />
+        </lineSegments>
       )}
 
       {highlightGeometry && (

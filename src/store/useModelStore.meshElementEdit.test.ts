@@ -189,6 +189,7 @@ describe('上传 STL 网格元素批量编辑', () => {
     const preview = {
       revision: 'mesh-before', seedTriangleIndex: 4, triangleIndexes: [4, 5],
       affectedTriangleCount: 2, regionAreaMm2: 100, boundaryLoopCount: 1,
+      boundaryLoopsMm: [[{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 0, y: 10, z: 0 }]],
       normalToleranceDegrees: 0.5, planeToleranceMm: 0.00002
     };
     useModelStore.getState().setMeshPlanarRegionPreview(preview);
