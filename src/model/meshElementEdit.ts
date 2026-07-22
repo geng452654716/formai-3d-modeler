@@ -799,6 +799,22 @@ export interface MeshPlanarRegionCodexDiagnosticDifferencePreview {
   content: string | null;
 }
 
+export type MeshPlanarRegionCodexDiagnosticDifferencePreviewSelectionStatus = 'selected' | 'failed';
+
+/** 通过可注入选择边界全选当前只读预览；空引用、空正文和浏览器拒绝统一安全失败。 */
+export function selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(
+  previewElement: HTMLElement | null,
+  selectText: (element: HTMLElement) => void
+): MeshPlanarRegionCodexDiagnosticDifferencePreviewSelectionStatus {
+  if (!previewElement?.textContent) return 'failed';
+  try {
+    selectText(previewElement);
+    return 'selected';
+  } catch {
+    return 'failed';
+  }
+}
+
 /** 为差异复制区派生默认收起或展开的只读预览，正文始终复用同一摘要字符串。 */
 export function createMeshPlanarRegionCodexDiagnosticDifferencePreview(
   summary: string | null,

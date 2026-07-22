@@ -1265,6 +1265,8 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .mesh-planar-region-diagnostic-differences .diagnostic-difference-copy { padding-top: 5px; border-top: 1px solid rgba(222, 164, 55, .22); }
 .mesh-planar-region-diagnostic-difference-preview { flex: 1 0 100%; display: grid; gap: 4px; min-width: 0; padding-top: 5px; border-top: 1px solid rgba(83, 199, 180, .2); }
 .mesh-planar-region-diagnostic-difference-preview small { color: #88a69f; }
+.mesh-planar-region-diagnostic-difference-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 7px; }
+.mesh-planar-region-diagnostic-difference-preview-actions span { flex: 1 0 100%; }
 .mesh-planar-region-diagnostic-difference-preview pre { max-height: 108px; margin: 0; padding: 6px 7px; overflow: auto; border: 1px solid rgba(83, 199, 180, .24); border-radius: 4px; color: #c8e8e1; background: rgba(12, 31, 29, .62); font: inherit; font-size: 6px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .mesh-planar-region-diagnostic-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 7px; min-width: 0; }
 .mesh-planar-region-diagnostic-copy button { flex: 0 0 auto; min-height: 25px; padding: 4px 8px; border: 1px solid rgba(83, 199, 180, .48); border-radius: 4px; color: #a9ddd3; background: rgba(17, 54, 48, .52); font-family: inherit; font-size: 7px; cursor: pointer; }

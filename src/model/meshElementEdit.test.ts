@@ -22,6 +22,7 @@ import {
   removeMeshPlanarRegionCodexAnalysisDraftBlock,
   replaceMeshPlanarRegionCodexAnalysisDraftBlock,
   selectedMeshElementPoints,
+  selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText,
   type MeshElementEditResult,
   type MeshElementSelection
 } from './meshElementEdit';
@@ -1076,6 +1077,34 @@ describe('连续共面区域平面估算与工具体积偏差', () => {
   it('空摘要不生成预览，避免沿用失效或不安全内容', () => {
     expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview(null, false)).toBeNull();
     expect(createMeshPlanarRegionCodexDiagnosticDifferencePreview('  ', true)).toBeNull();
+  });
+
+  it('一键全选通过注入边界选择当前完整预览正文', () => {
+    const previewElement = { textContent: '第一行\n第二行' } as HTMLElement;
+    let selectedElement: HTMLElement | null = null;
+    expect(selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(
+      previewElement,
+      (element) => { selectedElement = element; }
+    )).toBe('selected');
+    expect(selectedElement).toBe(previewElement);
+  });
+
+  it('一键全选在浏览器拒绝时返回非阻断失败状态', () => {
+    const previewElement = { textContent: '差异摘要' } as HTMLElement;
+    expect(selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(previewElement, () => {
+      throw new Error('Selection 不可用');
+    })).toBe('failed');
+  });
+
+  it('一键全选拒绝空引用和空正文，不调用选择边界', () => {
+    let callCount = 0;
+    const selectText = () => { callCount += 1; };
+    expect(selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(null, selectText)).toBe('failed');
+    expect(selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(
+      { textContent: '' } as HTMLElement,
+      selectText
+    )).toBe('failed');
+    expect(callCount).toBe(0);
   });
 
   it('用最新诊断精确替换唯一旧块并原样保留前后用户文字和换行', () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { BoxSelect, GitBranch, Layers3, Move3d, MousePointer2, Rotate3d, Scaling, X } from 'lucide-react';
 import {
   copyMeshPlanarRegionCodexDiagnosticDifferenceSummary,
@@ -14,6 +14,7 @@ import {
   cycleMeshPlanarRegionLoopIndex,
   MAX_MESH_ELEMENT_SELECTIONS,
   MESH_ELEMENT_LABELS,
+  selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText,
   type MeshElementEditMode,
   type MeshPlanarRegionCodexDiagnosticFieldDifference,
   type MeshElementSelectionMethod,
@@ -108,6 +109,8 @@ function MeshPlanarRegionDiagnosticDifferenceTools({
 }: MeshPlanarRegionDiagnosticDifferenceToolsProps) {
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [selectionStatus, setSelectionStatus] = useState<'idle' | 'selected' | 'failed'>('idle');
+  const previewElementRef = useRef<HTMLPreElement>(null);
   const preview = createMeshPlanarRegionCodexDiagnosticDifferencePreview(summary, previewExpanded);
 
   /** 复制内容与预览共用当前摘要来源，仍由可注入剪贴板边界处理失败。 */
@@ -119,6 +122,28 @@ function MeshPlanarRegionDiagnosticDifferenceTools({
     setCopyStatus(status);
   }
 
+  /** 展开或收起预览时清除旧选择反馈，摘要身份变化则由 keyed 重新挂载清除。 */
+  function togglePreview() {
+    setSelectionStatus('idle');
+    setPreviewExpanded((current) => !current);
+  }
+
+  /** 只设置当前预览节点的浏览器选择范围，不触发剪贴板、草稿或执行链路。 */
+  function selectPreviewText() {
+    const status = selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(
+      previewElementRef.current,
+      (element) => {
+        const selection = window.getSelection();
+        if (!selection) throw new Error('当前浏览器不支持文本选择');
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    );
+    setSelectionStatus(status);
+  }
+
   if (!preview) return null;
   return (
     <div className={`mesh-planar-region-diagnostic-copy diagnostic-difference-copy ${copyStatus}`} aria-live="polite">
@@ -126,7 +151,7 @@ function MeshPlanarRegionDiagnosticDifferenceTools({
         type="button"
         className="codex-analysis"
         aria-expanded={previewExpanded}
-        onClick={() => setPreviewExpanded((current) => !current)}
+        onClick={togglePreview}
       >
         {preview.toggleLabel}
       </button>
@@ -138,7 +163,18 @@ function MeshPlanarRegionDiagnosticDifferenceTools({
       {preview.content ? (
         <div className="mesh-planar-region-diagnostic-difference-preview">
           <small>以下内容仅供检查，不会自动发送或执行。</small>
-          <pre aria-label="差异摘要复制内容预览" tabIndex={0}>{preview.content}</pre>
+          <div className="mesh-planar-region-diagnostic-difference-preview-actions">
+            <button type="button" className="codex-analysis" onClick={selectPreviewText}>
+              {selectionStatus === 'selected' ? '已全选预览内容' : '全选预览内容'}
+            </button>
+            {selectionStatus === 'selected' && (
+              <span>已全选当前预览内容，不会自动复制或执行。</span>
+            )}
+            {selectionStatus === 'failed' && (
+              <span role="alert">无法全选预览内容，请手动拖动选择。</span>
+            )}
+          </div>
+          <pre ref={previewElementRef} aria-label="差异摘要复制内容预览" tabIndex={0}>{preview.content}</pre>
         </div>
       ) : null}
     </div>

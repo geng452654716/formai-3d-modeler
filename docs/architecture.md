@@ -758,4 +758,14 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 62/62、前端 235/235、生产构建和差异检查通过。真实浏览器确认预览默认收起，展开正文与剪贴板捕获文本严格相同；收起、替换、摘要身份变化和卡片卸载均能清理局部状态，干净页面 Console 无错误。
 
-**下一阶段架构方向：**为当前只读预览增加显式“全选预览内容”交互。选择逻辑必须绑定当前预览 DOM 引用，仅设置浏览器 Selection 范围；不得触发 Clipboard API、修改 React 草稿状态、登记系统块或调用执行链。
+### 68. 连续共面区域诊断差异预览全文选择架构（已实现）
+
+- `selectMeshPlanarRegionCodexDiagnosticDifferencePreviewText(previewElement, selectText)` 只校验当前节点和非空正文，再调用可注入选择边界；成功返回 `selected`，空引用、空正文、Selection/Range 不支持或任何异常统一返回 `failed`。
+- `MeshPlanarRegionDiagnosticDifferenceTools` 使用 `useRef<HTMLPreElement>` 指向当前只读预览；浏览器实现通过 `document.createRange().selectNodeContents(element)` 与 `window.getSelection()` 重置范围，不读取或写入剪贴板。
+- `selectionStatus` 只存在于 keyed 子组件本地。展开/收起动作主动清回 `idle`；摘要变化、差异失效或替换时，现有 keyed 挂载边界继续负责卸载旧状态。
+- 成功和失败反馈均为中文，失败使用 `role=alert` 但不抛出到组件树；按钮、反馈和正文只在预览展开时渲染。
+- 未新增 Store、Tauri、Worker、模型版本、快照、草稿或系统块协议，也不修改既有复制和执行链。
+
+2026-07-22 架构验证：针对性测试 65/65、前端 238/238、生产构建和差异检查通过。真实浏览器验证 Selection 文本与预览正文严格相同、剪贴板调用为 0，并覆盖 Selection 不可用、收起重置、重新展开和替换卸载；干净页面 Console 无错误。
+
+**下一阶段架构方向：**从同一 `diagnosticDifferenceSummary` 纯派生行数与 Unicode 字符数，并在展开预览中只读展示。统计不得截断、重写或缓存正文，也不得影响 keyed 状态边界。
