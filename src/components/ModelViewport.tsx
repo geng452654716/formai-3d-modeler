@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Canvas, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
   ContactShadows,
   Grid,
@@ -10,7 +10,7 @@ import {
   TransformControls
 } from '@react-three/drei';
 import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
-import type { Camera, Group } from 'three';
+import type { Camera, Group, Object3D } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
   compareCadStableFaceIds,
@@ -40,8 +40,10 @@ import {
   createMeshPlanarRegionDimensionGuides,
   createMeshPlanarRegionTopology,
   expandMeshPlanarRegion,
+  MESH_PLANAR_REGION_DIMENSION_LAYOUTS,
   MAX_MESH_ELEMENT_SELECTIONS,
   nearestMeshElementIndex,
+  selectMeshPlanarRegionDimensionLayout,
   selectedMeshElementPoints,
   type MeshElementSelection,
   type MeshElementSelectionSet,
@@ -63,6 +65,29 @@ import { useModelStore } from '../store/useModelStore';
 const CAD_FACE_SELECTION_LIMIT = 100;
 const CAD_FACE_CANDIDATE_LIMIT = 400;
 const CAD_FACE_VISIBILITY_SAMPLES = 4;
+const MESH_PLANAR_DIMENSION_SAFE_INSETS = { leftPx: 24, topPx: 58, rightPx: 326, bottomPx: 26 };
+
+/** 把三维标签投影限制在视口安全区内，避免进入工具栏、编辑面板或被画布裁切。 */
+function createMeshPlanarDimensionHtmlPosition(labelWidthPx: number, labelHeightPx: number) {
+  return (element: Object3D, camera: Camera, size: { width: number; height: number }) => {
+    const projected = new Vector3();
+    element.getWorldPosition(projected);
+    projected.project(camera);
+    const halfWidth = labelWidthPx / 2;
+    const halfHeight = labelHeightPx / 2;
+    const leftPx = MESH_PLANAR_DIMENSION_SAFE_INSETS.leftPx + halfWidth;
+    const rightPx = Math.max(leftPx, size.width - MESH_PLANAR_DIMENSION_SAFE_INSETS.rightPx - halfWidth);
+    const topPx = MESH_PLANAR_DIMENSION_SAFE_INSETS.topPx + halfHeight;
+    const bottomPx = Math.max(topPx, size.height - MESH_PLANAR_DIMENSION_SAFE_INSETS.bottomPx - halfHeight);
+    return [
+      Math.min(rightPx, Math.max(leftPx, (projected.x + 1) * size.width / 2)),
+      Math.min(bottomPx, Math.max(topPx, (1 - projected.y) * size.height / 2))
+    ] as [number, number];
+  };
+}
+
+const calculateMeshPlanarAxisLabelPosition = createMeshPlanarDimensionHtmlPosition(104, 20);
+const calculateMeshPlanarSummaryLabelPosition = createMeshPlanarDimensionHtmlPosition(104, 38);
 
 interface FeaturePreviewGeometryProps {
   profile: 'circle' | 'rectangle' | 'slot';
@@ -483,6 +508,8 @@ function LoadedCadMesh({
   const setMeshPlanarRegionFocusedLoopIndex = useModelStore((state) => state.setMeshPlanarRegionFocusedLoopIndex);
   const setMeshPlanarRegionPreview = useModelStore((state) => state.setMeshPlanarRegionPreview);
   const selectMeshElement = useModelStore((state) => state.selectMeshElement);
+  const [meshPlanarRegionDimensionLayoutIndex, setMeshPlanarRegionDimensionLayoutIndex] = useState(0);
+  const meshPlanarRegionDimensionLayoutIndexRef = useRef(0);
   const prepared = useMemo(() => {
     const normalized = sourceGeometry.clone();
     const hasHeatmap = wallThicknessAnalysis
@@ -647,24 +674,26 @@ function LoadedCadMesh({
         segment.map(transformPoint) as [Vector3, Vector3]
       );
       const openPoints = loop.pointsMm.map(transformPoint);
-      const dimensionGuidesMm = createMeshPlanarRegionDimensionGuides(loop);
-      const dimensionGuides = {
-        width: {
-          valueMm: dimensionGuidesMm.width.valueMm,
-          dimensionLine: transformSegment(dimensionGuidesMm.width.dimensionLineMm),
-          extensionLines: dimensionGuidesMm.width.extensionLinesMm.map(transformSegment),
-          capLines: dimensionGuidesMm.width.capLinesMm.map(transformSegment),
-          label: transformPoint(dimensionGuidesMm.width.labelMm)
-        },
-        height: {
-          valueMm: dimensionGuidesMm.height.valueMm,
-          dimensionLine: transformSegment(dimensionGuidesMm.height.dimensionLineMm),
-          extensionLines: dimensionGuidesMm.height.extensionLinesMm.map(transformSegment),
-          capLines: dimensionGuidesMm.height.capLinesMm.map(transformSegment),
-          label: transformPoint(dimensionGuidesMm.height.labelMm)
-        },
-        summaryLabel: transformPoint(dimensionGuidesMm.summaryLabelMm)
-      };
+      const dimensionGuideCandidates = MESH_PLANAR_REGION_DIMENSION_LAYOUTS.map((layout) => {
+        const dimensionGuidesMm = createMeshPlanarRegionDimensionGuides(loop, layout);
+        return {
+          width: {
+            valueMm: dimensionGuidesMm.width.valueMm,
+            dimensionLine: transformSegment(dimensionGuidesMm.width.dimensionLineMm),
+            extensionLines: dimensionGuidesMm.width.extensionLinesMm.map(transformSegment),
+            capLines: dimensionGuidesMm.width.capLinesMm.map(transformSegment),
+            label: transformPoint(dimensionGuidesMm.width.labelMm)
+          },
+          height: {
+            valueMm: dimensionGuidesMm.height.valueMm,
+            dimensionLine: transformSegment(dimensionGuidesMm.height.dimensionLineMm),
+            extensionLines: dimensionGuidesMm.height.extensionLinesMm.map(transformSegment),
+            capLines: dimensionGuidesMm.height.capLinesMm.map(transformSegment),
+            label: transformPoint(dimensionGuidesMm.height.labelMm)
+          },
+          summaryLabel: transformPoint(dimensionGuidesMm.summaryLabelMm)
+        };
+      });
       const ordinal = meshPlanarRegionPreview.boundaryLoops
         .slice(0, loopIndex + 1)
         .filter((candidate) => candidate.kind === loop.kind).length;
@@ -674,7 +703,7 @@ function LoadedCadMesh({
         label: `${loop.kind === 'outer' ? '外环' : '孔洞'} ${ordinal}`,
         color: loop.kind === 'outer' ? '#52e0c4' : '#ff8f70',
         points: [...openPoints, openPoints[0]],
-        dimensionGuides
+        dimensionGuideCandidates
       }];
     });
   }, [coordinateTransform, id, importedStlModel, meshElementTransformKind, meshPlanarRegionPreview]);
@@ -702,11 +731,59 @@ function LoadedCadMesh({
     meshPlanarRegionBoundaryGeometries.hole?.dispose();
   }, [meshPlanarRegionBoundaryGeometries]);
 
-  const focusedMeshPlanarRegionLoop = meshPlanarRegionFocusedLoopIndex === null
+  const focusedMeshPlanarRegionLoopBase = meshPlanarRegionFocusedLoopIndex === null
     ? null
     : meshPlanarRegionLoopRenderData.find((candidate) => (
       candidate.loopIndex === meshPlanarRegionFocusedLoopIndex
     )) ?? null;
+  const focusedMeshPlanarRegionLoop = focusedMeshPlanarRegionLoopBase
+    ? {
+        ...focusedMeshPlanarRegionLoopBase,
+        dimensionGuides: focusedMeshPlanarRegionLoopBase.dimensionGuideCandidates[
+          meshPlanarRegionDimensionLayoutIndex
+        ] ?? focusedMeshPlanarRegionLoopBase.dimensionGuideCandidates[0]
+      }
+    : null;
+
+  useEffect(() => {
+    meshPlanarRegionDimensionLayoutIndexRef.current = 0;
+    setMeshPlanarRegionDimensionLayoutIndex(0);
+  }, [meshPlanarRegionFocusedLoopIndex, meshPlanarRegionPreview?.revision, meshPlanarRegionPreview?.seedTriangleIndex]);
+
+  useFrame(() => {
+    if (!focusedMeshPlanarRegionLoopBase || !meshRef.current?.parent) return;
+    const safeRightPx = Math.max(170, size.width - MESH_PLANAR_DIMENSION_SAFE_INSETS.rightPx);
+    const safeArea = {
+      leftPx: MESH_PLANAR_DIMENSION_SAFE_INSETS.leftPx,
+      topPx: MESH_PLANAR_DIMENSION_SAFE_INSETS.topPx,
+      rightPx: safeRightPx,
+      bottomPx: size.height - MESH_PLANAR_DIMENSION_SAFE_INSETS.bottomPx
+    };
+    const parentWorldMatrix = meshRef.current.parent.matrixWorld;
+    const projectAnchor = (point: Vector3, widthPx: number, heightPx: number) => {
+      const projected = point.clone().applyMatrix4(parentWorldMatrix).project(camera);
+      return {
+        xPx: (projected.x + 1) * size.width / 2,
+        yPx: (1 - projected.y) * size.height / 2,
+        widthPx,
+        heightPx
+      };
+    };
+    const nextLayoutIndex = selectMeshPlanarRegionDimensionLayout(
+      focusedMeshPlanarRegionLoopBase.dimensionGuideCandidates.map((candidate, layoutIndex) => ({
+        layoutIndex,
+        anchors: [
+          projectAnchor(candidate.width.label, 104, 20),
+          projectAnchor(candidate.height.label, 104, 20),
+          projectAnchor(candidate.summaryLabel, 104, 38)
+        ]
+      })),
+      safeArea
+    );
+    if (nextLayoutIndex === null || nextLayoutIndex === meshPlanarRegionDimensionLayoutIndexRef.current) return;
+    meshPlanarRegionDimensionLayoutIndexRef.current = nextLayoutIndex;
+    setMeshPlanarRegionDimensionLayoutIndex(nextLayoutIndex);
+  });
 
   const selectedMarker = useMemo(() => {
     if (
@@ -1174,18 +1251,42 @@ function LoadedCadMesh({
               />
             ))
           ))}
-          <Html position={focusedMeshPlanarRegionLoop.dimensionGuides.width.label} center distanceFactor={9}>
-            <div className={`mesh-planar-region-axis-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
+          <Html
+            position={focusedMeshPlanarRegionLoop.dimensionGuides.width.label}
+            center
+            distanceFactor={9}
+            calculatePosition={calculateMeshPlanarAxisLabelPosition}
+          >
+            <div
+              className={`mesh-planar-region-axis-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}
+              data-layout-index={meshPlanarRegionDimensionLayoutIndex}
+            >
               宽度 {focusedMeshPlanarRegionLoop.dimensionGuides.width.valueMm.toFixed(2)} 毫米
             </div>
           </Html>
-          <Html position={focusedMeshPlanarRegionLoop.dimensionGuides.height.label} center distanceFactor={9}>
-            <div className={`mesh-planar-region-axis-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
+          <Html
+            position={focusedMeshPlanarRegionLoop.dimensionGuides.height.label}
+            center
+            distanceFactor={9}
+            calculatePosition={calculateMeshPlanarAxisLabelPosition}
+          >
+            <div
+              className={`mesh-planar-region-axis-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}
+              data-layout-index={meshPlanarRegionDimensionLayoutIndex}
+            >
               高度 {focusedMeshPlanarRegionLoop.dimensionGuides.height.valueMm.toFixed(2)} 毫米
             </div>
           </Html>
-          <Html position={focusedMeshPlanarRegionLoop.dimensionGuides.summaryLabel} center distanceFactor={9}>
-            <div className={`mesh-planar-region-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}>
+          <Html
+            position={focusedMeshPlanarRegionLoop.dimensionGuides.summaryLabel}
+            center
+            distanceFactor={9}
+            calculatePosition={calculateMeshPlanarSummaryLabelPosition}
+          >
+            <div
+              className={`mesh-planar-region-dimension-label ${focusedMeshPlanarRegionLoop.loop.kind}`}
+              data-layout-index={meshPlanarRegionDimensionLayoutIndex}
+            >
               <strong>{focusedMeshPlanarRegionLoop.label}</strong>
               <span>周长 {focusedMeshPlanarRegionLoop.loop.perimeterMm.toFixed(2)} 毫米</span>
             </div>

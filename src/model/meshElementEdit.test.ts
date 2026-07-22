@@ -283,6 +283,50 @@ describe('连续共面区域执行前预览', () => {
     expect(holeGuides.summaryLabelMm.y).toBeGreaterThan(6);
   });
 
+  it('尺寸辅助线候选可把宽高和摘要翻转到相反轮廓外侧', async () => {
+    const {
+      createMeshPlanarRegionDimensionGuides,
+      expandMeshPlanarRegion,
+      MESH_PLANAR_REGION_DIMENSION_LAYOUTS
+    } = await import('./meshElementEdit');
+    const preview = expandMeshPlanarRegion('修订-翻转', 0, [
+      face(0, [0, 0, 0], [10, 0, 0], [10, 8, 0]),
+      face(1, [0, 0, 0], [10, 8, 0], [0, 8, 0])
+    ], 20);
+    const guides = createMeshPlanarRegionDimensionGuides(
+      preview.boundaryLoops[0],
+      MESH_PLANAR_REGION_DIMENSION_LAYOUTS[3]
+    );
+    expect(guides.width.dimensionLineMm.every((point) => point.y > 8)).toBe(true);
+    expect(guides.width.extensionLinesMm.every(([start]) => start.y === 8)).toBe(true);
+    expect(guides.height.dimensionLineMm.every((point) => point.x < 0)).toBe(true);
+    expect(guides.height.extensionLinesMm.every(([start]) => start.x === 0)).toBe(true);
+    expect(guides.summaryLabelMm.y).toBeLessThan(0);
+  });
+
+  it('视口候选优先避开安全区边缘和标签互相重叠', async () => {
+    const { selectMeshPlanarRegionDimensionLayout } = await import('./meshElementEdit');
+    const anchor = (xPx: number, yPx: number, widthPx = 100, heightPx = 20) => ({
+      xPx, yPx, widthPx, heightPx
+    });
+    const safeArea = { leftPx: 20, topPx: 50, rightPx: 400, bottomPx: 300 };
+    expect(selectMeshPlanarRegionDimensionLayout([{
+      layoutIndex: 0,
+      anchors: [anchor(390, 100), anchor(250, 140), anchor(250, 190, 100, 38)]
+    }, {
+      layoutIndex: 1,
+      anchors: [anchor(160, 100), anchor(250, 140), anchor(250, 190, 100, 38)]
+    }], safeArea)).toBe(1);
+    expect(selectMeshPlanarRegionDimensionLayout([{
+      layoutIndex: 2,
+      anchors: [anchor(180, 140), anchor(180, 140), anchor(180, 140, 100, 38)]
+    }, {
+      layoutIndex: 3,
+      anchors: [anchor(120, 90), anchor(250, 140), anchor(180, 220, 100, 38)]
+    }], safeArea)).toBe(3);
+    expect(selectMeshPlanarRegionDimensionLayout([], safeArea)).toBeNull();
+  });
+
   it('反转三角面绕序后仍按包含关系识别外环和孔洞', async () => {
     const { expandMeshPlanarRegion } = await import('./meshElementEdit');
     const outer = [[0, 0, 0], [12, 0, 0], [12, 8, 0], [0, 8, 0]] as const;

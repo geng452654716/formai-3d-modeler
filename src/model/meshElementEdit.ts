@@ -95,6 +95,45 @@ export interface MeshPlanarRegionDimensionGuides {
   summaryLabelMm: MeshPointMm;
 }
 
+export type MeshPlanarDimensionSide = 'negative' | 'positive';
+
+export interface MeshPlanarRegionDimensionLayout {
+  widthSide: MeshPlanarDimensionSide;
+  heightSide: MeshPlanarDimensionSide;
+  summarySide: MeshPlanarDimensionSide;
+}
+
+export interface MeshPlanarDimensionViewportAnchor {
+  xPx: number;
+  yPx: number;
+  widthPx: number;
+  heightPx: number;
+}
+
+export interface MeshPlanarDimensionViewportCandidate {
+  layoutIndex: number;
+  anchors: [
+    MeshPlanarDimensionViewportAnchor,
+    MeshPlanarDimensionViewportAnchor,
+    MeshPlanarDimensionViewportAnchor
+  ];
+}
+
+export interface MeshPlanarDimensionViewportSafeArea {
+  leftPx: number;
+  topPx: number;
+  rightPx: number;
+  bottomPx: number;
+}
+
+/** 宽度与摘要保持相反侧，高度可左右翻转，形成稳定且有限的四组视口候选。 */
+export const MESH_PLANAR_REGION_DIMENSION_LAYOUTS: readonly MeshPlanarRegionDimensionLayout[] = [
+  { widthSide: 'negative', heightSide: 'positive', summarySide: 'positive' },
+  { widthSide: 'positive', heightSide: 'positive', summarySide: 'negative' },
+  { widthSide: 'negative', heightSide: 'negative', summarySide: 'positive' },
+  { widthSide: 'positive', heightSide: 'negative', summarySide: 'negative' }
+];
+
 /** 连续共面区域在正式调用 Worker 前的只读预览和测量结果。 */
 export interface MeshPlanarRegionPreview {
   revision: string;
@@ -309,7 +348,8 @@ function meshPlanarFramePoint(
 
 /** 为聚焦边界环生成轮廓外的宽高尺寸线、延伸线、端点短线与标签锚点。 */
 export function createMeshPlanarRegionDimensionGuides(
-  loop: MeshPlanarRegionBoundaryLoop
+  loop: MeshPlanarRegionBoundaryLoop,
+  layout: MeshPlanarRegionDimensionLayout = MESH_PLANAR_REGION_DIMENSION_LAYOUTS[0]
 ): MeshPlanarRegionDimensionGuides {
   const frame = loop.measurementFrame;
   const widthMm = frame.maxUMm - frame.minUMm;
@@ -323,8 +363,14 @@ export function createMeshPlanarRegionDimensionGuides(
   const labelClearanceMm = Math.max(0.75, Math.min(2.2, offsetMm * 0.45));
   const centerUMm = (frame.minUMm + frame.maxUMm) / 2;
   const centerVMm = (frame.minVMm + frame.maxVMm) / 2;
-  const widthLineVMm = frame.minVMm - offsetMm;
-  const heightLineUMm = frame.maxUMm + offsetMm;
+  const widthDirection = layout.widthSide === 'negative' ? -1 : 1;
+  const heightDirection = layout.heightSide === 'negative' ? -1 : 1;
+  const summaryDirection = layout.summarySide === 'negative' ? -1 : 1;
+  const widthEdgeVMm = layout.widthSide === 'negative' ? frame.minVMm : frame.maxVMm;
+  const heightEdgeUMm = layout.heightSide === 'negative' ? frame.minUMm : frame.maxUMm;
+  const summaryEdgeVMm = layout.summarySide === 'negative' ? frame.minVMm : frame.maxVMm;
+  const widthLineVMm = widthEdgeVMm + widthDirection * offsetMm;
+  const heightLineUMm = heightEdgeUMm + heightDirection * offsetMm;
   return {
     offsetMm,
     width: {
@@ -335,12 +381,12 @@ export function createMeshPlanarRegionDimensionGuides(
       ],
       extensionLinesMm: [
         [
-          meshPlanarFramePoint(frame, frame.minUMm, frame.minVMm),
-          meshPlanarFramePoint(frame, frame.minUMm, widthLineVMm - extensionOverrunMm)
+          meshPlanarFramePoint(frame, frame.minUMm, widthEdgeVMm),
+          meshPlanarFramePoint(frame, frame.minUMm, widthLineVMm + widthDirection * extensionOverrunMm)
         ],
         [
-          meshPlanarFramePoint(frame, frame.maxUMm, frame.minVMm),
-          meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm - extensionOverrunMm)
+          meshPlanarFramePoint(frame, frame.maxUMm, widthEdgeVMm),
+          meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm + widthDirection * extensionOverrunMm)
         ]
       ],
       capLinesMm: [
@@ -353,7 +399,7 @@ export function createMeshPlanarRegionDimensionGuides(
           meshPlanarFramePoint(frame, frame.maxUMm, widthLineVMm + capHalfLengthMm)
         ]
       ],
-      labelMm: meshPlanarFramePoint(frame, centerUMm, widthLineVMm - labelClearanceMm)
+      labelMm: meshPlanarFramePoint(frame, centerUMm, widthLineVMm + widthDirection * labelClearanceMm)
     },
     height: {
       valueMm: heightMm,
@@ -363,12 +409,12 @@ export function createMeshPlanarRegionDimensionGuides(
       ],
       extensionLinesMm: [
         [
-          meshPlanarFramePoint(frame, frame.maxUMm, frame.minVMm),
-          meshPlanarFramePoint(frame, heightLineUMm + extensionOverrunMm, frame.minVMm)
+          meshPlanarFramePoint(frame, heightEdgeUMm, frame.minVMm),
+          meshPlanarFramePoint(frame, heightLineUMm + heightDirection * extensionOverrunMm, frame.minVMm)
         ],
         [
-          meshPlanarFramePoint(frame, frame.maxUMm, frame.maxVMm),
-          meshPlanarFramePoint(frame, heightLineUMm + extensionOverrunMm, frame.maxVMm)
+          meshPlanarFramePoint(frame, heightEdgeUMm, frame.maxVMm),
+          meshPlanarFramePoint(frame, heightLineUMm + heightDirection * extensionOverrunMm, frame.maxVMm)
         ]
       ],
       capLinesMm: [
@@ -381,10 +427,70 @@ export function createMeshPlanarRegionDimensionGuides(
           meshPlanarFramePoint(frame, heightLineUMm + capHalfLengthMm, frame.maxVMm)
         ]
       ],
-      labelMm: meshPlanarFramePoint(frame, heightLineUMm + labelClearanceMm, centerVMm)
+      labelMm: meshPlanarFramePoint(frame, heightLineUMm + heightDirection * labelClearanceMm, centerVMm)
     },
-    summaryLabelMm: meshPlanarFramePoint(frame, centerUMm, frame.maxVMm + offsetMm + labelClearanceMm)
+    summaryLabelMm: meshPlanarFramePoint(
+      frame,
+      centerUMm,
+      summaryEdgeVMm + summaryDirection * (offsetMm + labelClearanceMm)
+    )
   };
+}
+
+function meshPlanarViewportOverflowScore(
+  anchor: MeshPlanarDimensionViewportAnchor,
+  safeArea: MeshPlanarDimensionViewportSafeArea
+) {
+  const halfWidth = anchor.widthPx / 2;
+  const halfHeight = anchor.heightPx / 2;
+  const leftOverflow = Math.max(0, safeArea.leftPx - (anchor.xPx - halfWidth));
+  const rightOverflow = Math.max(0, anchor.xPx + halfWidth - safeArea.rightPx);
+  const topOverflow = Math.max(0, safeArea.topPx - (anchor.yPx - halfHeight));
+  const bottomOverflow = Math.max(0, anchor.yPx + halfHeight - safeArea.bottomPx);
+  return (leftOverflow ** 2 + rightOverflow ** 2 + topOverflow ** 2 + bottomOverflow ** 2) * 1000;
+}
+
+function meshPlanarViewportOverlapArea(
+  left: MeshPlanarDimensionViewportAnchor,
+  right: MeshPlanarDimensionViewportAnchor
+) {
+  const overlapWidth = Math.max(0, Math.min(
+    left.xPx + left.widthPx / 2,
+    right.xPx + right.widthPx / 2
+  ) - Math.max(
+    left.xPx - left.widthPx / 2,
+    right.xPx - right.widthPx / 2
+  ));
+  const overlapHeight = Math.max(0, Math.min(
+    left.yPx + left.heightPx / 2,
+    right.yPx + right.heightPx / 2
+  ) - Math.max(
+    left.yPx - left.heightPx / 2,
+    right.yPx - right.heightPx / 2
+  ));
+  return overlapWidth * overlapHeight;
+}
+
+/** 按安全区溢出和标签重叠评分选择最稳定的视口候选；同分时保留输入顺序。 */
+export function selectMeshPlanarRegionDimensionLayout(
+  candidates: MeshPlanarDimensionViewportCandidate[],
+  safeArea: MeshPlanarDimensionViewportSafeArea
+) {
+  if (!candidates.length) return null;
+  return candidates.reduce<{ layoutIndex: number; score: number } | null>((best, candidate) => {
+    const overflowScore = candidate.anchors.reduce(
+      (sum, anchor) => sum + meshPlanarViewportOverflowScore(anchor, safeArea),
+      0
+    );
+    const overlapScore = candidate.anchors.reduce((sum, anchor, index) => (
+      sum + candidate.anchors.slice(index + 1).reduce(
+        (pairSum, other) => pairSum + meshPlanarViewportOverlapArea(anchor, other) * 10,
+        0
+      )
+    ), 0);
+    const score = overflowScore + overlapScore;
+    return !best || score < best.score ? { layoutIndex: candidate.layoutIndex, score } : best;
+  }, null)?.layoutIndex ?? null;
 }
 
 function projectMeshPlanarPoint(

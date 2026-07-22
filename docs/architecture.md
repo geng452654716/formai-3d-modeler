@@ -598,3 +598,16 @@ nestingDepth: 二维包含深度
 2026-07-22 验证：前端 25 个测试文件 190/190，TypeScript/Vite 构建和 `git diff --check` 通过；浏览器验证外环与孔洞的尺寸线/中文标签切换、线框取消聚焦、非线框重新选面和无 Console 错误。
 
 **下一阶段架构边界：**在前端相机与 DOM 安全区层增加纯显示的投影侧边选择，不修改源毫米测量结果。候选位置应由同一测量基底生成，再按屏幕投影选择不会接近顶部工具栏、右侧编辑面板和视口边缘的方向；不引入 Worker 契约、版本迁移或尺寸驱动约束求解。
+
+
+### 52. 连续共面区域尺寸标注视口自适应翻转架构（已实现）
+
+- `MESH_PLANAR_REGION_DIMENSION_LAYOUTS` 固定定义四组源平面候选；`createMeshPlanarRegionDimensionGuides(loop, layout)` 只改变宽度、高度和摘要所在外侧以及对应延伸线起点，不改变 `measurementFrame`、真实毫米值或边界环语义。
+- `selectMeshPlanarRegionDimensionLayout` 是无 Three.js 依赖的纯函数。它对每个候选的三个标签锚点计算安全区溢出平方惩罚和矩形重叠面积惩罚，并在分数相同时保留输入顺序；空候选返回 `null`。
+- `LoadedCadMesh` 一次创建四组已应用 `coordinateTransform` 的渲染候选。`useFrame` 使用当前父级 `matrixWorld` 和相机投影锚点，画布安全内边距为左 24、上 58、右 326、下 26 像素；只有布局索引真正变化时才写入组件本地状态，避免每帧触发 React 重渲染。
+- `createMeshPlanarDimensionHtmlPosition` 作为 Drei `Html.calculatePosition` 的最终屏幕安全门，按标签估算尺寸夹紧坐标；它与候选评分共同处理三维翻转无法完全避开固定 DOM 面板的情况。
+- 布局索引、投影锚点和屏幕夹紧均为渲染层瞬时状态，不进入 Zustand 持久状态、Tauri/Python Worker、项目版本、精确快照或 OpenCascade Wire/布尔语义。
+
+2026-07-22 架构验证：纯函数新增布局翻转、延伸线方向、安全区溢出、标签重叠和空候选测试，前端共 192/192 通过；生产构建和差异检查通过。浏览器验证多相机角度下候选索引自动切换、屏幕坐标保持在安全区、带孔区域数据不变且 Console 无错误。
+
+**下一阶段架构方向：**从当前修订的共面区域拓扑、外环/孔洞二维投影、法向操作和毫米距离生成只读半透明棱柱预演几何；前端预演必须独立于 Worker 的真实工具体构造，参数无效或上下文失效时立即清除，并继续由后端承担实体方向、封闭性、有效性、单 Solid 和体积校验。
