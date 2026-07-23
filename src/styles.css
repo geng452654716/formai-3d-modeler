@@ -1521,3 +1521,18 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .print-platform-return-view-button:hover { border-color: rgba(168, 191, 210, .76); background: rgba(61, 74, 85, .9); }
 .print-platform-top-view-button:focus-visible,
 .print-platform-return-view-button:focus-visible { outline: 2px solid rgba(91, 207, 202, .82); outline-offset: 2px; }
+
+.print-platform-front-label {
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  border: 1px solid rgba(126, 150, 170, .55);
+  border-radius: 999px;
+  background: rgba(22, 27, 32, .88);
+  color: #c9d6de;
+  padding: 4px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: .02em;
+}

@@ -12,6 +12,20 @@ export interface PrintPlatformHorizontalBounds {
   maximumZ: number;
 }
 
+export interface PrintPlatformBedGuide {
+  sourceIdentity: string;
+  centerMm: { x: number; y: number; z: number };
+  widthMm: number;
+  depthMm: number;
+  centerCrossHalfLengthMm: number;
+  centerCrossSegments: [
+    [[number, number, number], [number, number, number]],
+    [[number, number, number], [number, number, number]]
+  ];
+  frontLabel: '前侧（Z 正）';
+  frontLabelPositionMm: { x: number; y: number; z: number };
+}
+
 export interface PrintPlatformOverlay {
   sourceIdentity: string;
   objectId: string;
@@ -148,4 +162,70 @@ export function createPrintPlatformBoundarySegment(
     return [[checked.minimumX, heightMm, checked.maximumZ], [checked.maximumX, heightMm, checked.maximumZ]];
   }
   return [[checked.minimumX, heightMm, checked.minimumZ], [checked.maximumX, heightMm, checked.minimumZ]];
+}
+
+const PRINT_PLATFORM_BED_HEIGHT_MM = 0.015;
+const PRINT_PLATFORM_CENTER_CROSS_HEIGHT_MM = 0.04;
+const PRINT_PLATFORM_FRONT_LABEL_HEIGHT_MM = 0.24;
+const PRINT_PLATFORM_FRONT_LABEL_MAX_RIGHT_INSET_MM = 24;
+const PRINT_PLATFORM_FRONT_LABEL_MAX_BACK_INSET_MM = 8;
+
+/**
+ * 从物理平台边界派生只读床面、中心十字和前向标识坐标。
+ * 前侧固定对应最大 Z，与打印方向分析中的“前侧越界”语义保持一致。
+ */
+export function createPrintPlatformBedGuide(
+  overlay: Pick<PrintPlatformOverlay, 'sourceIdentity' | 'platformBoundsMm'>
+): PrintPlatformBedGuide {
+  assertNonEmptyText(overlay.sourceIdentity, '打印平台床面来源身份');
+  const bounds = cloneFiniteBounds(overlay.platformBoundsMm, '打印平台床面边界');
+  const widthMm = bounds.maximumX - bounds.minimumX;
+  const depthMm = bounds.maximumZ - bounds.minimumZ;
+  if (widthMm <= 0 || depthMm <= 0) throw new Error('打印平台床面边界必须具有正宽度和正深度');
+
+  const centerX = (bounds.minimumX + bounds.maximumX) / 2;
+  const centerZ = (bounds.minimumZ + bounds.maximumZ) / 2;
+  const minimumPlatformSpanMm = Math.min(widthMm, depthMm);
+  const centerCrossHalfLengthMm = Math.min(
+    minimumPlatformSpanMm * 0.45,
+    Math.max(6, minimumPlatformSpanMm * 0.08)
+  );
+  const frontLabelRightInsetMm = Math.min(PRINT_PLATFORM_FRONT_LABEL_MAX_RIGHT_INSET_MM, widthMm * 0.1);
+  const frontLabelBackInsetMm = Math.min(PRINT_PLATFORM_FRONT_LABEL_MAX_BACK_INSET_MM, depthMm * 0.04);
+
+  return {
+    sourceIdentity: overlay.sourceIdentity,
+    centerMm: { x: centerX, y: PRINT_PLATFORM_BED_HEIGHT_MM, z: centerZ },
+    widthMm,
+    depthMm,
+    centerCrossHalfLengthMm,
+    centerCrossSegments: [
+      [
+        [centerX - centerCrossHalfLengthMm, PRINT_PLATFORM_CENTER_CROSS_HEIGHT_MM, centerZ],
+        [centerX + centerCrossHalfLengthMm, PRINT_PLATFORM_CENTER_CROSS_HEIGHT_MM, centerZ]
+      ],
+      [
+        [centerX, PRINT_PLATFORM_CENTER_CROSS_HEIGHT_MM, centerZ - centerCrossHalfLengthMm],
+        [centerX, PRINT_PLATFORM_CENTER_CROSS_HEIGHT_MM, centerZ + centerCrossHalfLengthMm]
+      ]
+    ],
+    frontLabel: '前侧（Z 正）',
+    frontLabelPositionMm: {
+      x: bounds.maximumX - frontLabelRightInsetMm,
+      y: PRINT_PLATFORM_FRONT_LABEL_HEIGHT_MM,
+      z: bounds.maximumZ - frontLabelBackInsetMm
+    }
+  };
+}
+
+/** 无有效来源或非法、非有限、退化边界时不创建任何床面几何。 */
+export function resolvePrintPlatformBedGuide(
+  overlay: Pick<PrintPlatformOverlay, 'sourceIdentity' | 'platformBoundsMm'> | null
+): PrintPlatformBedGuide | null {
+  if (!overlay) return null;
+  try {
+    return createPrintPlatformBedGuide(overlay);
+  } catch {
+    return null;
+  }
 }

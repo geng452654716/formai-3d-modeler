@@ -46,6 +46,7 @@ import {
 import {
   createPrintPlatformBoundarySegment,
   createPrintPlatformRectanglePoints,
+  resolvePrintPlatformBedGuide,
   type PrintPlatformOverlay
 } from '../model/printPlatformOverlay';
 import {
@@ -2033,7 +2034,8 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
 /** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
 function PrintPlatformOverlayLayer() {
   const overlay = useModelStore((state) => state.printPlatformOverlay);
-  if (!overlay) return null;
+  const bedGuide = resolvePrintPlatformBedGuide(overlay);
+  if (!overlay || !bedGuide) return null;
 
   const objectColor = overlay.status === 'inside'
     ? '#35d2cb'
@@ -2047,6 +2049,46 @@ function PrintPlatformOverlayLayer() {
 
   return (
     <group>
+      <mesh
+        position={[bedGuide.centerMm.x, bedGuide.centerMm.y, bedGuide.centerMm.z]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        raycast={() => undefined}
+        renderOrder={18}
+      >
+        <planeGeometry args={[bedGuide.widthMm, bedGuide.depthMm]} />
+        <meshBasicMaterial
+          color="#506d82"
+          side={DoubleSide}
+          transparent
+          opacity={0.1}
+          depthWrite={false}
+        />
+      </mesh>
+      {bedGuide.centerCrossSegments.map((points, index) => (
+        <Line
+          key={index === 0 ? '中心横线' : '中心纵线'}
+          points={points}
+          color="#f0b44c"
+          lineWidth={1.8}
+          depthTest={false}
+          raycast={() => undefined}
+          renderOrder={19}
+        />
+      ))}
+      <Html
+        position={[
+          bedGuide.frontLabelPositionMm.x,
+          bedGuide.frontLabelPositionMm.y,
+          bedGuide.frontLabelPositionMm.z
+        ]}
+        center
+        zIndexRange={[4, 0]}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div className="print-platform-front-label" aria-hidden="true">
+          {bedGuide.frontLabel}
+        </div>
+      </Html>
       <Line
         points={createPrintPlatformRectanglePoints(overlay.platformBoundsMm, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.platform)}
         color="#7e96aa"

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createPrintPlatformBedGuide,
   createPrintPlatformBoundarySegment,
   createPrintPlatformOverlay,
-  createPrintPlatformRectanglePoints
+  createPrintPlatformRectanglePoints,
+  resolvePrintPlatformBedGuide
 } from './printPlatformOverlay';
 import type {
   PrintPlatformBoundaryPreview,
@@ -128,6 +130,59 @@ describe('打印平台三维视口叠加协议', () => {
       ...boundary(),
       boundsMm: { ...boundary().boundsMm, maximumX: Number.NaN }
     }, safety())).toThrow('当前对象占地边界maximumX必须是有限毫米数值');
+  });
+
+  it('按物理平台真实毫米边界派生床面尺寸、中心十字和前侧 Z 正标识', () => {
+    const overlay = createPrintPlatformOverlay(genericSource, boundary(), safety());
+    const guide = createPrintPlatformBedGuide(overlay);
+
+    expect(guide).toMatchObject({
+      sourceIdentity: genericSource.identity,
+      centerMm: { x: 0, y: 0.015, z: 0 },
+      widthMm: 256,
+      depthMm: 256,
+      centerCrossHalfLengthMm: 20.48,
+      frontLabel: '前侧（Z 正）',
+      frontLabelPositionMm: { x: 104, y: 0.24, z: 120 }
+    });
+    expect(guide.centerCrossSegments).toEqual([
+      [[-20.48, 0.04, 0], [20.48, 0.04, 0]],
+      [[0, 0.04, -20.48], [0, 0.04, 20.48]]
+    ]);
+  });
+
+  it('非对称平台仍使用真实中心且前侧始终对应最大 Z', () => {
+    const guide = createPrintPlatformBedGuide({
+      sourceIdentity: '通用模型:非对称平台',
+      platformBoundsMm: { minimumX: -80, maximumX: 120, minimumZ: -40, maximumZ: 160 }
+    });
+
+    expect(guide.centerMm).toEqual({ x: 20, y: 0.015, z: 60 });
+    expect(guide.widthMm).toBe(200);
+    expect(guide.depthMm).toBe(200);
+    expect(guide.frontLabelPositionMm).toEqual({ x: 100, y: 0.24, z: 152 });
+  });
+
+  it('来源清除、非法数值和退化边界不会生成床面几何', () => {
+    expect(resolvePrintPlatformBedGuide(null)).toBeNull();
+    expect(resolvePrintPlatformBedGuide({
+      sourceIdentity: '旧来源',
+      platformBoundsMm: { minimumX: -1, maximumX: Number.NaN, minimumZ: -1, maximumZ: 1 }
+    })).toBeNull();
+    expect(resolvePrintPlatformBedGuide({
+      sourceIdentity: '退化来源',
+      platformBoundsMm: { minimumX: 2, maximumX: 2, minimumZ: -1, maximumZ: 1 }
+    })).toBeNull();
+    expect(() => createPrintPlatformBedGuide({
+      sourceIdentity: '',
+      platformBoundsMm: { minimumX: -1, maximumX: 1, minimumZ: -1, maximumZ: 1 }
+    })).toThrow('打印平台床面来源身份不能为空');
+
+    const next = resolvePrintPlatformBedGuide({
+      sourceIdentity: '新来源',
+      platformBoundsMm: { minimumX: -2, maximumX: 2, minimumZ: -3, maximumZ: 3 }
+    });
+    expect(next?.sourceIdentity).toBe('新来源');
   });
 
   it('按真实毫米坐标生成闭合矩形和四个方向的高亮边段', () => {
