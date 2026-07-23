@@ -35,8 +35,12 @@ import { getOuterDimensions } from '../model/defaults';
 import { degreesToRadians, describeObjectTransformChange, normalizeObjectPresentation } from '../model/objectTransform';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
 import {
+  capturePrintPlatformReturnSnapshot,
+  createNextPrintPlatformReturnViewRequest,
   createNextPrintPlatformViewRequest,
+  resolvePrintPlatformReturnSnapshot,
   resolvePrintPlatformTopViewRequest,
+  type PrintPlatformReturnSnapshot,
   type PrintPlatformViewRequest
 } from '../model/printPlatformCamera';
 import {
@@ -2110,6 +2114,7 @@ function printPlatformOverflowDescriptions(overlay: PrintPlatformOverlay) {
 
 interface PrintPlatformCameraControllerProps {
   request: PrintPlatformViewRequest | null;
+  onReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
 interface ViewportOrbitControls {
@@ -2124,13 +2129,17 @@ function viewportOrbitControls(value: unknown): ViewportOrbitControls | null {
   return candidate as ViewportOrbitControls;
 }
 
-/** 平滑执行一次性打印平台俯视请求，不把相机状态写入模型、版本或撤销栈。 */
-function PrintPlatformCameraController({ request }: PrintPlatformCameraControllerProps) {
+/** 平滑执行打印平台俯视或返回请求，不把相机状态写入模型、版本或撤销栈。 */
+function PrintPlatformCameraController({
+  request,
+  onReturnSnapshotSourceChange
+}: PrintPlatformCameraControllerProps) {
   const currentOverlay = useModelStore((state) => state.printPlatformOverlay);
   const camera = useThree((state) => state.camera);
   const size = useThree((state) => state.size);
   const controls = useThree((state) => state.controls);
   const handledRequestKey = useRef<string | null>(null);
+  const returnSnapshot = useRef<PrintPlatformReturnSnapshot | null>(null);
   const animation = useRef<{
     sourceIdentity: string;
     elapsedSeconds: number;
@@ -2139,40 +2148,105 @@ function PrintPlatformCameraController({ request }: PrintPlatformCameraControlle
     endPosition: Vector3;
     startTarget: Vector3;
     endTarget: Vector3;
+    clearReturnSnapshotOnComplete: boolean;
   } | null>(null);
+
+  const clearReturnSnapshot = () => {
+    if (!returnSnapshot.current) return;
+    returnSnapshot.current = null;
+    onReturnSnapshotSourceChange(null);
+  };
+
+  useEffect(() => {
+    if (
+      returnSnapshot.current
+      && (!currentOverlay || returnSnapshot.current.sourceIdentity !== currentOverlay.sourceIdentity)
+    ) {
+      returnSnapshot.current = null;
+      onReturnSnapshotSourceChange(null);
+    }
+  }, [currentOverlay?.sourceIdentity, onReturnSnapshotSourceChange]);
 
   useFrame((_, deltaSeconds) => {
     const orbitControls = viewportOrbitControls(controls);
-    const requestKey = request ? `${request.sourceIdentity}\u0000${request.id}` : null;
+    const requestKey = request ? `${request.kind}\u0000${request.sourceIdentity}\u0000${request.id}` : null;
     if (request && requestKey !== handledRequestKey.current && orbitControls) {
       handledRequestKey.current = requestKey;
-      const verticalFovDeg = 'fov' in camera && typeof camera.fov === 'number' ? camera.fov : 34;
-      const view = resolvePrintPlatformTopViewRequest(
-        request,
-        currentOverlay,
-        { widthPx: size.width, heightPx: size.height },
-        verticalFovDeg
-      );
-      animation.current = view
-        ? {
-            sourceIdentity: view.sourceIdentity,
-            elapsedSeconds: 0,
-            durationSeconds: 0.46,
-            startPosition: camera.position.clone(),
-            endPosition: new Vector3(
-              view.cameraPositionMm.x,
-              view.cameraPositionMm.y,
-              view.cameraPositionMm.z
-            ),
-            startTarget: orbitControls.target.clone(),
-            endTarget: new Vector3(view.targetMm.x, view.targetMm.y, view.targetMm.z)
+      if (request.kind === 'top-view') {
+        const verticalFovDeg = 'fov' in camera && typeof camera.fov === 'number' ? camera.fov : 34;
+        try {
+          const view = resolvePrintPlatformTopViewRequest(
+            request,
+            currentOverlay,
+            { widthPx: size.width, heightPx: size.height },
+            verticalFovDeg
+          );
+          if (!view) {
+            animation.current = null;
+          } else {
+            const previousSnapshot = returnSnapshot.current;
+            const nextSnapshot = capturePrintPlatformReturnSnapshot(
+              previousSnapshot,
+              view.sourceIdentity,
+              {
+                cameraPositionMm: {
+                  x: camera.position.x,
+                  y: camera.position.y,
+                  z: camera.position.z
+                },
+                targetMm: {
+                  x: orbitControls.target.x,
+                  y: orbitControls.target.y,
+                  z: orbitControls.target.z
+                }
+              }
+            );
+            returnSnapshot.current = nextSnapshot;
+            if (nextSnapshot !== previousSnapshot) {
+              onReturnSnapshotSourceChange(nextSnapshot.sourceIdentity);
+            }
+            animation.current = {
+              sourceIdentity: view.sourceIdentity,
+              elapsedSeconds: 0,
+              durationSeconds: 0.46,
+              startPosition: camera.position.clone(),
+              endPosition: new Vector3(
+                view.cameraPositionMm.x,
+                view.cameraPositionMm.y,
+                view.cameraPositionMm.z
+              ),
+              startTarget: orbitControls.target.clone(),
+              endTarget: new Vector3(view.targetMm.x, view.targetMm.y, view.targetMm.z),
+              clearReturnSnapshotOnComplete: false
+            };
+            if ('far' in camera && typeof camera.far === 'number' && camera.far < view.distanceMm * 4) {
+              camera.far = Math.max(5000, view.distanceMm * 4);
+              if ('updateProjectionMatrix' in camera && typeof camera.updateProjectionMatrix === 'function') {
+                camera.updateProjectionMatrix();
+              }
+            }
           }
-        : null;
-      if (view && 'far' in camera && typeof camera.far === 'number' && camera.far < view.distanceMm * 4) {
-        camera.far = Math.max(5000, view.distanceMm * 4);
-        if ('updateProjectionMatrix' in camera && typeof camera.updateProjectionMatrix === 'function') {
-          camera.updateProjectionMatrix();
+        } catch {
+          animation.current = null;
         }
+      } else {
+        const snapshot = resolvePrintPlatformReturnSnapshot(returnSnapshot.current, currentOverlay);
+        animation.current = snapshot && snapshot.sourceIdentity === request.sourceIdentity
+          ? {
+              sourceIdentity: snapshot.sourceIdentity,
+              elapsedSeconds: 0,
+              durationSeconds: 0.46,
+              startPosition: camera.position.clone(),
+              endPosition: new Vector3(
+                snapshot.cameraPositionMm.x,
+                snapshot.cameraPositionMm.y,
+                snapshot.cameraPositionMm.z
+              ),
+              startTarget: orbitControls.target.clone(),
+              endTarget: new Vector3(snapshot.targetMm.x, snapshot.targetMm.y, snapshot.targetMm.z),
+              clearReturnSnapshotOnComplete: true
+            }
+          : null;
       }
     }
 
@@ -2180,6 +2254,7 @@ function PrintPlatformCameraController({ request }: PrintPlatformCameraControlle
     if (!active || !orbitControls) return;
     if (!currentOverlay || currentOverlay.sourceIdentity !== active.sourceIdentity) {
       animation.current = null;
+      clearReturnSnapshot();
       return;
     }
     active.elapsedSeconds += Math.min(deltaSeconds, 0.1);
@@ -2188,7 +2263,10 @@ function PrintPlatformCameraController({ request }: PrintPlatformCameraControlle
     camera.position.lerpVectors(active.startPosition, active.endPosition, easedProgress);
     orbitControls.target.lerpVectors(active.startTarget, active.endTarget, easedProgress);
     orbitControls.update();
-    if (progress >= 1) animation.current = null;
+    if (progress >= 1) {
+      animation.current = null;
+      if (active.clearReturnSnapshotOnComplete) clearReturnSnapshot();
+    }
   });
 
   return null;
@@ -2196,9 +2274,13 @@ function PrintPlatformCameraController({ request }: PrintPlatformCameraControlle
 
 interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
+  onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
-function ModelScene({ printPlatformViewRequest }: ModelSceneProps) {
+function ModelScene({
+  printPlatformViewRequest,
+  onPrintPlatformReturnSnapshotSourceChange
+}: ModelSceneProps) {
   const parameters = useModelStore((state) => state.parameters);
   const exploded = useModelStore((state) => state.exploded);
   const showBoard = useModelStore((state) => state.showBoard);
@@ -2310,7 +2392,10 @@ function ModelScene({ printPlatformViewRequest }: ModelSceneProps) {
         minDistance={55}
         maxDistance={1_000_000}
       />
-      <PrintPlatformCameraController request={printPlatformViewRequest} />
+      <PrintPlatformCameraController
+        request={printPlatformViewRequest}
+        onReturnSnapshotSourceChange={onPrintPlatformReturnSnapshotSourceChange}
+      />
       <CadFaceBoxSelectionController />
       <MeshElementBoxSelectionController />
       <group onPointerMissed={() => selectObject(showUploadedStl ? 'uploaded-model' : cadResult?.parts[0]?.id ?? 'body')}>
@@ -2566,6 +2651,7 @@ export function ModelViewport() {
   const [boxDragStart, setBoxDragStart] = useState<{ x: number; y: number } | null>(null);
   const [boxDragCurrent, setBoxDragCurrent] = useState<{ x: number; y: number } | null>(null);
   const [printPlatformViewRequest, setPrintPlatformViewRequest] = useState<PrintPlatformViewRequest | null>(null);
+  const [printPlatformReturnSourceIdentity, setPrintPlatformReturnSourceIdentity] = useState<string | null>(null);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const cadError = useModelStore((state) => state.cadError);
@@ -2616,6 +2702,7 @@ export function ModelViewport() {
 
   useEffect(() => {
     setPrintPlatformViewRequest(null);
+    setPrintPlatformReturnSourceIdentity(null);
   }, [printPlatformOverlay?.sourceIdentity]);
 
   const statusText = {
@@ -2679,7 +2766,10 @@ export function ModelViewport() {
   return (
     <div className={`viewport-canvas ${boxSelecting ? 'is-cad-box-selecting' : ''}`} ref={containerRef}>
       <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, preserveDrawingBuffer: true }}>
-        <ModelScene printPlatformViewRequest={printPlatformViewRequest} />
+        <ModelScene
+          printPlatformViewRequest={printPlatformViewRequest}
+          onPrintPlatformReturnSnapshotSourceChange={setPrintPlatformReturnSourceIdentity}
+        />
       </Canvas>
       {printPlatformOverlay && (
         <div className="print-platform-overlay-stack">
@@ -2697,17 +2787,32 @@ export function ModelViewport() {
             ))}
             <small>只读叠加，不移动对象、不创建版本，也不参与选择。</small>
           </aside>
-          <button
-            type="button"
-            className="print-platform-top-view-button"
-            title="从正上方查看并适配完整打印平台与当前对象"
-            aria-label="俯视并适配打印平台"
-            onClick={() => setPrintPlatformViewRequest((previous) => (
-              createNextPrintPlatformViewRequest(previous, printPlatformOverlay)
-            ))}
-          >
-            俯视并适配平台
-          </button>
+          <div className="print-platform-view-actions">
+            <button
+              type="button"
+              className="print-platform-top-view-button"
+              title="从正上方查看并适配完整打印平台与当前对象"
+              aria-label="俯视并适配打印平台"
+              onClick={() => setPrintPlatformViewRequest((previous) => (
+                createNextPrintPlatformViewRequest(previous, printPlatformOverlay)
+              ))}
+            >
+              俯视并适配平台
+            </button>
+            {printPlatformReturnSourceIdentity === printPlatformOverlay.sourceIdentity && (
+              <button
+                type="button"
+                className="print-platform-return-view-button"
+                title="平滑返回本次俯视前的相机位置和视角目标"
+                aria-label="返回俯视前的原视角"
+                onClick={() => setPrintPlatformViewRequest((previous) => (
+                  createNextPrintPlatformReturnViewRequest(previous, printPlatformOverlay.sourceIdentity)
+                ))}
+              >
+                返回原视角
+              </button>
+            )}
+          </div>
         </div>
       )}
       {boxSelecting && (

@@ -9,11 +9,29 @@ export interface PrintPlatformTopView {
   viewportAspect: number;
 }
 
-export interface PrintPlatformViewRequest {
+export interface PrintPlatformCameraPose {
+  cameraPositionMm: { x: number; y: number; z: number };
+  targetMm: { x: number; y: number; z: number };
+}
+
+export interface PrintPlatformReturnSnapshot extends PrintPlatformCameraPose {
+  sourceIdentity: string;
+}
+
+export interface PrintPlatformTopViewRequest {
+  kind: 'top-view';
   id: number;
   sourceIdentity: string;
   overlay: Pick<PrintPlatformOverlay, 'sourceIdentity' | 'platformBoundsMm' | 'objectBoundsMm'>;
 }
+
+export interface PrintPlatformReturnViewRequest {
+  kind: 'return-view';
+  id: number;
+  sourceIdentity: string;
+}
+
+export type PrintPlatformViewRequest = PrintPlatformTopViewRequest | PrintPlatformReturnViewRequest;
 
 const MINIMUM_CAMERA_DISTANCE_MM = 55;
 const DEFAULT_PADDING_RATIO = 1.18;
@@ -55,14 +73,34 @@ function copiedBounds(bounds: PrintPlatformHorizontalBounds): PrintPlatformHoriz
   };
 }
 
+function finitePoint(
+  point: { x: number; y: number; z: number },
+  fieldName: string
+): { x: number; y: number; z: number } {
+  const fields: Array<[string, number]> = [
+    ['X', point.x],
+    ['Y', point.y],
+    ['Z', point.z]
+  ];
+  fields.forEach(([axis, value]) => {
+    if (!Number.isFinite(value)) throw new Error(`${fieldName}${axis} 必须是有限毫米数值`);
+  });
+  return { x: point.x, y: point.y, z: point.z };
+}
+
+function nextRequestId(previous: PrintPlatformViewRequest | null) {
+  return (previous?.id ?? 0) + 1;
+}
+
 /** 创建仅属于视口的递增请求，并冻结本次分析使用的平台与对象边界。 */
 export function createNextPrintPlatformViewRequest(
   previous: PrintPlatformViewRequest | null,
   overlay: Pick<PrintPlatformOverlay, 'sourceIdentity' | 'platformBoundsMm' | 'objectBoundsMm'>
-): PrintPlatformViewRequest {
+): PrintPlatformTopViewRequest {
   if (!overlay.sourceIdentity.trim()) throw new Error('打印平台视角来源身份不能为空');
   return {
-    id: (previous?.id ?? 0) + 1,
+    kind: 'top-view',
+    id: nextRequestId(previous),
     sourceIdentity: overlay.sourceIdentity,
     overlay: {
       sourceIdentity: overlay.sourceIdentity,
@@ -72,9 +110,51 @@ export function createNextPrintPlatformViewRequest(
   };
 }
 
+/** 创建只携带来源身份的临时返回请求，不保存第二份相机快照。 */
+export function createNextPrintPlatformReturnViewRequest(
+  previous: PrintPlatformViewRequest | null,
+  sourceIdentity: string
+): PrintPlatformReturnViewRequest {
+  if (!sourceIdentity.trim()) throw new Error('打印平台返回视角来源身份不能为空');
+  return {
+    kind: 'return-view',
+    id: nextRequestId(previous),
+    sourceIdentity
+  };
+}
+
+/** 首次俯视前捕获原视角；同一来源的重复俯视保留最初快照。 */
+export function capturePrintPlatformReturnSnapshot(
+  previous: PrintPlatformReturnSnapshot | null,
+  sourceIdentity: string,
+  pose: PrintPlatformCameraPose
+): PrintPlatformReturnSnapshot {
+  if (!sourceIdentity.trim()) throw new Error('打印平台原视角来源身份不能为空');
+  if (previous?.sourceIdentity === sourceIdentity) return previous;
+  const cameraPositionMm = finitePoint(pose.cameraPositionMm, '原视角相机位置');
+  const targetMm = finitePoint(pose.targetMm, '原视角控制器目标');
+  const offsetX = cameraPositionMm.x - targetMm.x;
+  const offsetY = cameraPositionMm.y - targetMm.y;
+  const offsetZ = cameraPositionMm.z - targetMm.z;
+  const distanceMm = Math.hypot(offsetX, offsetY, offsetZ);
+  if (!Number.isFinite(distanceMm) || distanceMm <= 0.001) {
+    throw new Error('原视角相机位置不能与控制器目标重合');
+  }
+  return { sourceIdentity, cameraPositionMm, targetMm };
+}
+
+/** 仅返回仍属于当前打印平台来源的临时原视角快照。 */
+export function resolvePrintPlatformReturnSnapshot(
+  snapshot: PrintPlatformReturnSnapshot | null,
+  currentOverlay: Pick<PrintPlatformOverlay, 'sourceIdentity'> | null
+): PrintPlatformReturnSnapshot | null {
+  if (!snapshot || !currentOverlay || snapshot.sourceIdentity !== currentOverlay.sourceIdentity) return null;
+  return snapshot;
+}
+
 /** 只允许仍与当前打印分析来源一致的临时请求驱动相机。 */
 export function resolvePrintPlatformTopViewRequest(
-  request: PrintPlatformViewRequest,
+  request: PrintPlatformTopViewRequest,
   currentOverlay: Pick<PrintPlatformOverlay, 'sourceIdentity'> | null,
   viewport: { widthPx: number; heightPx: number },
   verticalFovDeg = 34,

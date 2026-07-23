@@ -1494,15 +1494,30 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .print-platform-overlay-overflow { padding-left: 25px; color: #ff9e64; font-size: 9px; font-variant-numeric: tabular-nums; }
 .print-platform-overlay-legend.is-too-large .print-platform-overlay-overflow { color: #ff7d89; }
 .print-platform-overlay-legend small { color: #737980; font-size: 8px; line-height: 1.45; }
-.print-platform-top-view-button {
+.print-platform-view-actions {
+  display: grid;
+  gap: 7px;
+  pointer-events: none;
+}
+.print-platform-top-view-button,
+.print-platform-return-view-button {
   min-height: 31px;
-  border: 1px solid rgba(91, 207, 202, .48);
   border-radius: 6px;
-  color: #c5f3ef;
-  background: rgba(24, 86, 83, .72);
   font-size: 10px;
   font-weight: 600;
   pointer-events: auto;
 }
+.print-platform-top-view-button {
+  border: 1px solid rgba(91, 207, 202, .48);
+  color: #c5f3ef;
+  background: rgba(24, 86, 83, .72);
+}
 .print-platform-top-view-button:hover { border-color: rgba(91, 207, 202, .78); background: rgba(28, 105, 100, .84); }
-.print-platform-top-view-button:focus-visible { outline: 2px solid rgba(91, 207, 202, .82); outline-offset: 2px; }
+.print-platform-return-view-button {
+  border: 1px solid rgba(145, 165, 184, .48);
+  color: #d6e1e9;
+  background: rgba(49, 60, 70, .78);
+}
+.print-platform-return-view-button:hover { border-color: rgba(168, 191, 210, .76); background: rgba(61, 74, 85, .9); }
+.print-platform-top-view-button:focus-visible,
+.print-platform-return-view-button:focus-visible { outline: 2px solid rgba(91, 207, 202, .82); outline-offset: 2px; }

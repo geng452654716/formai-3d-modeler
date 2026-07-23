@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  capturePrintPlatformReturnSnapshot,
+  createNextPrintPlatformReturnViewRequest,
   createNextPrintPlatformViewRequest,
   createPrintPlatformTopView,
   mergePrintPlatformViewBounds,
+  resolvePrintPlatformReturnSnapshot,
   resolvePrintPlatformTopViewRequest
 } from './printPlatformCamera';
 import type { PrintPlatformOverlay } from './printPlatformOverlay';
@@ -135,5 +138,71 @@ describe('打印平台俯视相机计算', () => {
     expect(Number.isFinite(narrow?.distanceMm)).toBe(true);
     expect(wide?.distanceMm).toBeGreaterThanOrEqual(55);
     expect(narrow?.distanceMm).toBeGreaterThan(wide?.distanceMm ?? 0);
+  });
+});
+
+
+describe('打印平台原视角临时快照', () => {
+  const sourceIdentity = 'cad:revision-1';
+  const originalPose = {
+    cameraPositionMm: { x: 118, y: 82, z: 136 },
+    targetMm: { x: 8, y: 4, z: -6 }
+  };
+
+  it('首次俯视前复制相机位置和控制器目标', () => {
+    const pose = {
+      cameraPositionMm: { ...originalPose.cameraPositionMm },
+      targetMm: { ...originalPose.targetMm }
+    };
+    const snapshot = capturePrintPlatformReturnSnapshot(null, sourceIdentity, pose);
+    pose.cameraPositionMm.x = 999;
+    pose.targetMm.z = 999;
+
+    expect(snapshot).toEqual({ sourceIdentity, ...originalPose });
+  });
+
+  it('同一来源重复俯视不覆盖最初快照', () => {
+    const first = capturePrintPlatformReturnSnapshot(null, sourceIdentity, originalPose);
+    const repeated = capturePrintPlatformReturnSnapshot(first, sourceIdentity, {
+      cameraPositionMm: { x: 0, y: 500, z: 0.5 },
+      targetMm: { x: 0, y: 0, z: 0 }
+    });
+
+    expect(repeated).toBe(first);
+    expect(repeated.cameraPositionMm).toEqual(originalPose.cameraPositionMm);
+  });
+
+  it('来源变化后捕获新来源视角，并拒绝返回旧来源', () => {
+    const first = capturePrintPlatformReturnSnapshot(null, sourceIdentity, originalPose);
+    const next = capturePrintPlatformReturnSnapshot(first, 'cad:revision-2', {
+      cameraPositionMm: { x: -20, y: 70, z: 90 },
+      targetMm: { x: 2, y: 0, z: 3 }
+    });
+
+    expect(next.sourceIdentity).toBe('cad:revision-2');
+    expect(resolvePrintPlatformReturnSnapshot(first, { sourceIdentity: 'cad:revision-2' })).toBeNull();
+    expect(resolvePrintPlatformReturnSnapshot(next, { sourceIdentity: 'cad:revision-2' })).toBe(next);
+    expect(resolvePrintPlatformReturnSnapshot(next, null)).toBeNull();
+  });
+
+  it('返回请求与俯视请求共享递增编号但保持独立类型', () => {
+    const topView = createNextPrintPlatformViewRequest(null, overlay({ sourceIdentity }));
+    const returnView = createNextPrintPlatformReturnViewRequest(topView, sourceIdentity);
+
+    expect(topView.kind).toBe('top-view');
+    expect(returnView).toEqual({ kind: 'return-view', id: 2, sourceIdentity });
+  });
+
+  it('拒绝空来源、非有限坐标和相机目标重合', () => {
+    expect(() => capturePrintPlatformReturnSnapshot(null, ' ', originalPose)).toThrow('原视角来源身份不能为空');
+    expect(() => capturePrintPlatformReturnSnapshot(null, sourceIdentity, {
+      ...originalPose,
+      cameraPositionMm: { x: Number.NaN, y: 1, z: 2 }
+    })).toThrow('原视角相机位置X 必须是有限毫米数值');
+    expect(() => capturePrintPlatformReturnSnapshot(null, sourceIdentity, {
+      cameraPositionMm: { x: 1, y: 2, z: 3 },
+      targetMm: { x: 1, y: 2, z: 3 }
+    })).toThrow('相机位置不能与控制器目标重合');
+    expect(() => createNextPrintPlatformReturnViewRequest(null, ' ')).toThrow('返回视角来源身份不能为空');
   });
 });
