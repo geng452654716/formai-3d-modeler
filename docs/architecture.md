@@ -890,4 +890,14 @@ nestingDepth: 二维包含深度
 
 2026-07-23 第 80 阶段验证：针对性测试 12/12，完整前端测试 305/305，TypeScript/Vite 构建和差异检查通过。浏览器确认床面、中心十字和方向标签渲染正常，标签事件穿透、视角旋转与版本隔离有效，来源变化同步清理，Console 为 0 个错误、0 个警告。
 
-**下一阶段架构方向：**在 `PrintPlatformBedGuide` 旁增加独立的毫米网格纯几何协议，根据物理边界裁剪 10 毫米与 50 毫米线段并生成 X/Z 刻度锚点；渲染层批量复用只读线段和事件穿透标签，不修改现有床面、相机、Store、版本或导出契约。
+### 81. 打印平台毫米网格与坐标刻度架构（已实现）
+
+- `src/model/printPlatformOverlay.ts` 新增 `PrintPlatformGridGuide`、`PrintPlatformGridLine`、`PrintPlatformGridTick`、`createPrintPlatformGridGuide` 与 `resolvePrintPlatformGridGuide`。协议只读取 `sourceIdentity` 和 `platformBoundsMm`，固定输出 10/50 毫米间距、主次线段与刻度锚点。
+- 坐标生成先用边界除以 10 的整数索引求首末值，避免逐毫米扫描和浮点累积；每轴最多允许 1024 个坐标，非有限、退化或异常超大范围由严格函数抛出中文错误，安全解析入口返回 `null`。
+- X 坐标线使用固定 X 并沿 `minimumZ → maximumZ` 裁剪，Z 坐标线使用固定 Z 并沿 `minimumX → maximumX` 裁剪；每 5 个次网格索引自然落在 50 毫米主网格。正数刻度带“+”，零点统一为数值 0，避免 `-0` 文案。
+- `PrintPlatformOverlayLayer` 在床面之后批量绘制低透明度主次 `Line`，统一关闭 `depthWrite`、`depthTest` 和 `raycast`；刻度 `Html` 设置 `pointer-events: none` 并带只读数据属性，中心十字、安全边界、对象占地和越界高亮继续使用更高显示层级。
+- 网格由现有打印平台叠加即时派生，不增加 Zustand 字段，也不进入版本、撤销重做、项目序列化、相机请求或 STL/STEP/3MF 导出；来源变化沿用既有叠加生命周期自动清除。
+
+2026-07-23 第 81 阶段验证：针对性测试 16/16，完整前端测试 309/309，TypeScript/Vite 构建和差异检查通过。自动测试覆盖 P1S、非对称跨零、不跨零、主次分类、严格裁剪、中文刻度、来源切换、非法退化和异常超大范围；浏览器验证 10 个主刻度、事件穿透、真实旋转、版本隔离与来源清理，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**建立独立的多对象平台占地聚合协议，从当前可打印对象的世界空间 X/Z 边界派生单对象条目、联合边界和平台适配摘要；先保持只读临时状态，不复用单对象修正命令，也不修改装配变换、版本和几何导出契约。

@@ -47,6 +47,7 @@ import {
   createPrintPlatformBoundarySegment,
   createPrintPlatformRectanglePoints,
   resolvePrintPlatformBedGuide,
+  resolvePrintPlatformGridGuide,
   type PrintPlatformOverlay
 } from '../model/printPlatformOverlay';
 import {
@@ -2035,6 +2036,7 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
 function PrintPlatformOverlayLayer() {
   const overlay = useModelStore((state) => state.printPlatformOverlay);
   const bedGuide = resolvePrintPlatformBedGuide(overlay);
+  const gridGuide = resolvePrintPlatformGridGuide(overlay);
   if (!overlay || !bedGuide) return null;
 
   const objectColor = overlay.status === 'inside'
@@ -2064,6 +2066,53 @@ function PrintPlatformOverlayLayer() {
           depthWrite={false}
         />
       </mesh>
+      {gridGuide?.minorLines.map((line) => (
+        <Line
+          key={`次网格-${line.axis}-${line.coordinateMm}`}
+          points={line.points}
+          color="#7890a2"
+          lineWidth={0.55}
+          transparent
+          opacity={0.16}
+          depthTest={false}
+          depthWrite={false}
+          raycast={() => undefined}
+          renderOrder={18}
+        />
+      ))}
+      {gridGuide?.majorLines.map((line) => (
+        <Line
+          key={`主网格-${line.axis}-${line.coordinateMm}`}
+          points={line.points}
+          color="#8aaec4"
+          lineWidth={0.95}
+          transparent
+          opacity={0.34}
+          depthTest={false}
+          depthWrite={false}
+          raycast={() => undefined}
+          renderOrder={18}
+        />
+      ))}
+      {gridGuide?.ticks.map((tick) => (
+        <Html
+          key={`坐标刻度-${tick.axis}-${tick.coordinateMm}`}
+          position={[tick.positionMm.x, tick.positionMm.y, tick.positionMm.z]}
+          center
+          zIndexRange={[3, 0]}
+          style={{ pointerEvents: 'none' }}
+        >
+          <div
+            className={`print-platform-grid-tick ${tick.axis === 'x' ? 'x-axis' : 'z-axis'}`}
+            data-print-platform-grid-tick={tick.text}
+            data-axis={tick.axis}
+            data-coordinate-mm={tick.coordinateMm}
+            aria-hidden="true"
+          >
+            {tick.text}
+          </div>
+        </Html>
+      ))}
       {bedGuide.centerCrossSegments.map((points, index) => (
         <Line
           key={index === 0 ? '中心横线' : '中心纵线'}

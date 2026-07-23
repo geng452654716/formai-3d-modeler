@@ -26,6 +26,29 @@ export interface PrintPlatformBedGuide {
   frontLabelPositionMm: { x: number; y: number; z: number };
 }
 
+export interface PrintPlatformGridLine {
+  axis: 'x' | 'z';
+  coordinateMm: number;
+  kind: 'minor' | 'major';
+  points: [[number, number, number], [number, number, number]];
+}
+
+export interface PrintPlatformGridTick {
+  axis: 'x' | 'z';
+  coordinateMm: number;
+  text: string;
+  positionMm: { x: number; y: number; z: number };
+}
+
+export interface PrintPlatformGridGuide {
+  sourceIdentity: string;
+  minorSpacingMm: 10;
+  majorSpacingMm: 50;
+  minorLines: PrintPlatformGridLine[];
+  majorLines: PrintPlatformGridLine[];
+  ticks: PrintPlatformGridTick[];
+}
+
 export interface PrintPlatformOverlay {
   sourceIdentity: string;
   objectId: string;
@@ -225,6 +248,100 @@ export function resolvePrintPlatformBedGuide(
   if (!overlay) return null;
   try {
     return createPrintPlatformBedGuide(overlay);
+  } catch {
+    return null;
+  }
+}
+
+
+const PRINT_PLATFORM_GRID_MINOR_SPACING_MM = 10 as const;
+const PRINT_PLATFORM_GRID_MAJOR_SPACING_MM = 50 as const;
+const PRINT_PLATFORM_GRID_HEIGHT_MM = 0.025;
+const PRINT_PLATFORM_GRID_TICK_HEIGHT_MM = 0.22;
+const PRINT_PLATFORM_GRID_TICK_MAX_EDGE_INSET_MM = 6;
+const PRINT_PLATFORM_GRID_MAX_COORDINATES_PER_AXIS = 1024;
+
+function createPrintPlatformGridCoordinates(minimumMm: number, maximumMm: number): number[] {
+  const firstIndex = Math.ceil(minimumMm / PRINT_PLATFORM_GRID_MINOR_SPACING_MM);
+  const lastIndex = Math.floor(maximumMm / PRINT_PLATFORM_GRID_MINOR_SPACING_MM);
+  const coordinateCount = Math.max(0, lastIndex - firstIndex + 1);
+  if (coordinateCount > PRINT_PLATFORM_GRID_MAX_COORDINATES_PER_AXIS) {
+    throw new Error('打印平台网格线数量超过安全上限');
+  }
+  return Array.from({ length: coordinateCount }, (_, offset) => {
+    const coordinateMm = (firstIndex + offset) * PRINT_PLATFORM_GRID_MINOR_SPACING_MM;
+    return Object.is(coordinateMm, -0) ? 0 : coordinateMm;
+  });
+}
+
+function createPrintPlatformGridTickText(axis: 'x' | 'z', coordinateMm: number) {
+  const signedCoordinate = coordinateMm > 0 ? `+${coordinateMm}` : `${coordinateMm}`;
+  return `${axis === 'x' ? 'X' : 'Z'} 轴 ${signedCoordinate} 毫米${coordinateMm === 0 ? '（原点）' : ''}`;
+}
+
+/**
+ * 从物理平台边界派生固定 10/50 毫米只读网格和坐标刻度。
+ * X 坐标线沿 Z 方向、Z 坐标线沿 X 方向，所有线段严格裁剪在平台边界内。
+ */
+export function createPrintPlatformGridGuide(
+  overlay: Pick<PrintPlatformOverlay, 'sourceIdentity' | 'platformBoundsMm'>
+): PrintPlatformGridGuide {
+  assertNonEmptyText(overlay.sourceIdentity, '打印平台网格来源身份');
+  const bounds = cloneFiniteBounds(overlay.platformBoundsMm, '打印平台网格边界');
+  const widthMm = bounds.maximumX - bounds.minimumX;
+  const depthMm = bounds.maximumZ - bounds.minimumZ;
+  if (widthMm <= 0 || depthMm <= 0) throw new Error('打印平台网格边界必须具有正宽度和正深度');
+
+  const xCoordinates = createPrintPlatformGridCoordinates(bounds.minimumX, bounds.maximumX);
+  const zCoordinates = createPrintPlatformGridCoordinates(bounds.minimumZ, bounds.maximumZ);
+  const xTickZ = bounds.minimumZ + Math.min(PRINT_PLATFORM_GRID_TICK_MAX_EDGE_INSET_MM, depthMm * 0.03);
+  const zTickX = bounds.minimumX + Math.min(PRINT_PLATFORM_GRID_TICK_MAX_EDGE_INSET_MM, widthMm * 0.03);
+  const lines = [
+    ...xCoordinates.map((coordinateMm): PrintPlatformGridLine => ({
+      axis: 'x',
+      coordinateMm,
+      kind: coordinateMm % PRINT_PLATFORM_GRID_MAJOR_SPACING_MM === 0 ? 'major' : 'minor',
+      points: [
+        [coordinateMm, PRINT_PLATFORM_GRID_HEIGHT_MM, bounds.minimumZ],
+        [coordinateMm, PRINT_PLATFORM_GRID_HEIGHT_MM, bounds.maximumZ]
+      ]
+    })),
+    ...zCoordinates.map((coordinateMm): PrintPlatformGridLine => ({
+      axis: 'z',
+      coordinateMm,
+      kind: coordinateMm % PRINT_PLATFORM_GRID_MAJOR_SPACING_MM === 0 ? 'major' : 'minor',
+      points: [
+        [bounds.minimumX, PRINT_PLATFORM_GRID_HEIGHT_MM, coordinateMm],
+        [bounds.maximumX, PRINT_PLATFORM_GRID_HEIGHT_MM, coordinateMm]
+      ]
+    }))
+  ];
+  const majorLines = lines.filter((line) => line.kind === 'major');
+
+  return {
+    sourceIdentity: overlay.sourceIdentity,
+    minorSpacingMm: PRINT_PLATFORM_GRID_MINOR_SPACING_MM,
+    majorSpacingMm: PRINT_PLATFORM_GRID_MAJOR_SPACING_MM,
+    minorLines: lines.filter((line) => line.kind === 'minor'),
+    majorLines,
+    ticks: majorLines.map((line) => ({
+      axis: line.axis,
+      coordinateMm: line.coordinateMm,
+      text: createPrintPlatformGridTickText(line.axis, line.coordinateMm),
+      positionMm: line.axis === 'x'
+        ? { x: line.coordinateMm, y: PRINT_PLATFORM_GRID_TICK_HEIGHT_MM, z: xTickZ }
+        : { x: zTickX, y: PRINT_PLATFORM_GRID_TICK_HEIGHT_MM, z: line.coordinateMm }
+    }))
+  };
+}
+
+/** 无有效来源或非法、非有限、退化、超大边界时不创建任何网格几何。 */
+export function resolvePrintPlatformGridGuide(
+  overlay: Pick<PrintPlatformOverlay, 'sourceIdentity' | 'platformBoundsMm'> | null
+): PrintPlatformGridGuide | null {
+  if (!overlay) return null;
+  try {
+    return createPrintPlatformGridGuide(overlay);
   } catch {
     return null;
   }
