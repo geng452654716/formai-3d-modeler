@@ -858,4 +858,15 @@ nestingDepth: 二维包含深度
 
 2026-07-22 架构验证：针对性测试 53/53、前端 28 个测试文件 288/288、生产构建和差异检查通过。自动测试覆盖 CAD 与通用上传模型身份、区域内外、单轴/双轴越界、对象过大、边距变化、无效输入、矩形坐标、四边映射、Store 非版本状态、旧来源保护和模型切换清理；真实浏览器覆盖安全边距刷新、视口旋转/缩放/平移、图例事件穿透、任意 STL 与安全修正后状态，Console 为 0 个错误、0 个警告。
 
-**下一阶段架构方向：**新增独立的打印平台相机适配请求和纯相机目标计算，把物理平台与对象占地并集转换为俯视中心、相机距离和控制器目标；请求保持临时且可重复消费，不进入模型版本、导出或打印分析来源身份。
+### 78. 打印平台叠加一键俯视与适配视野架构（已实现）
+
+- `src/model/printPlatformCamera.ts` 定义 `PrintPlatformTopView` 与 `PrintPlatformViewRequest`。`mergePrintPlatformViewBounds` 合并物理平台和对象 X/Z 边界，`createPrintPlatformTopView` 依据垂直视场角、视口宽高比和安全倍率计算并集中心、轨道目标和相机距离；所有来源、边界、视口与计算结果均执行有限值和退化校验。
+- `createNextPrintPlatformViewRequest` 只复制当前来源身份与本次平台/对象边界并生成递增编号；`resolvePrintPlatformTopViewRequest` 在消费前再次核对当前叠加来源，旧来源或已清理叠加返回 `null`，不把临时请求写入 Store。
+- `PrintPlatformCameraController` 在 `useFrame` 中使用约 0.46 秒 ease-out 动画同步插值 `camera.position` 与 `OrbitControls.target`。相机采用轻微 Z 偏移避免正俯视视线与 Three.js 默认 Y-up 完全共线，并按适配距离动态扩展远裁剪面。
+- 请求消费键由 `sourceIdentity + 请求编号` 组成，避免新来源编号重新从 1 开始时被旧请求误判；连续点击仍可生成并消费下一编号。非法请求、退化边界和来源不匹配不改变当前相机。
+- `PerspectiveCamera` 和 `OrbitControls` 放宽只读视口距离上限，使完整 256 × 256 毫米平台及更大通用对象可见；动画后控制器继续启用，不阻断旋转、缩放、平移或选择。
+- 视口 DOM 使用 `.print-platform-overlay-stack` 纵向排列图例和按钮；图例保持 `pointer-events:none`，按钮单独 `pointer-events:auto`。相机请求、动画和按钮状态不进入 `ModelVersion`、撤销重做、项目持久化、打印分析来源或几何导出。
+
+2026-07-23 架构验证：针对性测试 18/18、前端 29 个测试文件 297/297、生产构建和差异检查通过。自动测试覆盖平台内、单轴/双轴越界、对象大于平台、宽窄视口、连续请求、来源变化、请求边界复制、最小距离和非法输入；真实浏览器验证新旧来源编号同为 1 时，新来源首次请求仍改变 Canvas，版本保持且 Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**在视口组件内增加来源绑定的临时相机快照和双向平滑请求；首次俯视前捕获相机位置与控制器目标，重复俯视不覆盖，返回后消费并清除快照。快照不进入 Zustand 模型状态、版本、项目持久化或导出，来源失效时与俯视请求一起清理。

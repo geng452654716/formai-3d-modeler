@@ -35,6 +35,11 @@ import { getOuterDimensions } from '../model/defaults';
 import { degreesToRadians, describeObjectTransformChange, normalizeObjectPresentation } from '../model/objectTransform';
 import { describeCadSurfaceGeometryType, describeLocalCadFeaturePreview } from '../model/localCadFeature';
 import {
+  createNextPrintPlatformViewRequest,
+  resolvePrintPlatformTopViewRequest,
+  type PrintPlatformViewRequest
+} from '../model/printPlatformCamera';
+import {
   createPrintPlatformBoundarySegment,
   createPrintPlatformRectanglePoints,
   type PrintPlatformOverlay
@@ -2103,7 +2108,97 @@ function printPlatformOverflowDescriptions(overlay: PrintPlatformOverlay) {
     .map(([side, label]) => `${label}越界 ${overlay.overflowMm[side].toFixed(2)} 毫米`);
 }
 
-function ModelScene() {
+interface PrintPlatformCameraControllerProps {
+  request: PrintPlatformViewRequest | null;
+}
+
+interface ViewportOrbitControls {
+  target: Vector3;
+  update: () => void;
+}
+
+function viewportOrbitControls(value: unknown): ViewportOrbitControls | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<ViewportOrbitControls>;
+  if (!(candidate.target instanceof Vector3) || typeof candidate.update !== 'function') return null;
+  return candidate as ViewportOrbitControls;
+}
+
+/** 平滑执行一次性打印平台俯视请求，不把相机状态写入模型、版本或撤销栈。 */
+function PrintPlatformCameraController({ request }: PrintPlatformCameraControllerProps) {
+  const currentOverlay = useModelStore((state) => state.printPlatformOverlay);
+  const camera = useThree((state) => state.camera);
+  const size = useThree((state) => state.size);
+  const controls = useThree((state) => state.controls);
+  const handledRequestKey = useRef<string | null>(null);
+  const animation = useRef<{
+    sourceIdentity: string;
+    elapsedSeconds: number;
+    durationSeconds: number;
+    startPosition: Vector3;
+    endPosition: Vector3;
+    startTarget: Vector3;
+    endTarget: Vector3;
+  } | null>(null);
+
+  useFrame((_, deltaSeconds) => {
+    const orbitControls = viewportOrbitControls(controls);
+    const requestKey = request ? `${request.sourceIdentity}\u0000${request.id}` : null;
+    if (request && requestKey !== handledRequestKey.current && orbitControls) {
+      handledRequestKey.current = requestKey;
+      const verticalFovDeg = 'fov' in camera && typeof camera.fov === 'number' ? camera.fov : 34;
+      const view = resolvePrintPlatformTopViewRequest(
+        request,
+        currentOverlay,
+        { widthPx: size.width, heightPx: size.height },
+        verticalFovDeg
+      );
+      animation.current = view
+        ? {
+            sourceIdentity: view.sourceIdentity,
+            elapsedSeconds: 0,
+            durationSeconds: 0.46,
+            startPosition: camera.position.clone(),
+            endPosition: new Vector3(
+              view.cameraPositionMm.x,
+              view.cameraPositionMm.y,
+              view.cameraPositionMm.z
+            ),
+            startTarget: orbitControls.target.clone(),
+            endTarget: new Vector3(view.targetMm.x, view.targetMm.y, view.targetMm.z)
+          }
+        : null;
+      if (view && 'far' in camera && typeof camera.far === 'number' && camera.far < view.distanceMm * 4) {
+        camera.far = Math.max(5000, view.distanceMm * 4);
+        if ('updateProjectionMatrix' in camera && typeof camera.updateProjectionMatrix === 'function') {
+          camera.updateProjectionMatrix();
+        }
+      }
+    }
+
+    const active = animation.current;
+    if (!active || !orbitControls) return;
+    if (!currentOverlay || currentOverlay.sourceIdentity !== active.sourceIdentity) {
+      animation.current = null;
+      return;
+    }
+    active.elapsedSeconds += Math.min(deltaSeconds, 0.1);
+    const progress = Math.min(1, active.elapsedSeconds / active.durationSeconds);
+    const easedProgress = 1 - (1 - progress) ** 3;
+    camera.position.lerpVectors(active.startPosition, active.endPosition, easedProgress);
+    orbitControls.target.lerpVectors(active.startTarget, active.endTarget, easedProgress);
+    orbitControls.update();
+    if (progress >= 1) animation.current = null;
+  });
+
+  return null;
+}
+
+interface ModelSceneProps {
+  printPlatformViewRequest: PrintPlatformViewRequest | null;
+}
+
+function ModelScene({ printPlatformViewRequest }: ModelSceneProps) {
   const parameters = useModelStore((state) => state.parameters);
   const exploded = useModelStore((state) => state.exploded);
   const showBoard = useModelStore((state) => state.showBoard);
@@ -2207,14 +2302,15 @@ function ModelScene() {
       <color attach="background" args={['#17191d']} />
       <ambientLight intensity={0.7} />
       <directionalLight position={[60, 90, 40]} intensity={2.5} castShadow />
-      <PerspectiveCamera makeDefault position={[92, 70, 92]} fov={34} />
+      <PerspectiveCamera makeDefault position={[92, 70, 92]} fov={34} far={5000} />
       <OrbitControls
         makeDefault
         enabled={cadFaceSelectionMode !== 'box' && !(showUploadedStl && meshElementEditMode !== 'off' && meshElementSelectionMethod === 'box')}
         target={[0, 11, 0]}
         minDistance={55}
-        maxDistance={260}
+        maxDistance={1_000_000}
       />
+      <PrintPlatformCameraController request={printPlatformViewRequest} />
       <CadFaceBoxSelectionController />
       <MeshElementBoxSelectionController />
       <group onPointerMissed={() => selectObject(showUploadedStl ? 'uploaded-model' : cadResult?.parts[0]?.id ?? 'body')}>
@@ -2469,6 +2565,7 @@ export function ModelViewport() {
   const dragSerial = useRef(0);
   const [boxDragStart, setBoxDragStart] = useState<{ x: number; y: number } | null>(null);
   const [boxDragCurrent, setBoxDragCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [printPlatformViewRequest, setPrintPlatformViewRequest] = useState<PrintPlatformViewRequest | null>(null);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const cadError = useModelStore((state) => state.cadError);
@@ -2516,6 +2613,10 @@ export function ModelViewport() {
     && meshElementSelectionMethod === 'box'
   );
   const boxSelecting = cadFaceSelectionMode === 'box' || meshBoxSelecting;
+
+  useEffect(() => {
+    setPrintPlatformViewRequest(null);
+  }, [printPlatformOverlay?.sourceIdentity]);
 
   const statusText = {
     loading: '读取精确模型',
@@ -2578,23 +2679,36 @@ export function ModelViewport() {
   return (
     <div className={`viewport-canvas ${boxSelecting ? 'is-cad-box-selecting' : ''}`} ref={containerRef}>
       <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, preserveDrawingBuffer: true }}>
-        <ModelScene />
+        <ModelScene printPlatformViewRequest={printPlatformViewRequest} />
       </Canvas>
       {printPlatformOverlay && (
-        <aside
-          className={`print-platform-overlay-legend is-${printPlatformOverlay.status}`}
-          aria-label="打印平台三维视口图例"
-        >
-          <strong>打印平台预览</strong>
-          <span className="print-platform-overlay-source">{printPlatformOverlayStatusText(printPlatformOverlay)}</span>
-          <div className="print-platform-overlay-legend-row"><i className="is-platform" />物理平台边界</div>
-          <div className="print-platform-overlay-legend-row"><i className="is-effective" />安全有效区域 · 边距 {printPlatformOverlay.safetyMarginMm.toFixed(2)} 毫米</div>
-          <div className="print-platform-overlay-legend-row"><i className="is-object" />当前对象占地</div>
-          {printPlatformOverflowDescriptions(printPlatformOverlay).map((description) => (
-            <span key={description} className="print-platform-overlay-overflow">{description}</span>
-          ))}
-          <small>只读叠加，不移动对象、不创建版本，也不参与选择。</small>
-        </aside>
+        <div className="print-platform-overlay-stack">
+          <aside
+            className={`print-platform-overlay-legend is-${printPlatformOverlay.status}`}
+            aria-label="打印平台三维视口图例"
+          >
+            <strong>打印平台预览</strong>
+            <span className="print-platform-overlay-source">{printPlatformOverlayStatusText(printPlatformOverlay)}</span>
+            <div className="print-platform-overlay-legend-row"><i className="is-platform" />物理平台边界</div>
+            <div className="print-platform-overlay-legend-row"><i className="is-effective" />安全有效区域 · 边距 {printPlatformOverlay.safetyMarginMm.toFixed(2)} 毫米</div>
+            <div className="print-platform-overlay-legend-row"><i className="is-object" />当前对象占地</div>
+            {printPlatformOverflowDescriptions(printPlatformOverlay).map((description) => (
+              <span key={description} className="print-platform-overlay-overflow">{description}</span>
+            ))}
+            <small>只读叠加，不移动对象、不创建版本，也不参与选择。</small>
+          </aside>
+          <button
+            type="button"
+            className="print-platform-top-view-button"
+            title="从正上方查看并适配完整打印平台与当前对象"
+            aria-label="俯视并适配打印平台"
+            onClick={() => setPrintPlatformViewRequest((previous) => (
+              createNextPrintPlatformViewRequest(previous, printPlatformOverlay)
+            ))}
+          >
+            俯视并适配平台
+          </button>
+        </div>
       )}
       {boxSelecting && (
         <div
