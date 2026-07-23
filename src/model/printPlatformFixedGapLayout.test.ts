@@ -63,7 +63,14 @@ function plan(
   objects: PrintPlatformObjectFootprint[],
   selected: string[],
   operation: PrintPlatformFixedGapOperation,
-  options: { clearance?: number; gap?: number; locked?: string[]; bounds?: typeof effective; anchorMode?: PrintPlatformFixedGapAnchorMode } = {}
+  options: {
+    clearance?: number;
+    gap?: number;
+    locked?: string[];
+    bounds?: typeof effective;
+    anchorMode?: PrintPlatformFixedGapAnchorMode;
+    anchorObjectId?: string | null;
+  } = {}
 ) {
   return createPrintPlatformFixedGapPlan(
     preview(objects),
@@ -73,7 +80,8 @@ function plan(
     options.locked ?? [],
     selected,
     operation,
-    options.anchorMode
+    options.anchorMode,
+    options.anchorObjectId
   );
 }
 
@@ -218,6 +226,118 @@ describe('打印平台多对象固定净间距分布', () => {
     expect(second.sourceIdentity).toBe(first.sourceIdentity);
     expect(second.placements.map((placement) => [placement.objectId, placement.targetBoundsMm]).sort())
       .toEqual(first.placements.map((placement) => [placement.objectId, placement.targetBoundsMm]).sort());
+  });
+
+  it('指定内部对象为 X 轴锚点时向两侧按不同尺寸边界递推', () => {
+    const result = plan([
+      candidate('first', 10, 20, 12, 10),
+      candidate('middle', 50, 24, 20, 12),
+      candidate('last', 100, 28, 8, 6)
+    ], ['last', 'first', 'middle'], 'distribute-x-fixed-gap', {
+      clearance: 3,
+      gap: 5,
+      anchorMode: 'keep-selected',
+      anchorObjectId: 'middle'
+    });
+
+    expect(result).toMatchObject({ anchorMode: 'keep-selected', anchorObjectId: 'middle', canApply: true });
+    expect(selectedPlacement(result, 'middle')).toMatchObject({
+      fixedAnchor: true,
+      moved: false,
+      targetCenterMm: { x: 60, z: 30 },
+      sequenceIndex: 1
+    });
+    expect(selectedPlacement(result, 'first')).toMatchObject({
+      targetCenterMm: { x: 39, z: 25 },
+      deltaMm: { x: 23, z: 0 },
+      sequenceIndex: 0
+    });
+    expect(selectedPlacement(result, 'middle').previousGapMm).toBe(5);
+    expect(selectedPlacement(result, 'last')).toMatchObject({
+      targetCenterMm: { x: 79, z: 31 },
+      deltaMm: { x: -25, z: 0 },
+      previousGapMm: 5,
+      sequenceIndex: 2
+    });
+  });
+
+  it('指定内部对象为 Z 轴锚点时只改变两侧对象的 Z 中心', () => {
+    const result = plan([
+      candidate('first', 10, 10, 12, 6),
+      candidate('middle', 40, 50, 8, 14),
+      candidate('last', 80, 100, 10, 10)
+    ], ['first', 'middle', 'last'], 'distribute-z-fixed-gap', {
+      clearance: 2,
+      gap: 7,
+      anchorMode: 'keep-selected',
+      anchorObjectId: 'middle'
+    });
+
+    expect(selectedPlacement(result, 'middle')).toMatchObject({ fixedAnchor: true, moved: false });
+    expect(selectedPlacement(result, 'first')).toMatchObject({
+      targetCenterMm: { x: 16, z: 40 },
+      deltaMm: { x: 0, z: 27 }
+    });
+    expect(selectedPlacement(result, 'last')).toMatchObject({
+      targetCenterMm: { x: 85, z: 76 },
+      deltaMm: { x: 0, z: -29 },
+      previousGapMm: 7
+    });
+  });
+
+  it('指定锚点对象进入来源身份且输入顺序不改变同一方案', () => {
+    const objects = [
+      candidate('first', 10, 10),
+      candidate('middle', 45, 30, 12),
+      candidate('last', 90, 50, 8)
+    ];
+    const first = plan(objects, ['first', 'middle', 'last'], 'distribute-x-fixed-gap', {
+      gap: 6,
+      anchorMode: 'keep-selected',
+      anchorObjectId: 'middle'
+    });
+    const reordered = plan([...objects].reverse(), ['last', 'middle', 'first'], 'distribute-x-fixed-gap', {
+      gap: 6,
+      anchorMode: 'keep-selected',
+      anchorObjectId: 'middle'
+    });
+    const changedAnchor = plan(objects, ['first', 'middle', 'last'], 'distribute-x-fixed-gap', {
+      gap: 6,
+      anchorMode: 'keep-selected',
+      anchorObjectId: 'last'
+    });
+
+    expect(first.sourceIdentity).toContain('锚点:keep-selected');
+    expect(first.sourceIdentity).toContain('锚点对象:middle');
+    expect(reordered.sourceIdentity).toBe(first.sourceIdentity);
+    expect(changedAnchor.sourceIdentity).not.toBe(first.sourceIdentity);
+    expect(reordered.placements.map((placement) => [placement.objectId, placement.targetBoundsMm]).sort())
+      .toEqual(first.placements.map((placement) => [placement.objectId, placement.targetBoundsMm]).sort());
+  });
+
+  it('指定锚点失效时回退到稳定身份最小的已选对象', () => {
+    const objects = [
+      candidate('z', 10, 10, 10, 8, '来源:z'),
+      candidate('a-2', 50, 30, 10, 8, '来源:a'),
+      candidate('a-1', 90, 50, 10, 8, '来源:a')
+    ];
+    const first = plan(objects, ['z', 'a-2', 'a-1'], 'distribute-x-fixed-gap', {
+      clearance: 0,
+      gap: 4,
+      anchorMode: 'keep-selected',
+      anchorObjectId: 'missing'
+    });
+    const reordered = plan([...objects].reverse(), ['a-1', 'z', 'a-2'], 'distribute-x-fixed-gap', {
+      clearance: 0,
+      gap: 4,
+      anchorMode: 'keep-selected',
+      anchorObjectId: null
+    });
+
+    expect(first.anchorObjectId).toBe('a-1');
+    expect(selectedPlacement(first, 'a-1').fixedAnchor).toBe(true);
+    expect(first.sourceIdentity).toContain('锚点对象:a-1');
+    expect(reordered.sourceIdentity).toBe(first.sourceIdentity);
   });
 
   it('拒绝小于安全间距的目标净间距', () => {

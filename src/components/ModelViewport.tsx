@@ -2708,7 +2708,19 @@ function printPlatformFixedGapOperationText(operation: PrintPlatformFixedGapOper
 }
 
 function printPlatformFixedGapAnchorModeText(anchorMode: PrintPlatformFixedGapAnchorMode) {
-  return anchorMode === 'keep-first' ? '保持首对象不动' : '保持末对象不动';
+  if (anchorMode === 'keep-first') return '保持首对象不动';
+  if (anchorMode === 'keep-last') return '保持末对象不动';
+  return '指定对象不动';
+}
+
+function printPlatformFixedGapAnchorObjectText(plan: PrintPlatformFixedGapPlan) {
+  return plan.placements.find((placement) => placement.objectId === plan.anchorObjectId)?.objectLabel ?? '未解析';
+}
+
+function printPlatformFixedGapVersionAnchorText(plan: PrintPlatformFixedGapPlan) {
+  return plan.anchorMode === 'keep-selected'
+    ? `指定“${printPlatformFixedGapAnchorObjectText(plan)}”不动`
+    : printPlatformFixedGapAnchorModeText(plan.anchorMode);
 }
 
 function printPlatformFixedGapStatusText(plan: PrintPlatformFixedGapPlan) {
@@ -3324,6 +3336,7 @@ export function ModelViewport() {
   } | null>(null);
   const [printPlatformFixedGapInput, setPrintPlatformFixedGapInput] = useState('2');
   const [printPlatformFixedGapAnchorMode, setPrintPlatformFixedGapAnchorMode] = useState<PrintPlatformFixedGapAnchorMode>('keep-first');
+  const [printPlatformFixedGapAnchorObjectId, setPrintPlatformFixedGapAnchorObjectId] = useState<string | null>(null);
   const [printPlatformFixedGapPreviewRequest, setPrintPlatformFixedGapPreviewRequest] = useState<{
     operation: PrintPlatformFixedGapOperation;
     sourceIdentity: string;
@@ -3406,6 +3419,9 @@ export function ModelViewport() {
   const resolvedPrintPlatformAlignmentReferenceObjectId = printPlatformAlignmentSelectedObjectIds.includes(printPlatformAlignmentReferenceObjectId ?? '')
     ? printPlatformAlignmentReferenceObjectId
     : printPlatformAlignmentSelectedObjects[0]?.objectId ?? null;
+  const resolvedPrintPlatformFixedGapAnchorObjectId = printPlatformAlignmentSelectedObjectIds.includes(printPlatformFixedGapAnchorObjectId ?? '')
+    ? printPlatformFixedGapAnchorObjectId
+    : printPlatformAlignmentSelectedObjects[0]?.objectId ?? null;
   const printPlatformAlignmentPlan = useMemo(() => {
     if (
       !printPlatformAlignmentPreviewRequest
@@ -3462,7 +3478,8 @@ export function ModelViewport() {
         printPlatformLockedObjectIds,
         printPlatformAlignmentSelectedObjectIds,
         printPlatformFixedGapPreviewRequest.operation,
-        printPlatformFixedGapAnchorMode
+        printPlatformFixedGapAnchorMode,
+        resolvedPrintPlatformFixedGapAnchorObjectId
       );
     } catch {
       return null;
@@ -3474,6 +3491,7 @@ export function ModelViewport() {
     printPlatformSpacingState.diagnostic,
     printPlatformFixedGapInputState.value,
     printPlatformFixedGapAnchorMode,
+    resolvedPrintPlatformFixedGapAnchorObjectId,
     printPlatformLockedObjectIds,
     printPlatformAlignmentSelectedObjectIds
   ]);
@@ -3545,6 +3563,8 @@ export function ModelViewport() {
         : [...previous, objectId].sort()
     ));
     setPrintPlatformAlignmentSelectedObjectIds((previous) => previous.filter((candidate) => candidate !== objectId));
+    setPrintPlatformFixedGapAnchorObjectId((previous) => previous === objectId ? null : previous);
+    setPrintPlatformFixedGapPreviewRequest(null);
   };
 
   const togglePrintPlatformAlignmentObject = (objectId: string) => {
@@ -3554,6 +3574,10 @@ export function ModelViewport() {
         ? previous.filter((candidate) => candidate !== objectId)
         : [...previous, objectId].sort()
     ));
+    setPrintPlatformFixedGapAnchorObjectId((previous) => (
+      printPlatformAlignmentSelectedObjectIds.includes(objectId) && previous === objectId ? null : previous
+    ));
+    setPrintPlatformFixedGapPreviewRequest(null);
   };
 
   const createPrintPlatformAlignmentPreview = (operation: PrintPlatformAlignmentOperation) => {
@@ -3589,7 +3613,8 @@ export function ModelViewport() {
       printPlatformLockedObjectIds,
       printPlatformAlignmentSelectedObjectIds,
       operation,
-      printPlatformFixedGapAnchorMode
+      printPlatformFixedGapAnchorMode,
+      resolvedPrintPlatformFixedGapAnchorObjectId
     );
     setPrintPlatformLayoutPreviewSourceIdentity(null);
     setPrintPlatformManualLayoutSession(null);
@@ -3762,7 +3787,7 @@ export function ModelViewport() {
       });
     const applied = applyObjectPresentationBatch(
       updates,
-      `${printPlatformFixedGapOperationText(activePrintPlatformFixedGapPlan.operation)}（${printPlatformFixedGapAnchorModeText(activePrintPlatformFixedGapPlan.anchorMode)}）${activePrintPlatformFixedGapPlan.selectedObjectCount} 个打印对象`
+      `${printPlatformFixedGapOperationText(activePrintPlatformFixedGapPlan.operation)}（${printPlatformFixedGapVersionAnchorText(activePrintPlatformFixedGapPlan)}）${activePrintPlatformFixedGapPlan.selectedObjectCount} 个打印对象`
     );
     if (applied) setPrintPlatformFixedGapPreviewRequest(null);
   };
@@ -4145,8 +4170,32 @@ export function ModelViewport() {
                             >
                               <option value="keep-first">保持首对象不动</option>
                               <option value="keep-last">保持末对象不动</option>
+                              <option value="keep-selected">指定对象不动</option>
                             </select>
                           </label>
+                          {printPlatformFixedGapAnchorMode === 'keep-selected' && (
+                            <label className="print-platform-fixed-gap-anchor">
+                              <span>指定锚点对象</span>
+                              <select
+                                aria-label="固定净间距指定锚点对象"
+                                data-print-platform-fixed-gap-anchor-object
+                                value={resolvedPrintPlatformFixedGapAnchorObjectId ?? ''}
+                                disabled={
+                                  printPlatformAlignmentSelectedObjects.length === 0
+                                  || Boolean(activePrintPlatformAlignmentPlan)
+                                  || Boolean(activePrintPlatformFixedGapPlan)
+                                }
+                                onChange={(event) => {
+                                  setPrintPlatformFixedGapAnchorObjectId(event.target.value || null);
+                                  setPrintPlatformFixedGapPreviewRequest(null);
+                                }}
+                              >
+                                {printPlatformAlignmentSelectedObjects.map((object) => (
+                                  <option key={object.sourceIdentity} value={object.objectId}>{object.objectLabel}</option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
                           {printPlatformFixedGapInputState.error && (
                             <small className="print-platform-alignment-error">{printPlatformFixedGapInputState.error}</small>
                           )}
@@ -4171,7 +4220,7 @@ export function ModelViewport() {
                               </button>
                             ))}
                           </div>
-                          <small>{printPlatformFixedGapAnchorMode === 'keep-first' ? '保持空间顺序第一个对象不动，并向正方向按边界递推。' : '保持空间顺序最后一个对象不动，并向负方向按边界反向递推。'}目标净间距不得小于当前安全间距。</small>
+                          <small>{printPlatformFixedGapAnchorMode === 'keep-first' ? '保持空间顺序第一个对象不动，并向正方向按边界递推。' : printPlatformFixedGapAnchorMode === 'keep-last' ? '保持空间顺序最后一个对象不动，并向负方向按边界反向递推。' : '保持指定对象当前中心不动，前方对象向负方向、后方对象向正方向按边界递推。'}目标净间距不得小于当前安全间距。</small>
                         </div>
                         {activePrintPlatformFixedGapPlan && (
                           <section
@@ -4183,7 +4232,7 @@ export function ModelViewport() {
                             <strong>{printPlatformFixedGapOperationText(activePrintPlatformFixedGapPlan.operation)}预览 · {printPlatformFixedGapAnchorModeText(activePrintPlatformFixedGapPlan.anchorMode)}</strong>
                             <span>{printPlatformFixedGapStatusText(activePrintPlatformFixedGapPlan)}</span>
                             <small>
-                              锚点模式 {printPlatformFixedGapAnchorModeText(activePrintPlatformFixedGapPlan.anchorMode)} · 已选 {activePrintPlatformFixedGapPlan.selectedObjectCount} 个 · 实际移动 {activePrintPlatformFixedGapPlan.changedObjectCount} 个 · 锁定约束 {activePrintPlatformFixedGapPlan.lockedObjectCount} 个 · 目标净间距 {activePrintPlatformFixedGapPlan.targetGapMm.toFixed(2)} 毫米 · 安全间距 {activePrintPlatformFixedGapPlan.clearanceMm.toFixed(2)} 毫米 · 总位移 {activePrintPlatformFixedGapPlan.totalDistanceMm.toFixed(2)} 毫米
+                              锚点模式 {printPlatformFixedGapAnchorModeText(activePrintPlatformFixedGapPlan.anchorMode)} · 锚点对象 {printPlatformFixedGapAnchorObjectText(activePrintPlatformFixedGapPlan)} · 已选 {activePrintPlatformFixedGapPlan.selectedObjectCount} 个 · 实际移动 {activePrintPlatformFixedGapPlan.changedObjectCount} 个 · 锁定约束 {activePrintPlatformFixedGapPlan.lockedObjectCount} 个 · 目标净间距 {activePrintPlatformFixedGapPlan.targetGapMm.toFixed(2)} 毫米 · 安全间距 {activePrintPlatformFixedGapPlan.clearanceMm.toFixed(2)} 毫米 · 总位移 {activePrintPlatformFixedGapPlan.totalDistanceMm.toFixed(2)} 毫米
                             </small>
                             {activePrintPlatformFixedGapPlan.failureReason && (
                               <small className="print-platform-alignment-error">{activePrintPlatformFixedGapPlan.failureReason}</small>
@@ -4219,7 +4268,7 @@ export function ModelViewport() {
                                 取消预览
                               </button>
                             </div>
-                            <div className="print-platform-overlay-legend-row"><i className="is-alignment-reference" />{activePrintPlatformFixedGapPlan.anchorMode === 'keep-first' ? '首对象固定锚点' : '末对象固定锚点'}</div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-alignment-reference" />“{printPlatformFixedGapAnchorObjectText(activePrintPlatformFixedGapPlan)}”固定锚点</div>
                             <div className="print-platform-overlay-legend-row"><i className="is-alignment-valid" />合法目标</div>
                             <div className="print-platform-overlay-legend-row"><i className="is-alignment-invalid" />越界或间距冲突</div>
                           </section>
