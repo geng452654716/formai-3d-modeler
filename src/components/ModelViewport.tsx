@@ -43,7 +43,12 @@ import {
   type PrintPlatformReturnSnapshot,
   type PrintPlatformViewRequest
 } from '../model/printPlatformCamera';
-import type { PrintPlatformMultiObjectPreview } from '../model/printPlatformMultiObject';
+import {
+  createPrintPlatformMultiObjectSpacingDiagnostic,
+  type PrintPlatformMultiObjectPreview,
+  type PrintPlatformMultiObjectSpacingDiagnostic,
+  type PrintPlatformObjectPairDiagnostic
+} from '../model/printPlatformMultiObject';
 import {
   createPrintPlatformBoundarySegment,
   createPrintPlatformRectanglePoints,
@@ -2037,7 +2042,11 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
 } as const;
 
 /** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
-function PrintPlatformOverlayLayer() {
+interface PrintPlatformOverlayLayerProps {
+  spacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
+}
+
+function PrintPlatformOverlayLayer({ spacingDiagnostic }: PrintPlatformOverlayLayerProps) {
   const overlay = useModelStore((state) => state.printPlatformOverlay);
   const multiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
   const bedGuide = resolvePrintPlatformBedGuide(overlay);
@@ -2208,6 +2217,43 @@ function PrintPlatformOverlayLayer() {
           renderOrder={24}
         />
       )}
+      {spacingDiagnostic?.pairs.filter((pair) => pair.status !== 'safe').map((pair) => (
+        pair.overlapBoundsMm ? (
+          <Line
+            key={`对象重叠-${pair.sourceIdentity}`}
+            points={createPrintPlatformRectanglePoints(
+              pair.overlapBoundsMm,
+              PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.highlight + 0.01
+            )}
+            color="#ff5f70"
+            lineWidth={4}
+            dashed
+            dashSize={3}
+            gapSize={1.5}
+            depthTest={false}
+            depthWrite={false}
+            raycast={() => undefined}
+            renderOrder={26}
+          />
+        ) : (
+          <Line
+            key={`对象间距不足-${pair.sourceIdentity}`}
+            points={[
+              [pair.connectionStartMm.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.highlight + 0.01, pair.connectionStartMm.z],
+              [pair.connectionEndMm.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.highlight + 0.01, pair.connectionEndMm.z]
+            ]}
+            color="#ff9e45"
+            lineWidth={3.2}
+            dashed
+            dashSize={1.5}
+            gapSize={1}
+            depthTest={false}
+            depthWrite={false}
+            raycast={() => undefined}
+            renderOrder={26}
+          />
+        )
+      ))}
       {highlightedSides.map(([side]) => (
         <Line
           key={side}
@@ -2263,6 +2309,28 @@ function printPlatformObjectFootprintStatusText(
   if (object.status === 'too-large') return `${object.objectLabel}：${size}，尺寸过大`;
   if (object.fitsPlatform) return `${object.objectLabel}：${size}，超出安全区域`;
   return `${object.objectLabel}：${size}，超出物理平台`;
+}
+
+function printPlatformSpacingStatusText(diagnostic: PrintPlatformMultiObjectSpacingDiagnostic) {
+  if (diagnostic.status === 'empty') return '可打印对象少于 2 个，无需执行对象间距诊断';
+  if (diagnostic.status === 'overlap') {
+    return `发现 ${diagnostic.overlapCount} 组对象水平占地重叠`;
+  }
+  if (diagnostic.status === 'too-close') {
+    return `发现 ${diagnostic.tooCloseCount} 组对象间距不足`;
+  }
+  return `全部 ${diagnostic.pairCount} 组对象对均满足安全间距`;
+}
+
+function printPlatformSpacingPairText(pair: PrintPlatformObjectPairDiagnostic) {
+  const labels = `${pair.firstObjectLabel} ↔ ${pair.secondObjectLabel}`;
+  if (pair.status === 'overlap') {
+    return `${labels}：重叠 ${pair.overlapXMm.toFixed(2)} × ${pair.overlapZMm.toFixed(2)} 毫米（${pair.overlapAreaMm2.toFixed(2)} 平方毫米），至少还需分离 ${pair.requiredAdditionalMm.toFixed(2)} 毫米`;
+  }
+  if (pair.status === 'too-close') {
+    return `${labels}：当前最近间距 ${pair.distanceMm.toFixed(2)} 毫米，还需增加 ${pair.requiredAdditionalMm.toFixed(2)} 毫米`;
+  }
+  return `${labels}：最近间距 ${pair.distanceMm.toFixed(2)} 毫米，满足要求`;
 }
 
 interface PrintPlatformCameraControllerProps {
@@ -2427,11 +2495,13 @@ function PrintPlatformCameraController({
 
 interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
+  printPlatformSpacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
   onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
 function ModelScene({
   printPlatformViewRequest,
+  printPlatformSpacingDiagnostic,
   onPrintPlatformReturnSnapshotSourceChange
 }: ModelSceneProps) {
   const parameters = useModelStore((state) => state.parameters);
@@ -2792,7 +2862,7 @@ function ModelScene({
         fadeStrength={1}
         infiniteGrid
       />
-      <PrintPlatformOverlayLayer />
+      <PrintPlatformOverlayLayer spacingDiagnostic={printPlatformSpacingDiagnostic} />
       <ContactShadows position={[0, 0.02, 0]} opacity={0.5} scale={150} blur={2.6} far={80} />
     </>
   );
@@ -2805,6 +2875,7 @@ export function ModelViewport() {
   const [boxDragCurrent, setBoxDragCurrent] = useState<{ x: number; y: number } | null>(null);
   const [printPlatformViewRequest, setPrintPlatformViewRequest] = useState<PrintPlatformViewRequest | null>(null);
   const [printPlatformReturnSourceIdentity, setPrintPlatformReturnSourceIdentity] = useState<string | null>(null);
+  const [printPlatformSpacingClearanceInput, setPrintPlatformSpacingClearanceInput] = useState('2');
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const cadError = useModelStore((state) => state.cadError);
@@ -2835,6 +2906,26 @@ export function ModelViewport() {
   const versionGeometryComparisonSnapshot = useModelStore((state) => state.versionGeometryComparisonSnapshot);
   const printPlatformOverlay = useModelStore((state) => state.printPlatformOverlay);
   const printPlatformMultiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
+  const printPlatformSpacingState = useMemo(() => {
+    if (!printPlatformMultiObjectPreview) return { diagnostic: null, error: null };
+    const parsedClearance = printPlatformSpacingClearanceInput.trim() === ''
+      ? Number.NaN
+      : Number(printPlatformSpacingClearanceInput);
+    try {
+      return {
+        diagnostic: createPrintPlatformMultiObjectSpacingDiagnostic(
+          printPlatformMultiObjectPreview,
+          parsedClearance
+        ),
+        error: null
+      };
+    } catch {
+      return {
+        diagnostic: createPrintPlatformMultiObjectSpacingDiagnostic(printPlatformMultiObjectPreview, 2),
+        error: '安全间距必须是大于或等于 0 的有限毫米值，当前按默认 2.00 毫米诊断。'
+      };
+    }
+  }, [printPlatformMultiObjectPreview, printPlatformSpacingClearanceInput]);
   const setVersionGeometryComparisonMode = useModelStore((state) => state.setVersionGeometryComparisonMode);
   const closeVersionGeometryComparison = useModelStore((state) => state.closeVersionGeometryComparison);
   const primaryPart = findCadPartByRole(cadResult, 'primary') ?? cadResult?.parts[0] ?? null;
@@ -2923,6 +3014,7 @@ export function ModelViewport() {
       <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, preserveDrawingBuffer: true }}>
         <ModelScene
           printPlatformViewRequest={printPlatformViewRequest}
+          printPlatformSpacingDiagnostic={printPlatformSpacingState.diagnostic}
           onPrintPlatformReturnSnapshotSourceChange={setPrintPlatformReturnSourceIdentity}
         />
       </Canvas>
@@ -2958,6 +3050,49 @@ export function ModelViewport() {
                   </small>
                 )}
                 <div className="print-platform-overlay-legend-row"><i className="is-combined" />整体联合占地边界</div>
+                {printPlatformSpacingState.diagnostic && (
+                  <section
+                    className={`print-platform-spacing-diagnostic is-${printPlatformSpacingState.diagnostic.status}`}
+                    aria-label="多对象间距与重叠诊断"
+                    data-print-platform-spacing-status={printPlatformSpacingState.diagnostic.status}
+                  >
+                    <strong>对象间距与重叠诊断</strong>
+                    <label>
+                      <span>安全间距</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        inputMode="decimal"
+                        aria-label="对象安全间距 毫米"
+                        value={printPlatformSpacingClearanceInput}
+                        onChange={(event) => setPrintPlatformSpacingClearanceInput(event.target.value)}
+                        onWheel={(event) => event.currentTarget.blur()}
+                      />
+                      <span>毫米</span>
+                    </label>
+                    {printPlatformSpacingState.error && (
+                      <small className="print-platform-spacing-error">{printPlatformSpacingState.error}</small>
+                    )}
+                    <span>{printPlatformSpacingStatusText(printPlatformSpacingState.diagnostic)}</span>
+                    {printPlatformSpacingState.diagnostic.pairs
+                      .filter((pair) => pair.status !== 'safe')
+                      .map((pair) => (
+                        <small
+                          key={pair.sourceIdentity}
+                          className={`is-${pair.status}`}
+                          data-print-platform-spacing-pair={`${pair.firstObjectId}:${pair.secondObjectId}`}
+                        >
+                          {printPlatformSpacingPairText(pair)}
+                        </small>
+                      ))}
+                    <small>
+                      共 {printPlatformSpacingState.diagnostic.pairCount} 组：重叠 {printPlatformSpacingState.diagnostic.overlapCount} 组、间距不足 {printPlatformSpacingState.diagnostic.tooCloseCount} 组、安全 {printPlatformSpacingState.diagnostic.safeCount} 组
+                    </small>
+                    <div className="print-platform-overlay-legend-row"><i className="is-spacing-overlap" />水平重叠区域</div>
+                    <div className="print-platform-overlay-legend-row"><i className="is-spacing-close" />间距不足连线</div>
+                  </section>
+                )}
               </section>
             )}
             {printPlatformOverflowDescriptions(printPlatformOverlay).map((description) => (

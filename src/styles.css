@@ -1573,3 +1573,45 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   border-top-style: dashed;
   border-top-width: 3px;
 }
+
+.print-platform-spacing-diagnostic {
+  display: grid;
+  gap: 4px;
+  margin-top: 3px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  pointer-events: none;
+}
+.print-platform-spacing-diagnostic > strong { color: #f0d6a7; font-size: 9px; }
+.print-platform-spacing-diagnostic > span,
+.print-platform-spacing-diagnostic > small { color: #aeb4b8; font-size: 8px; line-height: 1.45; }
+.print-platform-spacing-diagnostic.is-overlap > span { color: #ff8895; }
+.print-platform-spacing-diagnostic.is-too-close > span { color: #ffb76f; }
+.print-platform-spacing-diagnostic.is-safe > span { color: #76d7a0; }
+.print-platform-spacing-diagnostic > small.is-overlap { color: #ff8895; }
+.print-platform-spacing-diagnostic > small.is-too-close { color: #ffb76f; }
+.print-platform-spacing-diagnostic > label {
+  display: grid;
+  grid-template-columns: auto 58px auto;
+  align-items: center;
+  gap: 5px;
+  color: #9ea5aa;
+  font-size: 8px;
+  pointer-events: none;
+}
+.print-platform-spacing-diagnostic input {
+  width: 58px;
+  height: 23px;
+  padding: 2px 5px;
+  border: 1px solid rgba(232, 208, 103, .35);
+  border-radius: 4px;
+  background: rgba(15, 17, 20, .88);
+  color: #eadc91;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+}
+.print-platform-spacing-diagnostic input:focus-visible { outline: 2px solid rgba(232, 208, 103, .62); outline-offset: 1px; }
+.print-platform-spacing-error { color: #ff8895 !important; }
+.print-platform-overlay-legend-row i.is-spacing-overlap { color: #ff5f70; border-top-style: dashed; border-top-width: 4px; }
+.print-platform-overlay-legend-row i.is-spacing-close { color: #ff9e45; border-top-style: dashed; border-top-width: 3px; }

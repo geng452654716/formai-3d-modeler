@@ -49,6 +49,44 @@ export interface PrintPlatformMultiObjectPreview {
   };
 }
 
+export type PrintPlatformObjectPairStatus = 'overlap' | 'too-close' | 'safe';
+
+export interface PrintPlatformHorizontalPoint {
+  x: number;
+  z: number;
+}
+
+export interface PrintPlatformObjectPairDiagnostic {
+  sourceIdentity: string;
+  firstObjectId: string;
+  firstObjectLabel: string;
+  secondObjectId: string;
+  secondObjectLabel: string;
+  status: PrintPlatformObjectPairStatus;
+  gapXMm: number;
+  gapZMm: number;
+  distanceMm: number;
+  overlapXMm: number;
+  overlapZMm: number;
+  overlapAreaMm2: number;
+  requiredAdditionalMm: number;
+  connectionStartMm: PrintPlatformHorizontalPoint;
+  connectionEndMm: PrintPlatformHorizontalPoint;
+  overlapBoundsMm: PrintPlatformHorizontalBounds | null;
+}
+
+export interface PrintPlatformMultiObjectSpacingDiagnostic {
+  sourceIdentity: string;
+  clearanceMm: number;
+  pairs: PrintPlatformObjectPairDiagnostic[];
+  pairCount: number;
+  overlapCount: number;
+  tooCloseCount: number;
+  safeCount: number;
+  riskCount: number;
+  status: PrintPlatformObjectPairStatus | 'empty';
+}
+
 const BOUNDARY_TOLERANCE_MM = 1e-4;
 
 function nonEmptyText(value: string, fieldName: string) {
@@ -216,5 +254,136 @@ export function createPrintPlatformMultiObjectPreview(
       ? footprintStatus(combinedFitsEffectiveArea, combinedCanFitEffectiveArea)
       : null,
     excludedCounts
+  };
+}
+
+function axisRelationship(
+  firstMinimum: number,
+  firstMaximum: number,
+  secondMinimum: number,
+  secondMaximum: number
+) {
+  if (firstMaximum < secondMinimum - BOUNDARY_TOLERANCE_MM) {
+    return {
+      gapMm: secondMinimum - firstMaximum,
+      overlapMm: 0,
+      firstCoordinateMm: firstMaximum,
+      secondCoordinateMm: secondMinimum
+    };
+  }
+  if (secondMaximum < firstMinimum - BOUNDARY_TOLERANCE_MM) {
+    return {
+      gapMm: firstMinimum - secondMaximum,
+      overlapMm: 0,
+      firstCoordinateMm: firstMinimum,
+      secondCoordinateMm: secondMaximum
+    };
+  }
+  const overlapMinimum = Math.max(firstMinimum, secondMinimum);
+  const overlapMaximum = Math.min(firstMaximum, secondMaximum);
+  const overlapMm = Math.max(0, overlapMaximum - overlapMinimum);
+  const sharedCoordinateMm = (overlapMinimum + overlapMaximum) / 2;
+  return {
+    gapMm: 0,
+    overlapMm,
+    firstCoordinateMm: sharedCoordinateMm,
+    secondCoordinateMm: sharedCoordinateMm
+  };
+}
+
+/**
+ * 基于第 82 阶段的水平占地进行对象对诊断，不重新读取网格，也不修改对象位置。
+ * 对象顺序不影响来源身份和输出顺序。
+ */
+export function createPrintPlatformMultiObjectSpacingDiagnostic(
+  preview: PrintPlatformMultiObjectPreview,
+  clearanceMm: number
+): PrintPlatformMultiObjectSpacingDiagnostic {
+  if (!Number.isFinite(clearanceMm) || clearanceMm < 0) {
+    throw new Error('对象安全间距必须是大于或等于 0 的有限毫米值');
+  }
+  const checkedPreviewIdentity = nonEmptyText(preview.sourceIdentity, '多对象间距诊断来源身份');
+  const objects = [...preview.objects].sort((first, second) => (
+    first.sourceIdentity.localeCompare(second.sourceIdentity)
+      || first.objectId.localeCompare(second.objectId)
+  ));
+  const pairs: PrintPlatformObjectPairDiagnostic[] = [];
+  for (let firstIndex = 0; firstIndex < objects.length; firstIndex += 1) {
+    const first = objects[firstIndex];
+    const firstBounds = checkedBounds(first.boundsMm, `“${first.objectLabel}”占地边界`);
+    for (let secondIndex = firstIndex + 1; secondIndex < objects.length; secondIndex += 1) {
+      const second = objects[secondIndex];
+      const secondBounds = checkedBounds(second.boundsMm, `“${second.objectLabel}”占地边界`);
+      const x = axisRelationship(
+        firstBounds.minimumX,
+        firstBounds.maximumX,
+        secondBounds.minimumX,
+        secondBounds.maximumX
+      );
+      const z = axisRelationship(
+        firstBounds.minimumZ,
+        firstBounds.maximumZ,
+        secondBounds.minimumZ,
+        secondBounds.maximumZ
+      );
+      const overlapping = x.overlapMm > BOUNDARY_TOLERANCE_MM
+        && z.overlapMm > BOUNDARY_TOLERANCE_MM;
+      const distanceMm = Math.hypot(x.gapMm, z.gapMm);
+      const status: PrintPlatformObjectPairStatus = overlapping
+        ? 'overlap'
+        : distanceMm + BOUNDARY_TOLERANCE_MM < clearanceMm
+          ? 'too-close'
+          : 'safe';
+      const overlapBoundsMm = overlapping
+        ? {
+            minimumX: Math.max(firstBounds.minimumX, secondBounds.minimumX),
+            maximumX: Math.min(firstBounds.maximumX, secondBounds.maximumX),
+            minimumZ: Math.max(firstBounds.minimumZ, secondBounds.minimumZ),
+            maximumZ: Math.min(firstBounds.maximumZ, secondBounds.maximumZ)
+          }
+        : null;
+      const overlapAreaMm2 = overlapping ? x.overlapMm * z.overlapMm : 0;
+      const requiredAdditionalMm = overlapping
+        ? Math.min(x.overlapMm, z.overlapMm) + clearanceMm
+        : Math.max(0, clearanceMm - distanceMm);
+      pairs.push({
+        sourceIdentity: `${checkedPreviewIdentity}\u0000对象间距\u0000${first.sourceIdentity}\u0001${second.sourceIdentity}\u0000${clearanceMm}`,
+        firstObjectId: first.objectId,
+        firstObjectLabel: first.objectLabel,
+        secondObjectId: second.objectId,
+        secondObjectLabel: second.objectLabel,
+        status,
+        gapXMm: x.gapMm,
+        gapZMm: z.gapMm,
+        distanceMm,
+        overlapXMm: overlapping ? x.overlapMm : 0,
+        overlapZMm: overlapping ? z.overlapMm : 0,
+        overlapAreaMm2,
+        requiredAdditionalMm,
+        connectionStartMm: { x: x.firstCoordinateMm, z: z.firstCoordinateMm },
+        connectionEndMm: { x: x.secondCoordinateMm, z: z.secondCoordinateMm },
+        overlapBoundsMm
+      });
+    }
+  }
+  const overlapCount = pairs.filter((pair) => pair.status === 'overlap').length;
+  const tooCloseCount = pairs.filter((pair) => pair.status === 'too-close').length;
+  const safeCount = pairs.filter((pair) => pair.status === 'safe').length;
+  return {
+    sourceIdentity: `${checkedPreviewIdentity}\u0000对象间距诊断\u0000${clearanceMm}`,
+    clearanceMm,
+    pairs,
+    pairCount: pairs.length,
+    overlapCount,
+    tooCloseCount,
+    safeCount,
+    riskCount: overlapCount + tooCloseCount,
+    status: pairs.length === 0
+      ? 'empty'
+      : overlapCount > 0
+        ? 'overlap'
+        : tooCloseCount > 0
+          ? 'too-close'
+          : 'safe'
   };
 }
