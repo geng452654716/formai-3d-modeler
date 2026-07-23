@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createPrintPlatformFixedGapPlan, type PrintPlatformFixedGapOperation } from './printPlatformFixedGapLayout';
+import {
+  createPrintPlatformFixedGapPlan,
+  type PrintPlatformFixedGapAnchorMode,
+  type PrintPlatformFixedGapOperation
+} from './printPlatformFixedGapLayout';
 import type { PrintPlatformMultiObjectPreview, PrintPlatformObjectFootprint } from './printPlatformMultiObject';
 
 function candidate(
@@ -59,7 +63,7 @@ function plan(
   objects: PrintPlatformObjectFootprint[],
   selected: string[],
   operation: PrintPlatformFixedGapOperation,
-  options: { clearance?: number; gap?: number; locked?: string[]; bounds?: typeof effective } = {}
+  options: { clearance?: number; gap?: number; locked?: string[]; bounds?: typeof effective; anchorMode?: PrintPlatformFixedGapAnchorMode } = {}
 ) {
   return createPrintPlatformFixedGapPlan(
     preview(objects),
@@ -68,7 +72,8 @@ function plan(
     options.gap ?? 4,
     options.locked ?? [],
     selected,
-    operation
+    operation,
+    options.anchorMode
   );
 }
 
@@ -111,6 +116,86 @@ describe('打印平台多对象固定净间距分布', () => {
       deltaMm: { x: 0, z: -17 },
       previousGapMm: 7
     });
+  });
+
+
+  it('默认锚点模式保持首对象，兼容既有调用', () => {
+    const result = plan([
+      candidate('first', 10, 10),
+      candidate('second', 40, 30)
+    ], ['first', 'second'], 'distribute-x-fixed-gap', { clearance: 2, gap: 6 });
+
+    expect(result.anchorMode).toBe('keep-first');
+    expect(selectedPlacement(result, 'first')).toMatchObject({ fixedAnchor: true, moved: false });
+    expect(selectedPlacement(result, 'second').fixedAnchor).toBe(false);
+    expect(result.sourceIdentity).toContain('锚点:keep-first');
+  });
+
+  it('保持末对象时沿 X 轴反向按不同尺寸边界递推', () => {
+    const result = plan([
+      candidate('first', 10, 20, 12, 10),
+      candidate('second', 50, 24, 20, 12),
+      candidate('third', 90, 28, 8, 6)
+    ], ['third', 'first', 'second'], 'distribute-x-fixed-gap', {
+      clearance: 3,
+      gap: 5,
+      anchorMode: 'keep-last'
+    });
+
+    expect(result.anchorMode).toBe('keep-last');
+    expect(selectedPlacement(result, 'third')).toMatchObject({ fixedAnchor: true, moved: false, sequenceIndex: 2 });
+    expect(selectedPlacement(result, 'second')).toMatchObject({
+      targetCenterMm: { x: 75, z: 30 },
+      deltaMm: { x: 15, z: 0 },
+      previousGapMm: 5,
+      sequenceIndex: 1
+    });
+    expect(selectedPlacement(result, 'first')).toMatchObject({
+      targetCenterMm: { x: 54, z: 25 },
+      deltaMm: { x: 38, z: 0 },
+      previousGapMm: null,
+      sequenceIndex: 0
+    });
+    expect(result.canApply).toBe(true);
+  });
+
+  it('保持末对象时沿 Z 轴反向递推且保持 X 中心', () => {
+    const result = plan([
+      candidate('first', 10, 10, 12, 6),
+      candidate('second', 40, 40, 8, 14)
+    ], ['first', 'second'], 'distribute-z-fixed-gap', {
+      clearance: 2,
+      gap: 7,
+      anchorMode: 'keep-last'
+    });
+
+    expect(selectedPlacement(result, 'second')).toMatchObject({ fixedAnchor: true, moved: false });
+    expect(selectedPlacement(result, 'first')).toMatchObject({
+      targetCenterMm: { x: 16, z: 30 },
+      deltaMm: { x: 0, z: 17 }
+    });
+    expect(selectedPlacement(result, 'second').previousGapMm).toBe(7);
+  });
+
+  it('锚点模式进入来源身份，末端模式输入顺序不改变结果', () => {
+    const objects = [candidate('a', 10, 10), candidate('b', 40, 30, 12), candidate('c', 80, 50, 8)];
+    const first = plan(objects, ['a', 'b', 'c'], 'distribute-x-fixed-gap', {
+      clearance: 2,
+      gap: 8,
+      anchorMode: 'keep-last'
+    });
+    const second = plan([...objects].reverse(), ['c', 'b', 'a'], 'distribute-x-fixed-gap', {
+      clearance: 2,
+      gap: 8,
+      anchorMode: 'keep-last'
+    });
+    const keepFirst = plan(objects, ['a', 'b', 'c'], 'distribute-x-fixed-gap', { clearance: 2, gap: 8 });
+
+    expect(second.sourceIdentity).toBe(first.sourceIdentity);
+    expect(first.sourceIdentity).toContain('锚点:keep-last');
+    expect(first.sourceIdentity).not.toBe(keepFirst.sourceIdentity);
+    expect(second.placements.map((placement) => [placement.objectId, placement.targetBoundsMm]).sort())
+      .toEqual(first.placements.map((placement) => [placement.objectId, placement.targetBoundsMm]).sort());
   });
 
   it('中心相同时使用稳定身份和对象 ID 决定空间顺序', () => {

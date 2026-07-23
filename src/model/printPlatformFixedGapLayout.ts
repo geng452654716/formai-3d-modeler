@@ -2,6 +2,7 @@ import type { PrintPlatformMultiObjectPreview } from './printPlatformMultiObject
 import type { PrintPlatformHorizontalBounds } from './printPlatformOverlay';
 
 export type PrintPlatformFixedGapOperation = 'distribute-x-fixed-gap' | 'distribute-z-fixed-gap';
+export type PrintPlatformFixedGapAnchorMode = 'keep-first' | 'keep-last';
 export type PrintPlatformFixedGapPlacementStatus = 'valid' | 'outside' | 'overlap' | 'too-close' | 'fixed';
 export type PrintPlatformFixedGapPlanStatus = 'ready' | 'invalid';
 
@@ -34,6 +35,7 @@ export interface PrintPlatformFixedGapPlacement {
 export interface PrintPlatformFixedGapPlan {
   sourceIdentity: string;
   operation: PrintPlatformFixedGapOperation;
+  anchorMode: PrintPlatformFixedGapAnchorMode;
   clearanceMm: number;
   targetGapMm: number;
   effectiveBoundsMm: PrintPlatformHorizontalBounds;
@@ -125,12 +127,14 @@ function createSourceIdentity(
   targetGapMm: number,
   lockedObjectIds: readonly string[],
   selectedObjectIds: readonly string[],
-  operation: PrintPlatformFixedGapOperation
+  operation: PrintPlatformFixedGapOperation,
+  anchorMode: PrintPlatformFixedGapAnchorMode
 ) {
   return [
     preview.sourceIdentity,
     '打印平台多对象固定净间距分布',
     operation,
+    `锚点:${anchorMode}`,
     `已选:${[...new Set(selectedObjectIds)].sort().join(',')}`,
     `锁定:${[...new Set(lockedObjectIds)].sort().join(',')}`,
     `安全间距:${clearanceMm.toFixed(4)}`,
@@ -144,6 +148,7 @@ function invalidPlan(
   operation: PrintPlatformFixedGapOperation,
   clearanceMm: number,
   targetGapMm: number,
+  anchorMode: PrintPlatformFixedGapAnchorMode,
   effectiveBoundsMm: PrintPlatformHorizontalBounds,
   placements: PrintPlatformFixedGapPlacement[],
   failureReason: string
@@ -151,6 +156,7 @@ function invalidPlan(
   return {
     sourceIdentity,
     operation,
+    anchorMode,
     clearanceMm,
     targetGapMm,
     effectiveBoundsMm,
@@ -175,7 +181,8 @@ export function createPrintPlatformFixedGapPlan(
   targetGapMm: number,
   lockedObjectIds: readonly string[],
   selectedObjectIds: readonly string[],
-  operation: PrintPlatformFixedGapOperation
+  operation: PrintPlatformFixedGapOperation,
+  anchorMode: PrintPlatformFixedGapAnchorMode = 'keep-first'
 ): PrintPlatformFixedGapPlan {
   const effective = checkedBounds(effectiveBoundsMm, '固定净间距安全有效区域');
   const clearance = checkedNumber(clearanceMm, '固定净间距安全间距', 0);
@@ -214,7 +221,8 @@ export function createPrintPlatformFixedGapPlan(
     targetGap,
     [...locked],
     selectedIds,
-    operation
+    operation,
+    anchorMode
   );
   const selectedPlacements = basePlacements.filter((placement) => placement.selected);
   if (targetGap + BOUNDARY_TOLERANCE_MM < clearance) {
@@ -223,6 +231,7 @@ export function createPrintPlatformFixedGapPlan(
       operation,
       clearance,
       targetGap,
+      anchorMode,
       effective,
       basePlacements,
       `目标净间距不得小于当前 ${clearance.toFixed(2)} 毫米安全间距`
@@ -234,6 +243,7 @@ export function createPrintPlatformFixedGapPlan(
       operation,
       clearance,
       targetGap,
+      anchorMode,
       effective,
       basePlacements,
       '固定净间距分布至少需要选择 2 个未锁定打印对象'
@@ -246,6 +256,7 @@ export function createPrintPlatformFixedGapPlan(
       operation,
       clearance,
       targetGap,
+      anchorMode,
       effective,
       basePlacements,
       `已选对象“${selectedLocked[0].objectLabel}”处于锁定状态，不能作为移动目标`
@@ -260,27 +271,44 @@ export function createPrintPlatformFixedGapPlan(
   ));
   const mutable = basePlacements.map((placement) => ({ ...placement }));
   const mutableById = new Map(mutable.map((placement) => [placement.objectId, placement]));
-  let previous: PrintPlatformFixedGapPlacement | null = null;
-  spatial.forEach((selectedPlacement, index) => {
+  const spatialPlacements = spatial.map((selectedPlacement, index) => {
     const placement = mutableById.get(selectedPlacement.objectId)!;
     placement.sequenceIndex = index;
-    placement.fixedAnchor = index === 0;
-    if (previous) {
+    placement.fixedAnchor = anchorMode === 'keep-first' ? index === 0 : index === spatial.length - 1;
+    return placement;
+  });
+  const updateTargetAxisCenter = (placement: PrintPlatformFixedGapPlacement, targetAxisCenter: number) => {
+    const targetCenterMm = { ...placement.currentCenterMm, [axis]: targetAxisCenter };
+    const deltaMm = {
+      x: targetCenterMm.x - placement.currentCenterMm.x,
+      z: targetCenterMm.z - placement.currentCenterMm.z
+    };
+    placement.targetCenterMm = targetCenterMm;
+    placement.deltaMm = deltaMm;
+    placement.targetBoundsMm = shiftBounds(placement.currentBoundsMm, deltaMm);
+    placement.distanceMm = Math.hypot(deltaMm.x, deltaMm.z);
+    placement.moved = placement.distanceMm > BOUNDARY_TOLERANCE_MM;
+  };
+  if (anchorMode === 'keep-first') {
+    for (let index = 1; index < spatialPlacements.length; index += 1) {
+      const previous = spatialPlacements[index - 1];
+      const placement = spatialPlacements[index];
       const size = placement.currentBoundsMm[maximumKey] - placement.currentBoundsMm[minimumKey];
-      const targetAxisCenter = previous.targetBoundsMm[maximumKey] + targetGap + size / 2;
-      const targetCenterMm = { ...placement.currentCenterMm, [axis]: targetAxisCenter };
-      const deltaMm = {
-        x: targetCenterMm.x - placement.currentCenterMm.x,
-        z: targetCenterMm.z - placement.currentCenterMm.z
-      };
-      placement.targetCenterMm = targetCenterMm;
-      placement.deltaMm = deltaMm;
-      placement.targetBoundsMm = shiftBounds(placement.currentBoundsMm, deltaMm);
-      placement.distanceMm = Math.hypot(deltaMm.x, deltaMm.z);
-      placement.moved = placement.distanceMm > BOUNDARY_TOLERANCE_MM;
-      placement.previousGapMm = placement.targetBoundsMm[minimumKey] - previous.targetBoundsMm[maximumKey];
+      updateTargetAxisCenter(placement, previous.targetBoundsMm[maximumKey] + targetGap + size / 2);
     }
-    previous = placement;
+  } else {
+    for (let index = spatialPlacements.length - 2; index >= 0; index -= 1) {
+      const placement = spatialPlacements[index];
+      const next = spatialPlacements[index + 1];
+      const size = placement.currentBoundsMm[maximumKey] - placement.currentBoundsMm[minimumKey];
+      updateTargetAxisCenter(placement, next.targetBoundsMm[minimumKey] - targetGap - size / 2);
+    }
+  }
+  spatialPlacements.forEach((placement, index) => {
+    const previous = spatialPlacements[index - 1];
+    placement.previousGapMm = previous
+      ? placement.targetBoundsMm[minimumKey] - previous.targetBoundsMm[maximumKey]
+      : null;
   });
 
   const conflicts = new Map<string, { overlap: string[]; tooClose: string[] }>();
@@ -338,6 +366,7 @@ export function createPrintPlatformFixedGapPlan(
   return {
     sourceIdentity,
     operation,
+    anchorMode,
     clearanceMm: clearance,
     targetGapMm: targetGap,
     effectiveBoundsMm: effective,
