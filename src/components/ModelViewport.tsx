@@ -43,6 +43,7 @@ import {
   type PrintPlatformReturnSnapshot,
   type PrintPlatformViewRequest
 } from '../model/printPlatformCamera';
+import type { PrintPlatformMultiObjectPreview } from '../model/printPlatformMultiObject';
 import {
   createPrintPlatformBoundarySegment,
   createPrintPlatformRectanglePoints,
@@ -70,6 +71,7 @@ import {
   type MeshPlanarRegionTriangle
 } from '../model/meshElementEdit';
 import { LocalCadFeatureRiskPanel } from './LocalCadFeatureRiskPanel';
+import { PrintPlatformMultiObjectAnalyzer } from './PrintPlatformMultiObjectAnalyzer';
 import type { EnclosureParameters, SceneObjectId } from '../model/types';
 import { calculateVersionComparisonOffsets } from '../model/versionGeometryComparison';
 import {
@@ -2029,12 +2031,15 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
   platform: 0.05,
   effective: 0.09,
   object: 0.13,
-  highlight: 0.17
+  multiObject: 0.15,
+  combined: 0.18,
+  highlight: 0.21
 } as const;
 
 /** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
 function PrintPlatformOverlayLayer() {
   const overlay = useModelStore((state) => state.printPlatformOverlay);
+  const multiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
   const bedGuide = resolvePrintPlatformBedGuide(overlay);
   const gridGuide = resolvePrintPlatformGridGuide(overlay);
   if (!overlay || !bedGuide) return null;
@@ -2163,8 +2168,46 @@ function PrintPlatformOverlayLayer() {
         color={objectColor}
         lineWidth={2.5}
         depthTest={false}
+        raycast={() => undefined}
         renderOrder={22}
       />
+      {multiObjectPreview?.objects.map((object, index) => (
+        <Line
+          key={`多对象占地-${object.sourceIdentity}`}
+          points={createPrintPlatformRectanglePoints(
+            object.boundsMm,
+            PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.multiObject + index * 0.002
+          )}
+          color={['#58a6ff', '#c77dff', '#4dd4ac', '#ffd166', '#f78c6c'][index % 5]}
+          lineWidth={1.35}
+          dashed
+          dashSize={4}
+          gapSize={2}
+          transparent
+          opacity={0.78}
+          depthTest={false}
+          depthWrite={false}
+          raycast={() => undefined}
+          renderOrder={23}
+        />
+      ))}
+      {multiObjectPreview?.combinedBoundsMm && (
+        <Line
+          points={createPrintPlatformRectanglePoints(
+            multiObjectPreview.combinedBoundsMm,
+            PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.combined
+          )}
+          color="#e8d067"
+          lineWidth={2.7}
+          dashed
+          dashSize={8}
+          gapSize={2.5}
+          depthTest={false}
+          depthWrite={false}
+          raycast={() => undefined}
+          renderOrder={24}
+        />
+      )}
       {highlightedSides.map(([side]) => (
         <Line
           key={side}
@@ -2176,7 +2219,8 @@ function PrintPlatformOverlayLayer() {
           color={overlay.status === 'too-large' ? '#ff475d' : '#ff7b3e'}
           lineWidth={4}
           depthTest={false}
-          renderOrder={23}
+          raycast={() => undefined}
+          renderOrder={25}
         />
       ))}
     </group>
@@ -2201,6 +2245,24 @@ function printPlatformOverflowDescriptions(overlay: PrintPlatformOverlay) {
   return labels
     .filter(([side]) => overlay.overflow[side])
     .map(([side, label]) => `${label}越界 ${overlay.overflowMm[side].toFixed(2)} 毫米`);
+}
+
+function printPlatformMultiObjectStatusText(preview: PrintPlatformMultiObjectPreview) {
+  if (!preview.combinedBoundsMm) return '当前装配没有可计算占地的可打印对象';
+  if (preview.combinedStatus === 'inside') return '整体联合占地位于安全有效区域';
+  if (preview.combinedStatus === 'too-large') return '整体联合占地尺寸大于安全有效区域';
+  if (preview.combinedFitsPlatform) return '整体位于物理平台，但超出安全有效区域';
+  return '整体联合占地超出物理打印平台';
+}
+
+function printPlatformObjectFootprintStatusText(
+  object: PrintPlatformMultiObjectPreview['objects'][number]
+) {
+  const size = `${object.widthMm.toFixed(2)} × ${object.depthMm.toFixed(2)} 毫米`;
+  if (object.fitsEffectiveArea) return `${object.objectLabel}：${size}，位于安全区域`;
+  if (object.status === 'too-large') return `${object.objectLabel}：${size}，尺寸过大`;
+  if (object.fitsPlatform) return `${object.objectLabel}：${size}，超出安全区域`;
+  return `${object.objectLabel}：${size}，超出物理平台`;
 }
 
 interface PrintPlatformCameraControllerProps {
@@ -2772,6 +2834,7 @@ export function ModelViewport() {
   const versionGeometryDifferenceResult = useModelStore((state) => state.versionGeometryDifferenceResult);
   const versionGeometryComparisonSnapshot = useModelStore((state) => state.versionGeometryComparisonSnapshot);
   const printPlatformOverlay = useModelStore((state) => state.printPlatformOverlay);
+  const printPlatformMultiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
   const setVersionGeometryComparisonMode = useModelStore((state) => state.setVersionGeometryComparisonMode);
   const closeVersionGeometryComparison = useModelStore((state) => state.closeVersionGeometryComparison);
   const primaryPart = findCadPartByRole(cadResult, 'primary') ?? cadResult?.parts[0] ?? null;
@@ -2856,6 +2919,7 @@ export function ModelViewport() {
 
   return (
     <div className={`viewport-canvas ${boxSelecting ? 'is-cad-box-selecting' : ''}`} ref={containerRef}>
+      <PrintPlatformMultiObjectAnalyzer />
       <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, preserveDrawingBuffer: true }}>
         <ModelScene
           printPlatformViewRequest={printPlatformViewRequest}
@@ -2873,6 +2937,29 @@ export function ModelViewport() {
             <div className="print-platform-overlay-legend-row"><i className="is-platform" />物理平台边界</div>
             <div className="print-platform-overlay-legend-row"><i className="is-effective" />安全有效区域 · 边距 {printPlatformOverlay.safetyMarginMm.toFixed(2)} 毫米</div>
             <div className="print-platform-overlay-legend-row"><i className="is-object" />当前对象占地</div>
+            {printPlatformMultiObjectPreview && (
+              <section className="print-platform-multi-object-summary" aria-label="多对象联合占地摘要">
+                <strong>多对象联合占地</strong>
+                <span data-print-platform-multi-status>{printPlatformMultiObjectStatusText(printPlatformMultiObjectPreview)}</span>
+                <span>
+                  可打印对象：{printPlatformMultiObjectPreview.objectCount} 个
+                  {printPlatformMultiObjectPreview.combinedBoundsMm
+                    ? ` · 整体 ${printPlatformMultiObjectPreview.combinedWidthMm.toFixed(2)} × ${printPlatformMultiObjectPreview.combinedDepthMm.toFixed(2)} 毫米`
+                    : ''}
+                </span>
+                {printPlatformMultiObjectPreview.objects.map((object) => (
+                  <small key={object.sourceIdentity} data-print-platform-object-footprint={object.objectId}>
+                    {printPlatformObjectFootprintStatusText(object)}
+                  </small>
+                ))}
+                {(Object.values(printPlatformMultiObjectPreview.excludedCounts).some((count) => count > 0)) && (
+                  <small>
+                    已排除：参考对象 {printPlatformMultiObjectPreview.excludedCounts.reference} 个、隐藏对象 {printPlatformMultiObjectPreview.excludedCounts.hidden} 个、无有效几何对象 {printPlatformMultiObjectPreview.excludedCounts.invalidGeometry} 个
+                  </small>
+                )}
+                <div className="print-platform-overlay-legend-row"><i className="is-combined" />整体联合占地边界</div>
+              </section>
+            )}
             {printPlatformOverflowDescriptions(printPlatformOverlay).map((description) => (
               <span key={description} className="print-platform-overlay-overflow">{description}</span>
             ))}

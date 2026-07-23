@@ -261,6 +261,27 @@ describe('六向打印方向评估', () => {
     expect(preview.targetHorizontalPositionMm).toEqual({ x: 0, z: 0 });
   });
 
+  it('保留坐标模式按显式装配基础位置计算拆件占地，不对单个拆件再次居中', () => {
+    const source = boxMesh(20, 10, 5);
+    const translatedPositions = source.positions.map((value, index) => {
+      if (index % 3 === 0) return value + 50;
+      if (index % 3 === 1) return value - 30;
+      return value + 12;
+    });
+    const preview = evaluatePrintPlatformBoundary({ positions: translatedPositions, indices: source.indices }, {
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      positionMm: { x: 8, y: 0, z: -6 },
+      normalizationSpace: 'preserved',
+      basePositionDisplayMm: { x: -50, y: -9.5, z: -30 }
+    });
+
+    expect(preview.boundsMm.minimumX).toBeCloseTo(8);
+    expect(preview.boundsMm.maximumX).toBeCloseTo(28);
+    expect(preview.boundsMm.minimumZ).toBeCloseTo(-16);
+    expect(preview.boundsMm.maximumZ).toBeCloseTo(-6);
+    expect(preview.targetHorizontalPositionMm).toEqual({ x: -10, z: 5 });
+  });
+
   it('分别识别左、右、前、后四个方向的越界量', () => {
     const positions = [
       { x: -125, z: 0, side: 'left', overflow: 7 },

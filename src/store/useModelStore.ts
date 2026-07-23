@@ -85,6 +85,7 @@ import type { VersionGeometryComparisonMode } from '../model/versionGeometryComp
 import type { VersionGeometryDifferenceResult } from '../model/versionGeometryDifference';
 import { captureVersionCurvedFeatures } from '../model/versionCurvedFeatures';
 import type { PrintPlatformOverlay } from '../model/printPlatformOverlay';
+import type { PrintPlatformMultiObjectPreview } from '../model/printPlatformMultiObject';
 import type {
   ManufacturingSplitRequest,
   ManufacturingSplitResult
@@ -183,6 +184,8 @@ interface ModelStore {
   versionRestoreError: string | null;
   /** 独立于模型版本的只读打印平台视口叠加，仅反映最近一次仍有效的分析结果。 */
   printPlatformOverlay: PrintPlatformOverlay | null;
+  /** 当前装配中全部可打印对象的只读联合占地，来源变化后立即失效。 */
+  printPlatformMultiObjectPreview: PrintPlatformMultiObjectPreview | null;
   setParameter: (key: keyof EnclosureParameters, value: number) => void;
   commitVersion: (label: string, changeKind?: ModelVersion['changeKind']) => void;
   undo: () => Promise<boolean>;
@@ -198,6 +201,8 @@ interface ModelStore {
   setShowBoard: (value: boolean) => void;
   setPrintPlatformOverlay: (overlay: PrintPlatformOverlay) => void;
   clearPrintPlatformOverlay: (sourceIdentity?: string) => void;
+  setPrintPlatformMultiObjectPreview: (preview: PrintPlatformMultiObjectPreview) => void;
+  clearPrintPlatformMultiObjectPreview: (sourceIdentity?: string) => void;
   setViewportModelSource: (source: ViewportModelSource) => void;
   resetProject: () => void;
   addAssistantMessage: (content: string) => void;
@@ -441,6 +446,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   versionRestoreStatus: 'idle',
   versionRestoreError: null,
   printPlatformOverlay: null,
+  printPlatformMultiObjectPreview: null,
   messages: [
     {
       id: crypto.randomUUID(),
@@ -724,18 +730,33 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
   setExploded: (exploded) => set({ exploded }),
   setShowBoard: (showBoard) => set({ showBoard }),
-  setPrintPlatformOverlay: (printPlatformOverlay) => set({ printPlatformOverlay }),
+  setPrintPlatformOverlay: (printPlatformOverlay) => set({
+    printPlatformOverlay,
+    printPlatformMultiObjectPreview: null
+  }),
   clearPrintPlatformOverlay: (sourceIdentity) => set((state) => (
     !state.printPlatformOverlay
     || (sourceIdentity && state.printPlatformOverlay.sourceIdentity !== sourceIdentity)
       ? state
-      : { printPlatformOverlay: null }
+      : { printPlatformOverlay: null, printPlatformMultiObjectPreview: null }
+  )),
+  setPrintPlatformMultiObjectPreview: (printPlatformMultiObjectPreview) => set((state) => (
+    !state.printPlatformOverlay
+      ? state
+      : { printPlatformMultiObjectPreview }
+  )),
+  clearPrintPlatformMultiObjectPreview: (sourceIdentity) => set((state) => (
+    !state.printPlatformMultiObjectPreview
+    || (sourceIdentity && state.printPlatformMultiObjectPreview.sourceIdentity !== sourceIdentity)
+      ? state
+      : { printPlatformMultiObjectPreview: null }
   )),
   setViewportModelSource: (viewportModelSource) => {
     versionComparisonSerial += 1;
     set({
       viewportModelSource,
       printPlatformOverlay: null,
+      printPlatformMultiObjectPreview: null,
       wallThicknessVisible: false,
       wallThicknessPicking: false,
       wallThicknessSelection: null,
@@ -786,6 +807,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       showBoard: true,
       viewportModelSource: 'cad',
       printPlatformOverlay: null,
+      printPlatformMultiObjectPreview: null,
       cadStatus: 'stale',
       cadResult: null,
       cadError: null,
@@ -983,6 +1005,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       importedStlStatus: 'importing',
       importedStlError: null,
       printPlatformOverlay: null,
+      printPlatformMultiObjectPreview: null,
       cadFaceSelectionMode: 'off',
       cadFaceSelection: null,
       localCadFeaturePreview: null,
@@ -1078,6 +1101,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   clearImportedStlModel: () => set({
     importedStlModel: null,
     printPlatformOverlay: null,
+    printPlatformMultiObjectPreview: null,
     importedStlStatus: 'idle',
     importedStlError: null,
     localStlEditResult: null,

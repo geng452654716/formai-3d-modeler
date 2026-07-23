@@ -36,7 +36,7 @@ export interface PrintOrientationAnalysis {
   candidates: PrintOrientationCandidate[];
 }
 
-export type PrintBedNormalizationSpace = 'object-local' | 'world';
+export type PrintBedNormalizationSpace = 'object-local' | 'world' | 'preserved';
 
 export interface PrintBedPlacementOptions {
   rotationDeg: ObjectVector3;
@@ -481,7 +481,11 @@ function evaluateTransformedDisplayBounds(
   validatePlacementVector(options.positionMm, '打印平台分析位置必须是三个有限毫米值');
   const basePosition = options.basePositionDisplayMm ?? { x: 0, y: 0, z: 0 };
   validatePlacementVector(basePosition, '打印平台分析基础位置必须是三个有限毫米值');
-  if (options.normalizationSpace !== 'object-local' && options.normalizationSpace !== 'world') {
+  if (
+    options.normalizationSpace !== 'object-local'
+    && options.normalizationSpace !== 'world'
+    && options.normalizationSpace !== 'preserved'
+  ) {
     throw new Error('打印平台分析归一化空间无效');
   }
 

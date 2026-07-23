@@ -900,4 +900,14 @@ nestingDepth: 二维包含深度
 
 2026-07-23 第 81 阶段验证：针对性测试 16/16，完整前端测试 309/309，TypeScript/Vite 构建和差异检查通过。自动测试覆盖 P1S、非对称跨零、不跨零、主次分类、严格裁剪、中文刻度、来源切换、非法退化和异常超大范围；浏览器验证 10 个主刻度、事件穿透、真实旋转、版本隔离与来源清理，Console 为 0 个错误、0 个警告。
 
-**下一阶段架构方向：**建立独立的多对象平台占地聚合协议，从当前可打印对象的世界空间 X/Z 边界派生单对象条目、联合边界和平台适配摘要；先保持只读临时状态，不复用单对象修正命令，也不修改装配变换、版本和几何导出契约。
+### 82. 打印平台多对象联合占地预览架构（已实现）
+
+- `src/model/printPlatformMultiObject.ts` 定义独立纯协议：候选、单对象占地、联合预览、排除计数和确定性来源身份。协议接受任意 CAD、上传 STL 或参考来源，严格校验有限且非退化边界，并输出 `inside`、`overflow`、`too-large` 状态。
+- `PrintPlatformMultiObjectAnalyzer` 只在既有单对象 `printPlatformOverlay` 有效时运行，使用 `resolveGeneratedModelUrl`、`STLLoader` 与 `evaluatePrintPlatformBoundary` 异步读取全部精确 STL；单个对象失败只计入无有效几何，不阻断其他对象。
+- `PrintBedNormalizationSpace` 增加 `preserved`：制造拆件保留生成文件中的装配坐标，再叠加显式基础位置和对象展示变换；普通 CAD 继续使用 `object-local`，未拆分上传 STL 使用原整体显示基础位置。
+- Zustand 只保存独立临时 `printPlatformMultiObjectPreview`；设置或清除单对象平台叠加、切换模型来源、导入/清除 STL 或重置项目时同步清理。Effect 使用取消标记和来源身份阻止过期异步结果回写，不进入 `ModelVersion`、持久化或导出协议。
+- `PrintPlatformOverlayLayer` 绘制每对象虚线与黄色联合粗虚线，统一关闭深度测试、深度写入和射线命中；DOM 摘要使用只读数据属性和 `pointer-events: none`，便于浏览器验收且不阻断视角与对象交互。
+
+2026-07-23 第 82 阶段验证：针对性测试 55/55，完整前端测试 318/318，TypeScript/Vite 构建和差异检查通过。浏览器确认多对象精确 STL 分析、联合轮廓、参考对象排除、事件穿透、版本隔离和来源变化清理均符合预期，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**在多对象占地纯协议之上增加两两间距诊断，不重新读取网格；输出重叠深度、最近水平间距、安全间距缺口和对象对身份，视口只读显示风险连接或高亮，不复用对象移动命令。

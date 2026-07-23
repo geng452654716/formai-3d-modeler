@@ -1553,3 +1553,23 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 
 .print-platform-grid-tick.x-axis { border-bottom: 1px solid rgba(115, 190, 225, .5); }
 .print-platform-grid-tick.z-axis { border-left: 1px solid rgba(240, 180, 76, .5); }
+
+.print-platform-multi-object-summary {
+  display: grid;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 7px 8px;
+  border: 1px solid rgba(232, 208, 103, .28);
+  border-radius: 6px;
+  background: rgba(232, 208, 103, .055);
+  pointer-events: none;
+}
+.print-platform-multi-object-summary > strong { color: #eadc91; font-size: 9px; }
+.print-platform-multi-object-summary > span { color: #c5c9c7; font-size: 8px; line-height: 1.45; }
+.print-platform-multi-object-summary > span[data-print-platform-multi-status] { color: #e6d782; }
+.print-platform-multi-object-summary > small { color: #8e969b; font-size: 8px; line-height: 1.4; }
+.print-platform-overlay-legend-row i.is-combined {
+  color: #e8d067;
+  border-top-style: dashed;
+  border-top-width: 3px;
+}
