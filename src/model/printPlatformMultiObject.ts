@@ -13,6 +13,10 @@ export interface PrintPlatformObjectFootprintCandidate {
   printable: boolean;
   visible: boolean;
   boundsMm: PrintPlatformHorizontalBounds | null;
+  /** 当前对象展示状态中的绕 Y 轴角度；旧调用未提供时按 0 度处理。 */
+  currentRotationYDeg?: number;
+  /** 在当前位置把当前绕 Y 轴角度增加 90 度后的精确占地。 */
+  rotated90BoundsMm?: PrintPlatformHorizontalBounds | null;
 }
 
 export interface PrintPlatformObjectFootprint {
@@ -23,6 +27,10 @@ export interface PrintPlatformObjectFootprint {
   boundsMm: PrintPlatformHorizontalBounds;
   widthMm: number;
   depthMm: number;
+  currentRotationYDeg: number;
+  rotated90BoundsMm: PrintPlatformHorizontalBounds;
+  rotated90WidthMm: number;
+  rotated90DepthMm: number;
   fitsPlatform: boolean;
   canFitPlatform: boolean;
   fitsEffectiveArea: boolean;
@@ -117,6 +125,34 @@ export interface PrintPlatformMultiObjectLayoutPlan {
   failureReason: string | null;
 }
 
+export interface PrintPlatformObjectRotationLayoutPlacement extends PrintPlatformObjectLayoutPlacement {
+  currentRotationYDeg: number;
+  targetRotationYDeg: number;
+  rotationDeltaYDeg: 0 | 90;
+  rotated: boolean;
+  changed: boolean;
+}
+
+export interface PrintPlatformMultiObjectRotationLayoutPlan {
+  sourceIdentity: string;
+  clearanceMm: number;
+  effectiveBoundsMm: PrintPlatformHorizontalBounds;
+  status: PrintPlatformMultiObjectLayoutStatus;
+  placements: PrintPlatformObjectRotationLayoutPlacement[];
+  objectCount: number;
+  movedObjectCount: number;
+  rotatedObjectCount: number;
+  changedObjectCount: number;
+  rowCount: number;
+  combinedTargetBoundsMm: PrintPlatformHorizontalBounds | null;
+  combinedTargetWidthMm: number;
+  combinedTargetDepthMm: number;
+  combinedTargetAreaMm2: number;
+  totalDistanceMm: number;
+  fitsEffectiveArea: boolean;
+  failureReason: string | null;
+}
+
 const BOUNDARY_TOLERANCE_MM = 1e-4;
 
 function nonEmptyText(value: string, fieldName: string) {
@@ -153,6 +189,24 @@ function boundsWidth(bounds: PrintPlatformHorizontalBounds) {
 
 function boundsDepth(bounds: PrintPlatformHorizontalBounds) {
   return bounds.maximumZ - bounds.minimumZ;
+}
+
+function rotateBounds90AroundCenter(bounds: PrintPlatformHorizontalBounds): PrintPlatformHorizontalBounds {
+  const centerX = (bounds.minimumX + bounds.maximumX) / 2;
+  const centerZ = (bounds.minimumZ + bounds.maximumZ) / 2;
+  const halfWidth = boundsDepth(bounds) / 2;
+  const halfDepth = boundsWidth(bounds) / 2;
+  return {
+    minimumX: centerX - halfWidth,
+    maximumX: centerX + halfWidth,
+    minimumZ: centerZ - halfDepth,
+    maximumZ: centerZ + halfDepth
+  };
+}
+
+function addQuarterTurnDegrees(value: number) {
+  const normalized = (value + 90) % 360;
+  return normalized > 180 ? normalized - 360 : normalized <= -180 ? normalized + 360 : normalized;
 }
 
 function fitsInside(
@@ -226,9 +280,16 @@ export function createPrintPlatformMultiObjectPreview(
       return;
     }
     let bounds: PrintPlatformHorizontalBounds;
+    let currentRotationYDeg: number;
+    let rotated90BoundsMm: PrintPlatformHorizontalBounds;
     try {
       if (!candidate.boundsMm) throw new Error('无几何边界');
       bounds = checkedBounds(candidate.boundsMm, `“${objectLabel}”占地边界`);
+      currentRotationYDeg = candidate.currentRotationYDeg ?? 0;
+      if (!Number.isFinite(currentRotationYDeg)) throw new Error('当前绕 Y 轴角度无效');
+      rotated90BoundsMm = candidate.rotated90BoundsMm
+        ? checkedBounds(candidate.rotated90BoundsMm, `“${objectLabel}”旋转 90 度占地边界`)
+        : rotateBounds90AroundCenter(bounds);
     } catch {
       excludedCounts.invalidGeometry += 1;
       return;
@@ -245,6 +306,10 @@ export function createPrintPlatformMultiObjectPreview(
       boundsMm: bounds,
       widthMm: boundsWidth(bounds),
       depthMm: boundsDepth(bounds),
+      currentRotationYDeg,
+      rotated90BoundsMm,
+      rotated90WidthMm: boundsWidth(rotated90BoundsMm),
+      rotated90DepthMm: boundsDepth(rotated90BoundsMm),
       fitsPlatform,
       canFitPlatform,
       fitsEffectiveArea,
@@ -549,6 +614,255 @@ export function createPrintPlatformMultiObjectLayoutPlan(
     combinedTargetBoundsMm,
     combinedTargetWidthMm: boundsWidth(combinedTargetBoundsMm),
     combinedTargetDepthMm: boundsDepth(combinedTargetBoundsMm),
+    fitsEffectiveArea: fitsInside(combinedTargetBoundsMm, effective),
+    failureReason: null
+  };
+}
+
+interface RotationLayoutSearchState {
+  placements: PrintPlatformObjectRotationLayoutPlacement[];
+  cursorX: number;
+  cursorZ: number;
+  rowDepthMm: number;
+  rowIndex: number;
+  combinedTargetBoundsMm: PrintPlatformHorizontalBounds | null;
+  totalDistanceMm: number;
+  rotatedObjectCount: number;
+  orientationSignature: string;
+}
+
+const MAX_ROTATION_LAYOUT_SEARCH_STATES = 8192;
+
+function compareLayoutNumber(first: number, second: number) {
+  return Math.abs(first - second) <= BOUNDARY_TOLERANCE_MM ? 0 : first - second;
+}
+
+function layoutArea(bounds: PrintPlatformHorizontalBounds | null) {
+  return bounds ? boundsWidth(bounds) * boundsDepth(bounds) : 0;
+}
+
+function compareRotationLayoutStates(
+  first: RotationLayoutSearchState,
+  second: RotationLayoutSearchState
+) {
+  return first.rowIndex - second.rowIndex
+    || compareLayoutNumber(layoutArea(first.combinedTargetBoundsMm), layoutArea(second.combinedTargetBoundsMm))
+    || compareLayoutNumber(first.totalDistanceMm, second.totalDistanceMm)
+    || first.rotatedObjectCount - second.rotatedObjectCount
+    || first.orientationSignature.localeCompare(second.orientationSignature);
+}
+
+function rotationLayoutStateKey(state: RotationLayoutSearchState) {
+  const values = [state.cursorX, state.cursorZ, state.rowDepthMm].map((value) => value.toFixed(4));
+  return `${state.rowIndex}:${values.join(':')}`;
+}
+
+/**
+ * 比较每个对象当前朝向与绕 Y 轴增加 90 度后的占地，并在确定性行式排布中
+ * 按行数、整体占地面积、总位移、旋转对象数和稳定身份顺序选择唯一方案。
+ */
+export function createPrintPlatformMultiObjectRotationLayoutPlan(
+  preview: PrintPlatformMultiObjectPreview,
+  effectiveBoundsMm: PrintPlatformHorizontalBounds,
+  clearanceMm: number
+): PrintPlatformMultiObjectRotationLayoutPlan {
+  if (!Number.isFinite(clearanceMm) || clearanceMm < 0) {
+    throw new Error('旋转寻优排布安全间距必须是大于或等于 0 的有限毫米值');
+  }
+  const checkedPreviewIdentity = nonEmptyText(preview.sourceIdentity, '旋转寻优排布来源身份');
+  const effective = checkedBounds(effectiveBoundsMm, '旋转寻优排布安全有效区域');
+  const objects = [...preview.objects].sort((first, second) => (
+    first.sourceIdentity.localeCompare(second.sourceIdentity)
+      || first.objectId.localeCompare(second.objectId)
+  ));
+  const sourceIdentity = [
+    checkedPreviewIdentity,
+    '多对象90度旋转寻优排布',
+    `${effective.minimumX},${effective.maximumX},${effective.minimumZ},${effective.maximumZ}`,
+    `${clearanceMm}`,
+    ...objects.map((object) => [
+      object.sourceIdentity,
+      object.currentRotationYDeg,
+      object.boundsMm.minimumX,
+      object.boundsMm.maximumX,
+      object.boundsMm.minimumZ,
+      object.boundsMm.maximumZ,
+      object.rotated90BoundsMm.minimumX,
+      object.rotated90BoundsMm.maximumX,
+      object.rotated90BoundsMm.minimumZ,
+      object.rotated90BoundsMm.maximumZ
+    ].join(','))
+  ].join('\u0000');
+  const emptyPlan = (failureReason: string | null = null): PrintPlatformMultiObjectRotationLayoutPlan => ({
+    sourceIdentity,
+    clearanceMm,
+    effectiveBoundsMm: effective,
+    status: failureReason ? 'unplaceable' : 'empty',
+    placements: [],
+    objectCount: objects.length,
+    movedObjectCount: 0,
+    rotatedObjectCount: 0,
+    changedObjectCount: 0,
+    rowCount: 0,
+    combinedTargetBoundsMm: null,
+    combinedTargetWidthMm: 0,
+    combinedTargetDepthMm: 0,
+    combinedTargetAreaMm2: 0,
+    totalDistanceMm: 0,
+    fitsEffectiveArea: false,
+    failureReason
+  });
+  if (objects.length === 0) return emptyPlan();
+
+  const effectiveWidthMm = boundsWidth(effective);
+  const effectiveDepthMm = boundsDepth(effective);
+  for (const object of objects) {
+    const currentBounds = checkedBounds(object.boundsMm, `“${object.objectLabel}”当前占地边界`);
+    const rotatedBounds = checkedBounds(object.rotated90BoundsMm, `“${object.objectLabel}”旋转 90 度占地边界`);
+    const currentFits = canFitInside(currentBounds, effective);
+    const rotatedFits = canFitInside(rotatedBounds, effective);
+    if (!currentFits && !rotatedFits) {
+      return emptyPlan(
+        `“${object.objectLabel}”当前占地 ${boundsWidth(currentBounds).toFixed(2)} × ${boundsDepth(currentBounds).toFixed(2)} 毫米，绕 Y 轴增加 90 度后占地 ${boundsWidth(rotatedBounds).toFixed(2)} × ${boundsDepth(rotatedBounds).toFixed(2)} 毫米，两种朝向都大于安全有效区域 ${effectiveWidthMm.toFixed(2)} × ${effectiveDepthMm.toFixed(2)} 毫米。`
+      );
+    }
+  }
+
+  let states: RotationLayoutSearchState[] = [{
+    placements: [],
+    cursorX: effective.minimumX,
+    cursorZ: effective.minimumZ,
+    rowDepthMm: 0,
+    rowIndex: 0,
+    combinedTargetBoundsMm: null,
+    totalDistanceMm: 0,
+    rotatedObjectCount: 0,
+    orientationSignature: ''
+  }];
+
+  objects.forEach((object) => {
+    const orientationCandidates = ([false, true] as const).map((rotated) => {
+      const boundsMm = checkedBounds(
+        rotated ? object.rotated90BoundsMm : object.boundsMm,
+        `“${object.objectLabel}”${rotated ? '旋转 90 度' : '当前'}占地边界`
+      );
+      return {
+        rotated,
+        boundsMm,
+        widthMm: boundsWidth(boundsMm),
+        depthMm: boundsDepth(boundsMm)
+      };
+    });
+    const nextStates: RotationLayoutSearchState[] = [];
+    states.forEach((state) => {
+      orientationCandidates.forEach((orientation) => {
+        if (
+          orientation.widthMm > effectiveWidthMm + BOUNDARY_TOLERANCE_MM
+          || orientation.depthMm > effectiveDepthMm + BOUNDARY_TOLERANCE_MM
+        ) return;
+        let cursorX = state.cursorX;
+        let cursorZ = state.cursorZ;
+        let rowDepthMm = state.rowDepthMm;
+        let rowIndex = state.rowIndex;
+        if (
+          state.placements.length > 0
+          && cursorX > effective.minimumX + BOUNDARY_TOLERANCE_MM
+          && cursorX + orientation.widthMm > effective.maximumX + BOUNDARY_TOLERANCE_MM
+        ) {
+          cursorX = effective.minimumX;
+          cursorZ += rowDepthMm + clearanceMm;
+          rowDepthMm = 0;
+          rowIndex += 1;
+        }
+        if (cursorZ + orientation.depthMm > effective.maximumZ + BOUNDARY_TOLERANCE_MM) return;
+        const targetBoundsMm = {
+          minimumX: cursorX,
+          maximumX: cursorX + orientation.widthMm,
+          minimumZ: cursorZ,
+          maximumZ: cursorZ + orientation.depthMm
+        };
+        const deltaMm = {
+          x: targetBoundsMm.minimumX - orientation.boundsMm.minimumX,
+          z: targetBoundsMm.minimumZ - orientation.boundsMm.minimumZ
+        };
+        const moved = Math.abs(deltaMm.x) > BOUNDARY_TOLERANCE_MM
+          || Math.abs(deltaMm.z) > BOUNDARY_TOLERANCE_MM;
+        const distanceMm = Math.hypot(deltaMm.x, deltaMm.z);
+        const placement: PrintPlatformObjectRotationLayoutPlacement = {
+          sourceIdentity: `${sourceIdentity}\u0001${object.sourceIdentity}\u0001${orientation.rotated ? '旋转90度' : '保持当前角度'}`,
+          objectId: object.objectId,
+          objectLabel: object.objectLabel,
+          currentBoundsMm: checkedBounds(object.boundsMm, `“${object.objectLabel}”当前占地边界`),
+          targetBoundsMm,
+          deltaMm,
+          distanceMm,
+          moved,
+          rowIndex,
+          currentRotationYDeg: object.currentRotationYDeg,
+          targetRotationYDeg: orientation.rotated
+            ? addQuarterTurnDegrees(object.currentRotationYDeg)
+            : object.currentRotationYDeg,
+          rotationDeltaYDeg: orientation.rotated ? 90 : 0,
+          rotated: orientation.rotated,
+          changed: moved || orientation.rotated
+        };
+        const combinedTargetBoundsMm = state.combinedTargetBoundsMm
+          ? {
+              minimumX: Math.min(state.combinedTargetBoundsMm.minimumX, targetBoundsMm.minimumX),
+              maximumX: Math.max(state.combinedTargetBoundsMm.maximumX, targetBoundsMm.maximumX),
+              minimumZ: Math.min(state.combinedTargetBoundsMm.minimumZ, targetBoundsMm.minimumZ),
+              maximumZ: Math.max(state.combinedTargetBoundsMm.maximumZ, targetBoundsMm.maximumZ)
+            }
+          : { ...targetBoundsMm };
+        nextStates.push({
+          placements: [...state.placements, placement],
+          cursorX: targetBoundsMm.maximumX + clearanceMm,
+          cursorZ,
+          rowDepthMm: Math.max(rowDepthMm, orientation.depthMm),
+          rowIndex,
+          combinedTargetBoundsMm,
+          totalDistanceMm: state.totalDistanceMm + distanceMm,
+          rotatedObjectCount: state.rotatedObjectCount + (orientation.rotated ? 1 : 0),
+          orientationSignature: `${state.orientationSignature}${orientation.rotated ? '1' : '0'}`
+        });
+      });
+    });
+    const deduplicated = new Map<string, RotationLayoutSearchState>();
+    nextStates.forEach((state) => {
+      const key = rotationLayoutStateKey(state);
+      const existing = deduplicated.get(key);
+      if (!existing || compareRotationLayoutStates(state, existing) < 0) deduplicated.set(key, state);
+    });
+    states = [...deduplicated.values()]
+      .sort(compareRotationLayoutStates)
+      .slice(0, MAX_ROTATION_LAYOUT_SEARCH_STATES);
+  });
+
+  const best = [...states].sort(compareRotationLayoutStates)[0];
+  if (!best?.combinedTargetBoundsMm || best.placements.length !== objects.length) {
+    return emptyPlan(
+      `安全有效区域无法容纳全部 ${objects.length} 个对象。即使逐个比较当前朝向与绕 Y 轴增加 90 度后的候选，确定性行式排布仍然空间不足；请减小对象安全间距、缩小对象或改用更大的打印平台。`
+    );
+  }
+  const combinedTargetBoundsMm = best.combinedTargetBoundsMm;
+  const movedObjectCount = best.placements.filter((placement) => placement.moved).length;
+  const changedObjectCount = best.placements.filter((placement) => placement.changed).length;
+  return {
+    sourceIdentity,
+    clearanceMm,
+    effectiveBoundsMm: effective,
+    status: 'ready',
+    placements: best.placements,
+    objectCount: objects.length,
+    movedObjectCount,
+    rotatedObjectCount: best.rotatedObjectCount,
+    changedObjectCount,
+    rowCount: best.rowIndex + 1,
+    combinedTargetBoundsMm,
+    combinedTargetWidthMm: boundsWidth(combinedTargetBoundsMm),
+    combinedTargetDepthMm: boundsDepth(combinedTargetBoundsMm),
+    combinedTargetAreaMm2: layoutArea(combinedTargetBoundsMm),
+    totalDistanceMm: best.totalDistanceMm,
     fitsEffectiveArea: fitsInside(combinedTargetBoundsMm, effective),
     failureReason: null
   };

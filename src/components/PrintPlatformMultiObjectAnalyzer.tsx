@@ -254,6 +254,20 @@ export function PrintPlatformMultiObjectAnalyzer() {
               basePositionDisplayMm: source.basePositionDisplayMm,
               platformSizeMm
             });
+            const rotated90Boundary = evaluatePrintPlatformBoundary({
+              positions: positions.array,
+              indices: geometry.getIndex()?.array ?? null
+            }, {
+              rotationDeg: {
+                ...source.rotationDeg,
+                y: source.rotationDeg.y + 90
+              },
+              positionMm: source.positionMm,
+              uniformScale: source.uniformScale,
+              normalizationSpace: source.normalizationSpace,
+              basePositionDisplayMm: source.basePositionDisplayMm,
+              platformSizeMm
+            });
             return {
               sourceIdentity: source.sourceIdentity,
               objectId: source.objectId,
@@ -261,7 +275,9 @@ export function PrintPlatformMultiObjectAnalyzer() {
               sourceKind: source.sourceKind,
               printable: true,
               visible: source.visible,
-              boundsMm: boundary.boundsMm
+              boundsMm: boundary.boundsMm,
+              currentRotationYDeg: source.rotationDeg.y,
+              rotated90BoundsMm: rotated90Boundary.boundsMm
             };
           } finally {
             geometry.dispose();

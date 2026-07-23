@@ -169,6 +169,80 @@ describe('对象变换、颜色与版本历史', () => {
     expect(state.objectPresentations.cover.transform.positionMm).toEqual({ x: 12, y: 18, z: -20 });
   });
 
+  it('90 度旋转寻优批量写入位置和 Y 轴角度，并整体撤销和重做', async () => {
+    const body = normalizeObjectPresentation({
+      transform: {
+        positionMm: { x: 8, y: 5, z: 3 },
+        rotationDeg: { x: 10, y: 25, z: 30 },
+        scale: 1.25
+      },
+      color: '#123456'
+    }, '#d9d4c8');
+    const cover = normalizeObjectPresentation({
+      transform: {
+        positionMm: { x: -4, y: 18, z: 6 },
+        rotationDeg: { x: -5, y: 80, z: 15 },
+        scale: 0.8
+      },
+      color: '#abcdef'
+    }, '#eeeae1');
+    useModelStore.setState({
+      objectPresentations: { body, cover },
+      versions: [version('旋转寻优前', { body, cover })],
+      versionIndex: 0
+    });
+
+    expect(useModelStore.getState().applyObjectPresentationBatch([
+      {
+        objectId: 'body',
+        presentation: {
+          ...body,
+          transform: {
+            ...body.transform,
+            positionMm: { ...body.transform.positionMm, x: -20, z: -18 },
+            rotationDeg: { ...body.transform.rotationDeg, y: 115 }
+          }
+        }
+      },
+      {
+        objectId: 'cover',
+        presentation: {
+          ...cover,
+          transform: {
+            ...cover.transform,
+            positionMm: { ...cover.transform.positionMm, x: 10, z: -18 }
+          }
+        }
+      }
+    ], '旋转寻优排布 2 个打印对象')).toBe(true);
+
+    let state = useModelStore.getState();
+    expect(state.versions).toHaveLength(2);
+    expect(state.versions[1]).toMatchObject({ label: '旋转寻优排布 2 个打印对象', changeKind: 'presentation' });
+    expect(state.objectPresentations.body.transform).toEqual({
+      positionMm: { x: -20, y: 5, z: -18 },
+      rotationDeg: { x: 10, y: 115, z: 30 },
+      scale: 1.25
+    });
+    expect(state.objectPresentations.cover.transform).toEqual({
+      positionMm: { x: 10, y: 18, z: -18 },
+      rotationDeg: { x: -5, y: 80, z: 15 },
+      scale: 0.8
+    });
+
+    await state.undo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body).toEqual(body);
+    expect(state.objectPresentations.cover).toEqual(cover);
+
+    await state.redo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body.transform.rotationDeg.y).toBe(115);
+    expect(state.objectPresentations.cover.transform.rotationDeg.y).toBe(80);
+    expect(state.objectPresentations.body.transform.positionMm).toEqual({ x: -20, y: 5, z: -18 });
+    expect(state.objectPresentations.cover.transform.positionMm).toEqual({ x: 10, y: 18, z: -18 });
+  });
+
   it('任意 CAD 拆件可按独立对象身份批量排布，并整体撤销和重做', async () => {
     const parent = normalizeObjectPresentation({
       transform: {

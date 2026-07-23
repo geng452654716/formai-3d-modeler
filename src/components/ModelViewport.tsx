@@ -44,13 +44,13 @@ import {
   type PrintPlatformViewRequest
 } from '../model/printPlatformCamera';
 import {
-  createPrintPlatformMultiObjectLayoutPlan,
+  createPrintPlatformMultiObjectRotationLayoutPlan,
   createPrintPlatformMultiObjectSpacingDiagnostic,
-  type PrintPlatformMultiObjectLayoutPlan,
   type PrintPlatformMultiObjectPreview,
+  type PrintPlatformMultiObjectRotationLayoutPlan,
   type PrintPlatformMultiObjectSpacingDiagnostic,
-  type PrintPlatformObjectLayoutPlacement,
-  type PrintPlatformObjectPairDiagnostic
+  type PrintPlatformObjectPairDiagnostic,
+  type PrintPlatformObjectRotationLayoutPlacement
 } from '../model/printPlatformMultiObject';
 import {
   createPrintPlatformBoundarySegment,
@@ -2056,7 +2056,7 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
 /** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
 interface PrintPlatformOverlayLayerProps {
   spacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
-  layoutPlan: PrintPlatformMultiObjectLayoutPlan | null;
+  layoutPlan: PrintPlatformMultiObjectRotationLayoutPlan | null;
 }
 
 function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatformOverlayLayerProps) {
@@ -2276,6 +2276,15 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatf
           x: (placement.targetBoundsMm.minimumX + placement.targetBoundsMm.maximumX) / 2,
           z: (placement.targetBoundsMm.minimumZ + placement.targetBoundsMm.maximumZ) / 2
         };
+        const orientationLengthMm = Math.max(3, Math.min(
+          placement.targetBoundsMm.maximumX - placement.targetBoundsMm.minimumX,
+          placement.targetBoundsMm.maximumZ - placement.targetBoundsMm.minimumZ
+        ) * 0.38);
+        const orientationRadians = placement.targetRotationYDeg * Math.PI / 180;
+        const orientationEnd = {
+          x: targetCenter.x + Math.cos(orientationRadians) * orientationLengthMm,
+          z: targetCenter.z - Math.sin(orientationRadians) * orientationLengthMm
+        };
         return (
           <group key={`自动排布目标-${placement.sourceIdentity}`}>
             <Line
@@ -2294,6 +2303,20 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatf
               depthWrite={false}
               raycast={() => undefined}
               renderOrder={27}
+            />
+            <Line
+              points={[
+                [targetCenter.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.018, targetCenter.z],
+                [orientationEnd.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.018, orientationEnd.z]
+              ]}
+              color={placement.rotated ? '#ffb65c' : '#b9f3ff'}
+              lineWidth={placement.rotated ? 3 : 2.2}
+              transparent
+              opacity={0.94}
+              depthTest={false}
+              depthWrite={false}
+              raycast={() => undefined}
+              renderOrder={28}
             />
             {placement.moved && (
               <Line
@@ -2396,22 +2419,26 @@ function printPlatformSpacingPairText(pair: PrintPlatformObjectPairDiagnostic) {
   return `${labels}：最近间距 ${pair.distanceMm.toFixed(2)} 毫米，满足要求`;
 }
 
-function printPlatformLayoutStatusText(plan: PrintPlatformMultiObjectLayoutPlan) {
+function printPlatformLayoutStatusText(plan: PrintPlatformMultiObjectRotationLayoutPlan) {
   if (plan.status === 'empty') return '当前没有可排布的打印对象';
   if (plan.status === 'unplaceable') return '当前安全有效区域无法生成完整排布方案';
-  if (plan.movedObjectCount === 0) return `全部 ${plan.objectCount} 个对象已位于本方案目标位置`;
-  return `已生成 ${plan.objectCount} 个对象、${plan.rowCount} 行的候选排布，其中 ${plan.movedObjectCount} 个对象需要移动`;
+  if (plan.changedObjectCount === 0) return `全部 ${plan.objectCount} 个对象已位于最优位置和角度`;
+  return `已生成 ${plan.objectCount} 个对象、${plan.rowCount} 行的候选排布，其中 ${plan.movedObjectCount} 个对象需要移动、${plan.rotatedObjectCount} 个对象需要绕 Y 轴旋转 90 度`;
 }
 
-function printPlatformLayoutPlacementText(placement: PrintPlatformObjectLayoutPlacement) {
-  if (!placement.moved) return `${placement.objectLabel}：保持当前位置`;
+function printPlatformLayoutPlacementText(placement: PrintPlatformObjectRotationLayoutPlacement) {
+  if (!placement.changed) return `${placement.objectLabel}：保持当前位置和 Y 轴 ${placement.currentRotationYDeg.toFixed(2)}°`;
   const x = Math.abs(placement.deltaMm.x) <= 1e-4
     ? 'X 轴不移动'
     : `沿 X 轴${placement.deltaMm.x > 0 ? '正' : '负'}方向 ${Math.abs(placement.deltaMm.x).toFixed(2)} 毫米`;
   const z = Math.abs(placement.deltaMm.z) <= 1e-4
     ? 'Z 轴不移动'
     : `沿 Z 轴${placement.deltaMm.z > 0 ? '正' : '负'}方向 ${Math.abs(placement.deltaMm.z).toFixed(2)} 毫米`;
-  return `${placement.objectLabel}：${x}，${z}，水平位移 ${placement.distanceMm.toFixed(2)} 毫米`;
+  const rotation = placement.rotated
+    ? `绕 Y 轴从 ${placement.currentRotationYDeg.toFixed(2)}° 调整为 ${placement.targetRotationYDeg.toFixed(2)}°（+90°）`
+    : `保持 Y 轴 ${placement.currentRotationYDeg.toFixed(2)}°`;
+  const target = `目标占地 X ${placement.targetBoundsMm.minimumX.toFixed(2)} 至 ${placement.targetBoundsMm.maximumX.toFixed(2)} 毫米、Z ${placement.targetBoundsMm.minimumZ.toFixed(2)} 至 ${placement.targetBoundsMm.maximumZ.toFixed(2)} 毫米`;
+  return `${placement.objectLabel}：${x}，${z}，水平位移 ${placement.distanceMm.toFixed(2)} 毫米；${rotation}；${target}`;
 }
 
 interface PrintPlatformCameraControllerProps {
@@ -2577,7 +2604,7 @@ function PrintPlatformCameraController({
 interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
   printPlatformSpacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
-  printPlatformLayoutPlan: PrintPlatformMultiObjectLayoutPlan | null;
+  printPlatformLayoutPlan: PrintPlatformMultiObjectRotationLayoutPlan | null;
   onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
@@ -3028,7 +3055,7 @@ export function ModelViewport() {
   const printPlatformLayoutPlan = useMemo(() => {
     if (!printPlatformMultiObjectPreview || !printPlatformOverlay || !printPlatformSpacingState.diagnostic) return null;
     try {
-      return createPrintPlatformMultiObjectLayoutPlan(
+      return createPrintPlatformMultiObjectRotationLayoutPlan(
         printPlatformMultiObjectPreview,
         printPlatformOverlay.effectiveBoundsMm,
         printPlatformSpacingState.diagnostic.clearanceMm
@@ -3069,7 +3096,7 @@ export function ModelViewport() {
     if (
       !activePrintPlatformLayoutPlan
       || activePrintPlatformLayoutPlan.status !== 'ready'
-      || activePrintPlatformLayoutPlan.movedObjectCount === 0
+      || activePrintPlatformLayoutPlan.changedObjectCount === 0
     ) return;
     const updates = activePrintPlatformLayoutPlan.placements.map((placement) => {
       const splitSourceId = manufacturingResult?.sourceKind === 'cad-part'
@@ -3102,6 +3129,10 @@ export function ModelViewport() {
               ...current.transform.positionMm,
               x: current.transform.positionMm.x + placement.deltaMm.x,
               z: current.transform.positionMm.z + placement.deltaMm.z
+            },
+            rotationDeg: {
+              ...current.transform.rotationDeg,
+              y: placement.targetRotationYDeg
             }
           }
         }
@@ -3109,7 +3140,7 @@ export function ModelViewport() {
     });
     const applied = applyObjectPresentationBatch(
       updates,
-      `自动排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
+      `旋转寻优排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
     );
     if (applied) setPrintPlatformLayoutPreviewSourceIdentity(null);
   };
@@ -3263,24 +3294,24 @@ export function ModelViewport() {
                         data-print-platform-layout-create
                         onClick={() => setPrintPlatformLayoutPreviewSourceIdentity(printPlatformLayoutPlan.sourceIdentity)}
                       >
-                        生成自动排布预览
+                        生成 90 度旋转寻优预览
                       </button>
                     )}
                     {activePrintPlatformLayoutPlan && (
                       <section
                         className={`print-platform-layout-preview is-${activePrintPlatformLayoutPlan.status}`}
-                        aria-label="多对象自动排布预览"
+                        aria-label="多对象 90 度旋转寻优排布预览"
                         data-print-platform-layout-status={activePrintPlatformLayoutPlan.status}
                       >
-                        <strong>多对象自动排布预览</strong>
+                        <strong>多对象 90 度旋转寻优排布预览</strong>
                         <div className="print-platform-layout-actions">
                           <button
                             type="button"
                             data-print-platform-layout-apply
-                            disabled={activePrintPlatformLayoutPlan.status !== 'ready' || activePrintPlatformLayoutPlan.movedObjectCount === 0}
+                            disabled={activePrintPlatformLayoutPlan.status !== 'ready' || activePrintPlatformLayoutPlan.changedObjectCount === 0}
                             onClick={applyPrintPlatformLayout}
                           >
-                            应用全部排布
+                            应用全部位置与旋转
                           </button>
                           <button
                             type="button"
@@ -3298,17 +3329,18 @@ export function ModelViewport() {
                         {activePrintPlatformLayoutPlan.status === 'ready' && (
                           <>
                             <small>
-                              目标整体占地 {activePrintPlatformLayoutPlan.combinedTargetWidthMm.toFixed(2)} × {activePrintPlatformLayoutPlan.combinedTargetDepthMm.toFixed(2)} 毫米 · 安全间距 {activePrintPlatformLayoutPlan.clearanceMm.toFixed(2)} 毫米
+                              目标整体占地 {activePrintPlatformLayoutPlan.combinedTargetWidthMm.toFixed(2)} × {activePrintPlatformLayoutPlan.combinedTargetDepthMm.toFixed(2)} 毫米（{activePrintPlatformLayoutPlan.combinedTargetAreaMm2.toFixed(2)} 平方毫米） · 安全间距 {activePrintPlatformLayoutPlan.clearanceMm.toFixed(2)} 毫米 · 总水平位移 {activePrintPlatformLayoutPlan.totalDistanceMm.toFixed(2)} 毫米
                             </small>
                             {activePrintPlatformLayoutPlan.placements.map((placement) => (
                               <small
                                 key={placement.sourceIdentity}
                                 data-print-platform-layout-placement={placement.objectId}
+                                data-print-platform-layout-rotation={placement.targetRotationYDeg}
                               >
                                 {printPlatformLayoutPlacementText(placement)}
                               </small>
                             ))}
-                            <div className="print-platform-overlay-legend-row"><i className="is-layout-target" />候选目标占地与位移</div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-layout-target" />候选目标占地、位移与 Y 轴方向</div>
                           </>
                         )}
                       </section>
