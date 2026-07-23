@@ -1662,3 +1662,29 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 }
 .print-platform-layout-actions button:disabled { cursor: not-allowed; opacity: .42; }
 .print-platform-overlay-legend-row i.is-layout-target { color: #69e3ff; border-top-style: dashed; border-top-width: 3px; }
+
+.print-platform-layout-locks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  pointer-events: auto;
+}
+.print-platform-layout-locks > strong {
+  grid-column: 1 / -1;
+  color: #cfd5d9;
+  font-size: 8px;
+}
+.print-platform-layout-locks button {
+  min-height: 22px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .04);
+  color: #aeb4b8;
+  font-size: 8px;
+}
+.print-platform-layout-locks button.is-locked {
+  border-color: rgba(255, 182, 92, .52);
+  background: rgba(130, 81, 28, .24);
+  color: #ffc982;
+}
+.print-platform-overlay-legend-row i.is-layout-locked { color: #9aa4ad; border-top-style: dashed; border-top-width: 3px; }

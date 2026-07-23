@@ -867,3 +867,275 @@ export function createPrintPlatformMultiObjectRotationLayoutPlan(
     failureReason: null
   };
 }
+
+export interface PrintPlatformObjectLockedRotationLayoutPlacement extends PrintPlatformObjectRotationLayoutPlacement {
+  locked: boolean;
+}
+
+export interface PrintPlatformMultiObjectLockedRotationLayoutPlan extends Omit<PrintPlatformMultiObjectRotationLayoutPlan, 'placements'> {
+  placements: PrintPlatformObjectLockedRotationLayoutPlacement[];
+  lockedObjectCount: number;
+  adjustableObjectCount: number;
+}
+
+interface LockedRotationLayoutSearchState {
+  placements: PrintPlatformObjectLockedRotationLayoutPlacement[];
+  totalDistanceMm: number;
+  rotatedObjectCount: number;
+  orientationSignature: string;
+}
+
+function horizontalBoundsRespectClearance(
+  first: PrintPlatformHorizontalBounds,
+  second: PrintPlatformHorizontalBounds,
+  clearanceMm: number
+) {
+  return first.maximumX + clearanceMm <= second.minimumX + BOUNDARY_TOLERANCE_MM
+    || second.maximumX + clearanceMm <= first.minimumX + BOUNDARY_TOLERANCE_MM
+    || first.maximumZ + clearanceMm <= second.minimumZ + BOUNDARY_TOLERANCE_MM
+    || second.maximumZ + clearanceMm <= first.minimumZ + BOUNDARY_TOLERANCE_MM;
+}
+
+function combinedPlacementBounds(placements: PrintPlatformObjectLockedRotationLayoutPlacement[]) {
+  if (placements.length === 0) return null;
+  return placements.reduce<PrintPlatformHorizontalBounds>((combined, placement) => ({
+    minimumX: Math.min(combined.minimumX, placement.targetBoundsMm.minimumX),
+    maximumX: Math.max(combined.maximumX, placement.targetBoundsMm.maximumX),
+    minimumZ: Math.min(combined.minimumZ, placement.targetBoundsMm.minimumZ),
+    maximumZ: Math.max(combined.maximumZ, placement.targetBoundsMm.maximumZ)
+  }), { ...placements[0].targetBoundsMm });
+}
+
+function lockedLayoutRowCount(placements: PrintPlatformObjectLockedRotationLayoutPlacement[]) {
+  return new Set(
+    placements
+      .filter((placement) => !placement.locked)
+      .map((placement) => placement.targetBoundsMm.minimumZ.toFixed(4))
+  ).size;
+}
+
+function compareLockedRotationLayoutStates(
+  first: LockedRotationLayoutSearchState,
+  second: LockedRotationLayoutSearchState
+) {
+  return lockedLayoutRowCount(first.placements) - lockedLayoutRowCount(second.placements)
+    || compareLayoutNumber(layoutArea(combinedPlacementBounds(first.placements)), layoutArea(combinedPlacementBounds(second.placements)))
+    || compareLayoutNumber(first.totalDistanceMm, second.totalDistanceMm)
+    || first.rotatedObjectCount - second.rotatedObjectCount
+    || first.orientationSignature.localeCompare(second.orientationSignature);
+}
+
+function lockedRotationLayoutStateKey(state: LockedRotationLayoutSearchState) {
+  return state.placements
+    .filter((placement) => !placement.locked)
+    .map((placement) => [
+      placement.objectId,
+      placement.targetBoundsMm.minimumX.toFixed(4),
+      placement.targetBoundsMm.minimumZ.toFixed(4),
+      placement.rotated ? '1' : '0'
+    ].join(':'))
+    .join('|');
+}
+
+/**
+ * 保持锁定对象的当前位置和角度，只在剩余安全空间内为未锁定对象执行 90 度旋转寻优。
+ * 锁定集合属于会话级排布约束，不修改对象几何或版本数据。
+ */
+export function createPrintPlatformMultiObjectLockedRotationLayoutPlan(
+  preview: PrintPlatformMultiObjectPreview,
+  effectiveBoundsMm: PrintPlatformHorizontalBounds,
+  clearanceMm: number,
+  lockedObjectIds: readonly string[]
+): PrintPlatformMultiObjectLockedRotationLayoutPlan {
+  const normalizedLockedIds = [...new Set(lockedObjectIds.map((objectId) => nonEmptyText(objectId, '锁定对象身份')))].sort();
+  const basePlan = createPrintPlatformMultiObjectRotationLayoutPlan(preview, effectiveBoundsMm, clearanceMm);
+  if (normalizedLockedIds.length === 0 || preview.objects.length === 0) {
+    return {
+      ...basePlan,
+      placements: basePlan.placements.map((placement) => ({ ...placement, locked: false })),
+      lockedObjectCount: 0,
+      adjustableObjectCount: basePlan.objectCount
+    };
+  }
+
+  const effective = checkedBounds(effectiveBoundsMm, '锁定重新寻优安全有效区域');
+  const objects = [...preview.objects].sort((first, second) => (
+    first.sourceIdentity.localeCompare(second.sourceIdentity) || first.objectId.localeCompare(second.objectId)
+  ));
+  const objectIds = new Set(objects.map((object) => object.objectId));
+  const lockedSet = new Set(normalizedLockedIds.filter((objectId) => objectIds.has(objectId)));
+  const sourceIdentity = [
+    basePlan.sourceIdentity,
+    '多对象锁定重新寻优',
+    ...[...lockedSet].sort()
+  ].join('\u0000');
+  const emptyPlan = (failureReason: string): PrintPlatformMultiObjectLockedRotationLayoutPlan => ({
+    ...basePlan,
+    sourceIdentity,
+    status: 'unplaceable',
+    placements: [],
+    movedObjectCount: 0,
+    rotatedObjectCount: 0,
+    changedObjectCount: 0,
+    rowCount: 0,
+    combinedTargetBoundsMm: null,
+    combinedTargetWidthMm: 0,
+    combinedTargetDepthMm: 0,
+    combinedTargetAreaMm2: 0,
+    totalDistanceMm: 0,
+    fitsEffectiveArea: false,
+    failureReason,
+    lockedObjectCount: lockedSet.size,
+    adjustableObjectCount: objects.length - lockedSet.size
+  });
+
+  const lockedPlacements: PrintPlatformObjectLockedRotationLayoutPlacement[] = objects
+    .filter((object) => lockedSet.has(object.objectId))
+    .map((object) => {
+      const bounds = checkedBounds(object.boundsMm, `“${object.objectLabel}”锁定占地边界`);
+      return {
+        sourceIdentity: `${sourceIdentity}\u0001${object.sourceIdentity}\u0001锁定`,
+        objectId: object.objectId,
+        objectLabel: object.objectLabel,
+        currentBoundsMm: bounds,
+        targetBoundsMm: { ...bounds },
+        deltaMm: { x: 0, z: 0 },
+        distanceMm: 0,
+        moved: false,
+        rowIndex: -1,
+        currentRotationYDeg: object.currentRotationYDeg,
+        targetRotationYDeg: object.currentRotationYDeg,
+        rotationDeltaYDeg: 0,
+        rotated: false,
+        changed: false,
+        locked: true
+      };
+    });
+
+  for (const placement of lockedPlacements) {
+    if (!fitsInside(placement.targetBoundsMm, effective)) {
+      return emptyPlan(`锁定对象“${placement.objectLabel}”当前占地超出安全有效区域，请先解锁或调整对象后再重新寻优。`);
+    }
+  }
+  for (let firstIndex = 0; firstIndex < lockedPlacements.length; firstIndex += 1) {
+    for (let secondIndex = firstIndex + 1; secondIndex < lockedPlacements.length; secondIndex += 1) {
+      const first = lockedPlacements[firstIndex];
+      const second = lockedPlacements[secondIndex];
+      if (!horizontalBoundsRespectClearance(first.targetBoundsMm, second.targetBoundsMm, clearanceMm)) {
+        return emptyPlan(`锁定对象“${first.objectLabel}”与“${second.objectLabel}”未满足 ${clearanceMm.toFixed(2)} 毫米安全间距，请至少解锁其中一个对象。`);
+      }
+    }
+  }
+
+  const adjustableObjects = objects.filter((object) => !lockedSet.has(object.objectId));
+  let states: LockedRotationLayoutSearchState[] = [{
+    placements: lockedPlacements,
+    totalDistanceMm: 0,
+    rotatedObjectCount: 0,
+    orientationSignature: ''
+  }];
+
+  adjustableObjects.forEach((object) => {
+    const orientations = ([false, true] as const).map((rotated) => {
+      const boundsMm = checkedBounds(
+        rotated ? object.rotated90BoundsMm : object.boundsMm,
+        `“${object.objectLabel}”${rotated ? '旋转 90 度' : '当前'}占地边界`
+      );
+      return { rotated, boundsMm, widthMm: boundsWidth(boundsMm), depthMm: boundsDepth(boundsMm) };
+    });
+    const nextStates: LockedRotationLayoutSearchState[] = [];
+    states.forEach((state) => {
+      const xCandidates = [...new Set([
+        effective.minimumX,
+        ...state.placements.map((placement) => placement.targetBoundsMm.maximumX + clearanceMm)
+      ].map((value) => Number(value.toFixed(4))))].sort((first, second) => first - second);
+      const zCandidates = [...new Set([
+        effective.minimumZ,
+        ...state.placements.map((placement) => placement.targetBoundsMm.maximumZ + clearanceMm)
+      ].map((value) => Number(value.toFixed(4))))].sort((first, second) => first - second);
+      orientations.forEach((orientation) => {
+        zCandidates.forEach((minimumZ) => {
+          xCandidates.forEach((minimumX) => {
+            const targetBoundsMm = {
+              minimumX,
+              maximumX: minimumX + orientation.widthMm,
+              minimumZ,
+              maximumZ: minimumZ + orientation.depthMm
+            };
+            if (!fitsInside(targetBoundsMm, effective)) return;
+            if (state.placements.some((placement) => !horizontalBoundsRespectClearance(
+              placement.targetBoundsMm,
+              targetBoundsMm,
+              clearanceMm
+            ))) return;
+            const deltaMm = {
+              x: targetBoundsMm.minimumX - orientation.boundsMm.minimumX,
+              z: targetBoundsMm.minimumZ - orientation.boundsMm.minimumZ
+            };
+            const moved = Math.abs(deltaMm.x) > BOUNDARY_TOLERANCE_MM || Math.abs(deltaMm.z) > BOUNDARY_TOLERANCE_MM;
+            const placement: PrintPlatformObjectLockedRotationLayoutPlacement = {
+              sourceIdentity: `${sourceIdentity}\u0001${object.sourceIdentity}\u0001${orientation.rotated ? '旋转90度' : '保持当前角度'}`,
+              objectId: object.objectId,
+              objectLabel: object.objectLabel,
+              currentBoundsMm: checkedBounds(object.boundsMm, `“${object.objectLabel}”当前占地边界`),
+              targetBoundsMm,
+              deltaMm,
+              distanceMm: Math.hypot(deltaMm.x, deltaMm.z),
+              moved,
+              rowIndex: zCandidates.indexOf(minimumZ),
+              currentRotationYDeg: object.currentRotationYDeg,
+              targetRotationYDeg: orientation.rotated ? addQuarterTurnDegrees(object.currentRotationYDeg) : object.currentRotationYDeg,
+              rotationDeltaYDeg: orientation.rotated ? 90 : 0,
+              rotated: orientation.rotated,
+              changed: moved || orientation.rotated,
+              locked: false
+            };
+            nextStates.push({
+              placements: [...state.placements, placement],
+              totalDistanceMm: state.totalDistanceMm + placement.distanceMm,
+              rotatedObjectCount: state.rotatedObjectCount + (orientation.rotated ? 1 : 0),
+              orientationSignature: `${state.orientationSignature}${orientation.rotated ? '1' : '0'}@${minimumX},${minimumZ};`
+            });
+          });
+        });
+      });
+    });
+    const deduplicated = new Map<string, LockedRotationLayoutSearchState>();
+    nextStates.forEach((state) => {
+      const key = lockedRotationLayoutStateKey(state);
+      const existing = deduplicated.get(key);
+      if (!existing || compareLockedRotationLayoutStates(state, existing) < 0) deduplicated.set(key, state);
+    });
+    states = [...deduplicated.values()].sort(compareLockedRotationLayoutStates).slice(0, MAX_ROTATION_LAYOUT_SEARCH_STATES);
+  });
+
+  const best = [...states].sort(compareLockedRotationLayoutStates)[0];
+  if (!best || best.placements.length !== objects.length) {
+    return emptyPlan(`在保持 ${lockedSet.size} 个锁定对象不变的前提下，剩余安全空间无法容纳全部 ${adjustableObjects.length} 个未锁定对象；请解锁对象、减小安全间距或改用更大的打印平台。`);
+  }
+  const placementsById = new Map(best.placements.map((placement) => [placement.objectId, placement]));
+  const placements = objects.map((object) => placementsById.get(object.objectId)!).filter(Boolean);
+  const combinedTargetBoundsMm = combinedPlacementBounds(placements);
+  const rowCount = lockedLayoutRowCount(placements);
+  return {
+    sourceIdentity,
+    clearanceMm,
+    effectiveBoundsMm: effective,
+    status: 'ready',
+    placements,
+    objectCount: objects.length,
+    movedObjectCount: placements.filter((placement) => placement.moved).length,
+    rotatedObjectCount: placements.filter((placement) => placement.rotated).length,
+    changedObjectCount: placements.filter((placement) => placement.changed).length,
+    rowCount,
+    combinedTargetBoundsMm,
+    combinedTargetWidthMm: combinedTargetBoundsMm ? boundsWidth(combinedTargetBoundsMm) : 0,
+    combinedTargetDepthMm: combinedTargetBoundsMm ? boundsDepth(combinedTargetBoundsMm) : 0,
+    combinedTargetAreaMm2: layoutArea(combinedTargetBoundsMm),
+    totalDistanceMm: placements.reduce((sum, placement) => sum + placement.distanceMm, 0),
+    fitsEffectiveArea: Boolean(combinedTargetBoundsMm && fitsInside(combinedTargetBoundsMm, effective)),
+    failureReason: null,
+    lockedObjectCount: lockedSet.size,
+    adjustableObjectCount: adjustableObjects.length
+  };
+}

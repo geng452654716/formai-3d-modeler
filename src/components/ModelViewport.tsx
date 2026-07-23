@@ -44,13 +44,13 @@ import {
   type PrintPlatformViewRequest
 } from '../model/printPlatformCamera';
 import {
-  createPrintPlatformMultiObjectRotationLayoutPlan,
+  createPrintPlatformMultiObjectLockedRotationLayoutPlan,
   createPrintPlatformMultiObjectSpacingDiagnostic,
   type PrintPlatformMultiObjectPreview,
-  type PrintPlatformMultiObjectRotationLayoutPlan,
+  type PrintPlatformMultiObjectLockedRotationLayoutPlan,
   type PrintPlatformMultiObjectSpacingDiagnostic,
   type PrintPlatformObjectPairDiagnostic,
-  type PrintPlatformObjectRotationLayoutPlacement
+  type PrintPlatformObjectLockedRotationLayoutPlacement
 } from '../model/printPlatformMultiObject';
 import {
   createPrintPlatformBoundarySegment,
@@ -2056,7 +2056,7 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
 /** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
 interface PrintPlatformOverlayLayerProps {
   spacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
-  layoutPlan: PrintPlatformMultiObjectRotationLayoutPlan | null;
+  layoutPlan: PrintPlatformMultiObjectLockedRotationLayoutPlan | null;
 }
 
 function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatformOverlayLayerProps) {
@@ -2292,8 +2292,8 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatf
                 placement.targetBoundsMm,
                 PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + index * 0.002
               )}
-              color="#69e3ff"
-              lineWidth={2.8}
+              color={placement.locked ? '#9aa4ad' : '#69e3ff'}
+              lineWidth={placement.locked ? 2.2 : 2.8}
               dashed
               dashSize={5}
               gapSize={1.8}
@@ -2309,8 +2309,8 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatf
                 [targetCenter.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.018, targetCenter.z],
                 [orientationEnd.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.018, orientationEnd.z]
               ]}
-              color={placement.rotated ? '#ffb65c' : '#b9f3ff'}
-              lineWidth={placement.rotated ? 3 : 2.2}
+              color={placement.locked ? '#9aa4ad' : placement.rotated ? '#ffb65c' : '#b9f3ff'}
+              lineWidth={placement.locked ? 2 : placement.rotated ? 3 : 2.2}
               transparent
               opacity={0.94}
               depthTest={false}
@@ -2419,14 +2419,15 @@ function printPlatformSpacingPairText(pair: PrintPlatformObjectPairDiagnostic) {
   return `${labels}：最近间距 ${pair.distanceMm.toFixed(2)} 毫米，满足要求`;
 }
 
-function printPlatformLayoutStatusText(plan: PrintPlatformMultiObjectRotationLayoutPlan) {
+function printPlatformLayoutStatusText(plan: PrintPlatformMultiObjectLockedRotationLayoutPlan) {
   if (plan.status === 'empty') return '当前没有可排布的打印对象';
   if (plan.status === 'unplaceable') return '当前安全有效区域无法生成完整排布方案';
   if (plan.changedObjectCount === 0) return `全部 ${plan.objectCount} 个对象已位于最优位置和角度`;
   return `已生成 ${plan.objectCount} 个对象、${plan.rowCount} 行的候选排布，其中 ${plan.movedObjectCount} 个对象需要移动、${plan.rotatedObjectCount} 个对象需要绕 Y 轴旋转 90 度`;
 }
 
-function printPlatformLayoutPlacementText(placement: PrintPlatformObjectRotationLayoutPlacement) {
+function printPlatformLayoutPlacementText(placement: PrintPlatformObjectLockedRotationLayoutPlacement) {
+  if (placement.locked) return `${placement.objectLabel}：已锁定，保持当前位置和 Y 轴 ${placement.currentRotationYDeg.toFixed(2)}°`;
   if (!placement.changed) return `${placement.objectLabel}：保持当前位置和 Y 轴 ${placement.currentRotationYDeg.toFixed(2)}°`;
   const x = Math.abs(placement.deltaMm.x) <= 1e-4
     ? 'X 轴不移动'
@@ -2604,7 +2605,7 @@ function PrintPlatformCameraController({
 interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
   printPlatformSpacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
-  printPlatformLayoutPlan: PrintPlatformMultiObjectRotationLayoutPlan | null;
+  printPlatformLayoutPlan: PrintPlatformMultiObjectLockedRotationLayoutPlan | null;
   onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
@@ -3000,6 +3001,7 @@ export function ModelViewport() {
   const [printPlatformReturnSourceIdentity, setPrintPlatformReturnSourceIdentity] = useState<string | null>(null);
   const [printPlatformSpacingClearanceInput, setPrintPlatformSpacingClearanceInput] = useState('2');
   const [printPlatformLayoutPreviewSourceIdentity, setPrintPlatformLayoutPreviewSourceIdentity] = useState<string | null>(null);
+  const [printPlatformLockedObjectIds, setPrintPlatformLockedObjectIds] = useState<string[]>([]);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const cadError = useModelStore((state) => state.cadError);
@@ -3055,15 +3057,16 @@ export function ModelViewport() {
   const printPlatformLayoutPlan = useMemo(() => {
     if (!printPlatformMultiObjectPreview || !printPlatformOverlay || !printPlatformSpacingState.diagnostic) return null;
     try {
-      return createPrintPlatformMultiObjectRotationLayoutPlan(
+      return createPrintPlatformMultiObjectLockedRotationLayoutPlan(
         printPlatformMultiObjectPreview,
         printPlatformOverlay.effectiveBoundsMm,
-        printPlatformSpacingState.diagnostic.clearanceMm
+        printPlatformSpacingState.diagnostic.clearanceMm,
+        printPlatformLockedObjectIds
       );
     } catch {
       return null;
     }
-  }, [printPlatformMultiObjectPreview, printPlatformOverlay, printPlatformSpacingState.diagnostic]);
+  }, [printPlatformMultiObjectPreview, printPlatformOverlay, printPlatformSpacingState.diagnostic, printPlatformLockedObjectIds]);
   const activePrintPlatformLayoutPlan = printPlatformLayoutPlan?.sourceIdentity === printPlatformLayoutPreviewSourceIdentity
     ? printPlatformLayoutPlan
     : null;
@@ -3092,13 +3095,25 @@ export function ModelViewport() {
     setPrintPlatformLayoutPreviewSourceIdentity(null);
   }, [printPlatformOverlay?.sourceIdentity]);
 
+  useEffect(() => {
+    setPrintPlatformLockedObjectIds([]);
+  }, [printPlatformMultiObjectPreview?.sourceIdentity]);
+
+  const togglePrintPlatformObjectLock = (objectId: string) => {
+    setPrintPlatformLockedObjectIds((previous) => (
+      previous.includes(objectId)
+        ? previous.filter((candidate) => candidate !== objectId)
+        : [...previous, objectId].sort()
+    ));
+  };
+
   const applyPrintPlatformLayout = () => {
     if (
       !activePrintPlatformLayoutPlan
       || activePrintPlatformLayoutPlan.status !== 'ready'
       || activePrintPlatformLayoutPlan.changedObjectCount === 0
     ) return;
-    const updates = activePrintPlatformLayoutPlan.placements.map((placement) => {
+    const updates = activePrintPlatformLayoutPlan.placements.filter((placement) => !placement.locked && placement.changed).map((placement) => {
       const splitSourceId = manufacturingResult?.sourceKind === 'cad-part'
         && (placement.objectId === `${manufacturingResult.sourcePartId}-negative`
           || placement.objectId === `${manufacturingResult.sourcePartId}-positive`)
@@ -3140,7 +3155,9 @@ export function ModelViewport() {
     });
     const applied = applyObjectPresentationBatch(
       updates,
-      `旋转寻优排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
+      activePrintPlatformLayoutPlan.lockedObjectCount > 0
+        ? `锁定 ${activePrintPlatformLayoutPlan.lockedObjectCount} 个对象后重新寻优排布 ${activePrintPlatformLayoutPlan.adjustableObjectCount} 个对象`
+        : `旋转寻优排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
     );
     if (applied) setPrintPlatformLayoutPreviewSourceIdentity(null);
   };
@@ -3287,6 +3304,24 @@ export function ModelViewport() {
                     </small>
                     <div className="print-platform-overlay-legend-row"><i className="is-spacing-overlap" />水平重叠区域</div>
                     <div className="print-platform-overlay-legend-row"><i className="is-spacing-close" />间距不足连线</div>
+                    <section className="print-platform-layout-locks" aria-label="排布对象锁定">
+                      <strong>排布锁定（{printPlatformLockedObjectIds.length} 个）</strong>
+                      {printPlatformMultiObjectPreview.objects.map((object) => {
+                        const locked = printPlatformLockedObjectIds.includes(object.objectId);
+                        return (
+                          <button
+                            key={object.sourceIdentity}
+                            type="button"
+                            className={locked ? 'is-locked' : ''}
+                            aria-pressed={locked}
+                            data-print-platform-layout-lock={object.objectId}
+                            onClick={() => togglePrintPlatformObjectLock(object.objectId)}
+                          >
+                            {object.objectLabel}：{locked ? '已锁定' : '可调整'}
+                          </button>
+                        );
+                      })}
+                    </section>
                     {printPlatformLayoutPlan && !activePrintPlatformLayoutPlan && (
                       <button
                         type="button"
@@ -3294,16 +3329,16 @@ export function ModelViewport() {
                         data-print-platform-layout-create
                         onClick={() => setPrintPlatformLayoutPreviewSourceIdentity(printPlatformLayoutPlan.sourceIdentity)}
                       >
-                        生成 90 度旋转寻优预览
+                        生成锁定与 90 度旋转寻优预览
                       </button>
                     )}
                     {activePrintPlatformLayoutPlan && (
                       <section
                         className={`print-platform-layout-preview is-${activePrintPlatformLayoutPlan.status}`}
-                        aria-label="多对象 90 度旋转寻优排布预览"
+                        aria-label="多对象锁定与 90 度旋转寻优排布预览"
                         data-print-platform-layout-status={activePrintPlatformLayoutPlan.status}
                       >
-                        <strong>多对象 90 度旋转寻优排布预览</strong>
+                        <strong>多对象锁定与 90 度旋转寻优排布预览</strong>
                         <div className="print-platform-layout-actions">
                           <button
                             type="button"
@@ -3329,18 +3364,20 @@ export function ModelViewport() {
                         {activePrintPlatformLayoutPlan.status === 'ready' && (
                           <>
                             <small>
-                              目标整体占地 {activePrintPlatformLayoutPlan.combinedTargetWidthMm.toFixed(2)} × {activePrintPlatformLayoutPlan.combinedTargetDepthMm.toFixed(2)} 毫米（{activePrintPlatformLayoutPlan.combinedTargetAreaMm2.toFixed(2)} 平方毫米） · 安全间距 {activePrintPlatformLayoutPlan.clearanceMm.toFixed(2)} 毫米 · 总水平位移 {activePrintPlatformLayoutPlan.totalDistanceMm.toFixed(2)} 毫米
+                              锁定 {activePrintPlatformLayoutPlan.lockedObjectCount} 个 · 可调整 {activePrintPlatformLayoutPlan.adjustableObjectCount} 个 · 目标整体占地 {activePrintPlatformLayoutPlan.combinedTargetWidthMm.toFixed(2)} × {activePrintPlatformLayoutPlan.combinedTargetDepthMm.toFixed(2)} 毫米（{activePrintPlatformLayoutPlan.combinedTargetAreaMm2.toFixed(2)} 平方毫米） · 安全间距 {activePrintPlatformLayoutPlan.clearanceMm.toFixed(2)} 毫米 · 总水平位移 {activePrintPlatformLayoutPlan.totalDistanceMm.toFixed(2)} 毫米
                             </small>
                             {activePrintPlatformLayoutPlan.placements.map((placement) => (
                               <small
                                 key={placement.sourceIdentity}
                                 data-print-platform-layout-placement={placement.objectId}
                                 data-print-platform-layout-rotation={placement.targetRotationYDeg}
+                                data-print-platform-layout-locked={placement.locked ? 'true' : 'false'}
                               >
                                 {printPlatformLayoutPlacementText(placement)}
                               </small>
                             ))}
-                            <div className="print-platform-overlay-legend-row"><i className="is-layout-target" />候选目标占地、位移与 Y 轴方向</div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-layout-target" />可调整对象候选目标</div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-layout-locked" />锁定对象保持位置</div>
                           </>
                         )}
                       </section>

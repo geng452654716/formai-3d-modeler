@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createPrintPlatformMultiObjectLockedRotationLayoutPlan,
   createPrintPlatformMultiObjectPreview,
   createPrintPlatformMultiObjectRotationLayoutPlan,
   type PrintPlatformObjectFootprintCandidate
@@ -177,5 +178,101 @@ describe('打印平台多对象 90 度旋转寻优排布', () => {
       changedObjectCount: 0
     });
     expect(() => createPrintPlatformMultiObjectRotationLayoutPlan(emptyPreview, effective, -1)).toThrow('旋转寻优排布安全间距');
+  });
+});
+
+
+describe('打印平台多对象锁定与重新寻优排布', () => {
+  const lockedPlan = (
+    candidates: PrintPlatformObjectFootprintCandidate[],
+    effective: { minimumX: number; maximumX: number; minimumZ: number; maximumZ: number },
+    lockedObjectIds: string[],
+    clearanceMm = 2
+  ) => createPrintPlatformMultiObjectLockedRotationLayoutPlan(
+    createPrintPlatformMultiObjectPreview('锁定重新寻优测试来源', candidates, platform, effective),
+    effective,
+    clearanceMm,
+    lockedObjectIds
+  );
+
+  it('锁定对象保持当前位置和角度，未锁定对象避开其占地重新排布', () => {
+    const result = lockedPlan([
+      candidate('锁定件', 10, 10),
+      candidate('活动件', 8, 8)
+    ], { minimumX: 0, maximumX: 30, minimumZ: 0, maximumZ: 20 }, ['锁定件']);
+
+    expect(result).toMatchObject({ status: 'ready', lockedObjectCount: 1, adjustableObjectCount: 1 });
+    expect(result.placements.find((placement) => placement.objectId === '锁定件')).toMatchObject({
+      locked: true,
+      changed: false,
+      targetBoundsMm: { minimumX: 0, maximumX: 10, minimumZ: 0, maximumZ: 10 }
+    });
+    expect(result.placements.find((placement) => placement.objectId === '活动件')).toMatchObject({
+      locked: false,
+      targetBoundsMm: { minimumX: 0, maximumX: 8, minimumZ: 12, maximumZ: 20 }
+    });
+  });
+
+  it('锁定对象超出安全有效区域时返回中文失败原因且不生成部分方案', () => {
+    const result = lockedPlan([
+      candidate('越界锁定件', 10, 10, { minimumX: 18 })
+    ], { minimumX: 0, maximumX: 24, minimumZ: 0, maximumZ: 24 }, ['越界锁定件']);
+
+    expect(result.status).toBe('unplaceable');
+    expect(result.placements).toEqual([]);
+    expect(result.failureReason).toContain('超出安全有效区域');
+  });
+
+  it('锁定对象互相不满足间距时要求解锁且不生成部分方案', () => {
+    const result = lockedPlan([
+      candidate('锁定甲', 10, 10),
+      candidate('锁定乙', 10, 10, { minimumX: 11 })
+    ], { minimumX: 0, maximumX: 30, minimumZ: 0, maximumZ: 20 }, ['锁定甲', '锁定乙'], 2);
+
+    expect(result.status).toBe('unplaceable');
+    expect(result.placements).toEqual([]);
+    expect(result.failureReason).toContain('未满足 2.00 毫米安全间距');
+  });
+
+  it('未锁定对象可增加 90 度后放入锁定对象剩余空间', () => {
+    const result = lockedPlan([
+      candidate('锁定件', 12, 20),
+      candidate('长活动件', 14, 6)
+    ], { minimumX: 0, maximumX: 20, minimumZ: 0, maximumZ: 20 }, ['锁定件'], 2);
+
+    const adjustable = result.placements.find((placement) => placement.objectId === '长活动件');
+    expect(result.status).toBe('ready');
+    expect(adjustable).toMatchObject({ locked: false, rotated: true, targetRotationYDeg: 90 });
+  });
+
+  it('全部对象锁定时不产生位置或旋转变化', () => {
+    const result = lockedPlan([
+      candidate('a', 8, 8),
+      candidate('b', 8, 8, { minimumX: 10 })
+    ], { minimumX: 0, maximumX: 30, minimumZ: 0, maximumZ: 20 }, ['a', 'b'], 2);
+
+    expect(result).toMatchObject({
+      status: 'ready',
+      lockedObjectCount: 2,
+      adjustableObjectCount: 0,
+      changedObjectCount: 0,
+      movedObjectCount: 0,
+      rotatedObjectCount: 0
+    });
+    expect(result.placements.every((placement) => placement.locked)).toBe(true);
+  });
+
+  it('锁定集合和输入顺序不影响稳定结果', () => {
+    const candidates = [
+      candidate('c', 6, 10),
+      candidate('a', 10, 10),
+      candidate('b', 8, 8, { minimumX: 12 })
+    ];
+    const effective = { minimumX: 0, maximumX: 36, minimumZ: 0, maximumZ: 24 };
+    const first = lockedPlan(candidates, effective, ['b', 'a'], 2);
+    const second = lockedPlan([...candidates].reverse(), effective, ['a', 'b'], 2);
+
+    expect(second.sourceIdentity).toBe(first.sourceIdentity);
+    expect(second.placements).toEqual(first.placements);
   });
 });
