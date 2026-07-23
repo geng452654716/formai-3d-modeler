@@ -98,6 +98,141 @@ describe('对象变换、颜色与版本历史', () => {
     expect(useModelStore.getState().versions).toHaveLength(1);
   });
 
+  it('多对象自动排布一次性写入全部水平位置并创建一个可整体撤销重做的中文版本', async () => {
+    const body = normalizeObjectPresentation({
+      transform: {
+        positionMm: { x: 8, y: 5, z: 3 },
+        rotationDeg: { x: 10, y: 20, z: 30 },
+        scale: 1.25
+      },
+      color: '#123456'
+    }, '#d9d4c8');
+    const cover = normalizeObjectPresentation({
+      transform: {
+        positionMm: { x: -4, y: 18, z: 6 },
+        rotationDeg: { x: 0, y: 90, z: 0 },
+        scale: 0.8
+      },
+      color: '#abcdef'
+    }, '#eeeae1');
+    const initialVersion = version('排布前', { body, cover });
+    useModelStore.setState({
+      objectPresentations: { body, cover },
+      versions: [initialVersion],
+      versionIndex: 0,
+      printPlatformOverlay: null,
+      printPlatformMultiObjectPreview: null
+    });
+
+    const applied = useModelStore.getState().applyObjectPresentationBatch([
+      {
+        objectId: 'body',
+        presentation: {
+          ...body,
+          transform: { ...body.transform, positionMm: { ...body.transform.positionMm, x: -20, z: -20 } }
+        }
+      },
+      {
+        objectId: 'cover',
+        presentation: {
+          ...cover,
+          transform: { ...cover.transform, positionMm: { ...cover.transform.positionMm, x: 12, z: -20 } }
+        }
+      }
+    ], '自动排布 2 个打印对象');
+
+    let state = useModelStore.getState();
+    expect(applied).toBe(true);
+    expect(state.versions).toHaveLength(2);
+    expect(state.versions[1]).toMatchObject({ label: '自动排布 2 个打印对象', changeKind: 'presentation' });
+    expect(state.objectPresentations.body.transform).toEqual({
+      positionMm: { x: -20, y: 5, z: -20 },
+      rotationDeg: body.transform.rotationDeg,
+      scale: 1.25
+    });
+    expect(state.objectPresentations.cover.transform).toEqual({
+      positionMm: { x: 12, y: 18, z: -20 },
+      rotationDeg: cover.transform.rotationDeg,
+      scale: 0.8
+    });
+    expect(state.objectPresentations.body.color).toBe('#123456');
+    expect(state.objectPresentations.cover.color).toBe('#abcdef');
+
+    await state.undo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body).toEqual(body);
+    expect(state.objectPresentations.cover).toEqual(cover);
+
+    await state.redo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations.body.transform.positionMm).toEqual({ x: -20, y: 5, z: -20 });
+    expect(state.objectPresentations.cover.transform.positionMm).toEqual({ x: 12, y: 18, z: -20 });
+  });
+
+  it('任意 CAD 拆件可按独立对象身份批量排布，并整体撤销和重做', async () => {
+    const parent = normalizeObjectPresentation({
+      transform: {
+        positionMm: { x: 3, y: 7, z: 5 },
+        rotationDeg: { x: 0, y: 25, z: 0 },
+        scale: 1.1
+      },
+      color: '#334455'
+    }, '#d9d4c8');
+    const initialVersion = version('拆件排布前', { 'custom-part': parent });
+    useModelStore.setState({
+      objectPresentations: { 'custom-part': parent },
+      versions: [initialVersion],
+      versionIndex: 0
+    });
+
+    const negative = normalizeObjectPresentation({
+      ...parent,
+      transform: { ...parent.transform, positionMm: { ...parent.transform.positionMm, x: -24, z: -18 } }
+    }, '#c9d9e8');
+    const positive = normalizeObjectPresentation({
+      ...parent,
+      transform: { ...parent.transform, positionMm: { ...parent.transform.positionMm, x: 16, z: -18 } }
+    }, '#e7d4b6');
+    expect(useModelStore.getState().applyObjectPresentationBatch([
+      { objectId: 'custom-part-negative', presentation: negative },
+      { objectId: 'custom-part-positive', presentation: positive }
+    ], '自动排布 2 个拆件对象')).toBe(true);
+
+    let state = useModelStore.getState();
+    expect(state.versions).toHaveLength(2);
+    expect(state.objectPresentations['custom-part']).toEqual(parent);
+    expect(state.objectPresentations['custom-part-negative'].transform.positionMm).toEqual({ x: -24, y: 7, z: -18 });
+    expect(state.objectPresentations['custom-part-positive'].transform.positionMm).toEqual({ x: 16, y: 7, z: -18 });
+
+    await state.undo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations['custom-part']).toEqual(parent);
+    expect(state.objectPresentations['custom-part-negative']).toBeUndefined();
+    expect(state.objectPresentations['custom-part-positive']).toBeUndefined();
+
+    await state.redo();
+    state = useModelStore.getState();
+    expect(state.objectPresentations['custom-part-negative'].transform.positionMm.x).toBe(-24);
+    expect(state.objectPresentations['custom-part-positive'].transform.positionMm.x).toBe(16);
+  });
+
+  it('重复应用相同批量排布不创建空版本，并拒绝重复对象身份', () => {
+    const presentation = normalizeObjectPresentation(undefined, '#d9d4c8');
+    useModelStore.setState({
+      objectPresentations: { body: presentation },
+      versions: [version('已排布', { body: presentation })],
+      versionIndex: 0
+    });
+    const store = useModelStore.getState();
+
+    expect(store.applyObjectPresentationBatch([{ objectId: 'body', presentation }], '重复自动排布')).toBe(false);
+    expect(useModelStore.getState().versions).toHaveLength(1);
+    expect(() => store.applyObjectPresentationBatch([
+      { objectId: 'body', presentation },
+      { objectId: 'body', presentation }
+    ], '非法自动排布')).toThrow('重复对象');
+  });
+
 
   it('应用推荐打印方向生成一个中文展示版本并可撤销和重做', () => {
     const initialPresentation = {

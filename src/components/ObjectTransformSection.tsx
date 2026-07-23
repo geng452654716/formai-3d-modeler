@@ -17,6 +17,27 @@ function selectedObjectInfo() {
   if (state.importedStlModel?.id === id || id === 'uploaded-model') {
     return { id, label: state.importedStlModel?.name ?? '上传模型', color: '#d7dde4' };
   }
+  if (state.manufacturingResult?.sourceKind === 'cad-part') {
+    const sourcePart = state.cadResult?.parts.find(
+      (item) => item.id === state.manufacturingResult?.sourcePartId
+    );
+    if (id === `${state.manufacturingResult.sourcePartId}-negative`) {
+      return {
+        id,
+        label: `${sourcePart?.label ?? '零件'}负方向拆件`,
+        color: '#c9d9e8',
+        fallbackPresentationId: state.manufacturingResult.sourcePartId
+      };
+    }
+    if (id === `${state.manufacturingResult.sourcePartId}-positive`) {
+      return {
+        id,
+        label: `${sourcePart?.label ?? '零件'}正方向拆件`,
+        color: '#e7d4b6',
+        fallbackPresentationId: state.manufacturingResult.sourcePartId
+      };
+    }
+  }
   const part = state.cadResult?.parts.find((item) => item.id === id);
   if (part) return { id, label: part.label, color: part.role === 'cover' ? '#eeeae1' : '#d9d4c8' };
   if (id === 'cover') return { id, label: '上盖', color: '#eeeae1' };
@@ -27,18 +48,26 @@ function selectedObjectInfo() {
 export function ObjectTransformSection() {
   const selectedObject = useModelStore((state) => state.selectedObject);
   const objectTransformMode = useModelStore((state) => state.objectTransformMode);
-  const storedPresentation = useModelStore((state) => state.objectPresentations[selectedObject]);
+  const info = selectedObjectInfo();
+  const storedPresentation = useModelStore((state) => (
+    state.objectPresentations[selectedObject]
+      ?? ('fallbackPresentationId' in info && info.fallbackPresentationId
+        ? state.objectPresentations[info.fallbackPresentationId]
+        : undefined)
+  ));
   const setObjectTransformMode = useModelStore((state) => state.setObjectTransformMode);
   const beginEdit = useModelStore((state) => state.beginObjectPresentationEdit);
   const updatePresentation = useModelStore((state) => state.updateObjectPresentation);
   const finishEdit = useModelStore((state) => state.finishObjectPresentationEdit);
   const resetPresentation = useModelStore((state) => state.resetObjectPresentation);
-  const info = selectedObjectInfo();
   const presentation = normalizeObjectPresentation(storedPresentation, info.color);
 
   const updateVector = (field: 'positionMm' | 'rotationDeg', axis: keyof ObjectVector3, value: number) => {
     const current = normalizeObjectPresentation(
-      useModelStore.getState().objectPresentations[info.id],
+      useModelStore.getState().objectPresentations[info.id]
+        ?? ('fallbackPresentationId' in info && info.fallbackPresentationId
+          ? useModelStore.getState().objectPresentations[info.fallbackPresentationId]
+          : undefined),
       info.color
     );
     updatePresentation(info.id, {

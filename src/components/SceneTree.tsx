@@ -80,6 +80,29 @@ export function SceneTree() {
           <>
             {parts.map((part) => {
               const Icon = part.role === 'cover' ? PanelTop : Cuboid;
+              if (
+                manufacturingResult?.sourceKind === 'cad-part'
+                && manufacturingResult.sourcePartId === part.id
+              ) {
+                return (
+                  <div key={part.id} className="scene-split-object-group">
+                    <button
+                      className={`scene-row ${selectedObject === `${part.id}-negative` ? 'is-selected' : ''}`}
+                      onClick={() => selectObject(`${part.id}-negative`)}
+                    >
+                      <Icon size={16} />
+                      <span>{part.label}：负方向拆件</span>
+                    </button>
+                    <button
+                      className={`scene-row ${selectedObject === `${part.id}-positive` ? 'is-selected' : ''}`}
+                      onClick={() => selectObject(`${part.id}-positive`)}
+                    >
+                      <Icon size={16} />
+                      <span>{part.label}：正方向拆件</span>
+                    </button>
+                  </div>
+                );
+              }
               return (
                 <button
                   key={part.id}

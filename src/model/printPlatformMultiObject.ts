@@ -87,6 +87,36 @@ export interface PrintPlatformMultiObjectSpacingDiagnostic {
   status: PrintPlatformObjectPairStatus | 'empty';
 }
 
+export type PrintPlatformMultiObjectLayoutStatus = 'empty' | 'ready' | 'unplaceable';
+
+export interface PrintPlatformObjectLayoutPlacement {
+  sourceIdentity: string;
+  objectId: string;
+  objectLabel: string;
+  currentBoundsMm: PrintPlatformHorizontalBounds;
+  targetBoundsMm: PrintPlatformHorizontalBounds;
+  deltaMm: PrintPlatformHorizontalPoint;
+  distanceMm: number;
+  moved: boolean;
+  rowIndex: number;
+}
+
+export interface PrintPlatformMultiObjectLayoutPlan {
+  sourceIdentity: string;
+  clearanceMm: number;
+  effectiveBoundsMm: PrintPlatformHorizontalBounds;
+  status: PrintPlatformMultiObjectLayoutStatus;
+  placements: PrintPlatformObjectLayoutPlacement[];
+  objectCount: number;
+  movedObjectCount: number;
+  rowCount: number;
+  combinedTargetBoundsMm: PrintPlatformHorizontalBounds | null;
+  combinedTargetWidthMm: number;
+  combinedTargetDepthMm: number;
+  fitsEffectiveArea: boolean;
+  failureReason: string | null;
+}
+
 const BOUNDARY_TOLERANCE_MM = 1e-4;
 
 function nonEmptyText(value: string, fieldName: string) {
@@ -385,5 +415,141 @@ export function createPrintPlatformMultiObjectSpacingDiagnostic(
         : tooCloseCount > 0
           ? 'too-close'
           : 'safe'
+  };
+}
+
+/**
+ * 在安全有效区域内生成不旋转对象的确定性行式排布。该函数只输出目标 X/Z，
+ * 不重新读取网格、不修改对象展示状态，也不依赖 CAD、上传 STL 或示例模型名称。
+ */
+export function createPrintPlatformMultiObjectLayoutPlan(
+  preview: PrintPlatformMultiObjectPreview,
+  effectiveBoundsMm: PrintPlatformHorizontalBounds,
+  clearanceMm: number
+): PrintPlatformMultiObjectLayoutPlan {
+  if (!Number.isFinite(clearanceMm) || clearanceMm < 0) {
+    throw new Error('自动排布安全间距必须是大于或等于 0 的有限毫米值');
+  }
+  const checkedPreviewIdentity = nonEmptyText(preview.sourceIdentity, '自动排布来源身份');
+  const effective = checkedBounds(effectiveBoundsMm, '自动排布安全有效区域');
+  const objects = [...preview.objects].sort((first, second) => (
+    first.sourceIdentity.localeCompare(second.sourceIdentity)
+      || first.objectId.localeCompare(second.objectId)
+  ));
+  const sourceIdentity = [
+    checkedPreviewIdentity,
+    '多对象自动排布',
+    `${effective.minimumX},${effective.maximumX},${effective.minimumZ},${effective.maximumZ}`,
+    `${clearanceMm}`,
+    ...objects.map((object) => object.sourceIdentity)
+  ].join('\u0000');
+  const emptyPlan = (failureReason: string | null = null): PrintPlatformMultiObjectLayoutPlan => ({
+    sourceIdentity,
+    clearanceMm,
+    effectiveBoundsMm: effective,
+    status: failureReason ? 'unplaceable' : 'empty',
+    placements: [],
+    objectCount: objects.length,
+    movedObjectCount: 0,
+    rowCount: 0,
+    combinedTargetBoundsMm: null,
+    combinedTargetWidthMm: 0,
+    combinedTargetDepthMm: 0,
+    fitsEffectiveArea: false,
+    failureReason
+  });
+  if (objects.length === 0) return emptyPlan();
+
+  const effectiveWidthMm = boundsWidth(effective);
+  const effectiveDepthMm = boundsDepth(effective);
+  for (const object of objects) {
+    const bounds = checkedBounds(object.boundsMm, `“${object.objectLabel}”自动排布占地边界`);
+    const widthMm = boundsWidth(bounds);
+    const depthMm = boundsDepth(bounds);
+    if (
+      widthMm > effectiveWidthMm + BOUNDARY_TOLERANCE_MM
+      || depthMm > effectiveDepthMm + BOUNDARY_TOLERANCE_MM
+    ) {
+      return emptyPlan(
+        `“${object.objectLabel}”占地 ${widthMm.toFixed(2)} × ${depthMm.toFixed(2)} 毫米，大于安全有效区域 ${effectiveWidthMm.toFixed(2)} × ${effectiveDepthMm.toFixed(2)} 毫米，无法在不旋转对象的前提下排布。`
+      );
+    }
+  }
+
+  const placements: PrintPlatformObjectLayoutPlacement[] = [];
+  let cursorX = effective.minimumX;
+  let cursorZ = effective.minimumZ;
+  let rowDepthMm = 0;
+  let rowIndex = 0;
+
+  for (const object of objects) {
+    const currentBounds = checkedBounds(object.boundsMm, `“${object.objectLabel}”自动排布占地边界`);
+    const widthMm = boundsWidth(currentBounds);
+    const depthMm = boundsDepth(currentBounds);
+    if (
+      placements.length > 0
+      && cursorX > effective.minimumX + BOUNDARY_TOLERANCE_MM
+      && cursorX + widthMm > effective.maximumX + BOUNDARY_TOLERANCE_MM
+    ) {
+      cursorX = effective.minimumX;
+      cursorZ += rowDepthMm + clearanceMm;
+      rowDepthMm = 0;
+      rowIndex += 1;
+    }
+    if (cursorZ + depthMm > effective.maximumZ + BOUNDARY_TOLERANCE_MM) {
+      return emptyPlan(
+        `安全有效区域无法容纳全部 ${objects.length} 个对象。确定性行式排布在第 ${rowIndex + 1} 行放置“${object.objectLabel}”时空间不足，请减小对象安全间距、缩小对象或改用更大的打印平台。`
+      );
+    }
+    const targetBoundsMm = {
+      minimumX: cursorX,
+      maximumX: cursorX + widthMm,
+      minimumZ: cursorZ,
+      maximumZ: cursorZ + depthMm
+    };
+    const deltaMm = {
+      x: targetBoundsMm.minimumX - currentBounds.minimumX,
+      z: targetBoundsMm.minimumZ - currentBounds.minimumZ
+    };
+    const moved = Math.abs(deltaMm.x) > BOUNDARY_TOLERANCE_MM
+      || Math.abs(deltaMm.z) > BOUNDARY_TOLERANCE_MM;
+    placements.push({
+      sourceIdentity: `${sourceIdentity}\u0001${object.sourceIdentity}`,
+      objectId: object.objectId,
+      objectLabel: object.objectLabel,
+      currentBoundsMm: currentBounds,
+      targetBoundsMm,
+      deltaMm,
+      distanceMm: Math.hypot(deltaMm.x, deltaMm.z),
+      moved,
+      rowIndex
+    });
+    cursorX = targetBoundsMm.maximumX + clearanceMm;
+    rowDepthMm = Math.max(rowDepthMm, depthMm);
+  }
+
+  const combinedTargetBoundsMm = placements.reduce<PrintPlatformHorizontalBounds>(
+    (combined, placement) => ({
+      minimumX: Math.min(combined.minimumX, placement.targetBoundsMm.minimumX),
+      maximumX: Math.max(combined.maximumX, placement.targetBoundsMm.maximumX),
+      minimumZ: Math.min(combined.minimumZ, placement.targetBoundsMm.minimumZ),
+      maximumZ: Math.max(combined.maximumZ, placement.targetBoundsMm.maximumZ)
+    }),
+    { ...placements[0].targetBoundsMm }
+  );
+  return {
+    sourceIdentity,
+    clearanceMm,
+    effectiveBoundsMm: effective,
+    status: 'ready',
+    placements,
+    objectCount: objects.length,
+    movedObjectCount: placements.filter((placement) => placement.moved).length,
+    rowCount: rowIndex + 1,
+    combinedTargetBoundsMm,
+    combinedTargetWidthMm: boundsWidth(combinedTargetBoundsMm),
+    combinedTargetDepthMm: boundsDepth(combinedTargetBoundsMm),
+    fitsEffectiveArea: fitsInside(combinedTargetBoundsMm, effective),
+    failureReason: null
   };
 }

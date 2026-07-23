@@ -44,9 +44,12 @@ import {
   type PrintPlatformViewRequest
 } from '../model/printPlatformCamera';
 import {
+  createPrintPlatformMultiObjectLayoutPlan,
   createPrintPlatformMultiObjectSpacingDiagnostic,
+  type PrintPlatformMultiObjectLayoutPlan,
   type PrintPlatformMultiObjectPreview,
   type PrintPlatformMultiObjectSpacingDiagnostic,
+  type PrintPlatformObjectLayoutPlacement,
   type PrintPlatformObjectPairDiagnostic
 } from '../model/printPlatformMultiObject';
 import {
@@ -330,6 +333,7 @@ interface TransformableObjectProps {
   id: SceneObjectId;
   label: string;
   fallbackColor: string;
+  fallbackPresentationId?: SceneObjectId;
   basePosition?: [number, number, number];
   children: ReactNode;
 }
@@ -339,13 +343,17 @@ function TransformableObject({
   id,
   label,
   fallbackColor,
+  fallbackPresentationId,
   basePosition = [0, 0, 0],
   children
 }: TransformableObjectProps) {
   const objectRef = useRef<Group>(null);
   const selectedObject = useModelStore((state) => state.selectedObject);
   const mode = useModelStore((state) => state.objectTransformMode);
-  const storedPresentation = useModelStore((state) => state.objectPresentations[id]);
+  const storedPresentation = useModelStore((state) => (
+    state.objectPresentations[id]
+      ?? (fallbackPresentationId ? state.objectPresentations[fallbackPresentationId] : undefined)
+  ));
   const beginEdit = useModelStore((state) => state.beginObjectPresentationEdit);
   const updatePresentation = useModelStore((state) => state.updateObjectPresentation);
   const finishEdit = useModelStore((state) => state.finishObjectPresentationEdit);
@@ -357,7 +365,10 @@ function TransformableObject({
     const object = objectRef.current;
     if (!object) return;
     const current = normalizeObjectPresentation(
-      useModelStore.getState().objectPresentations[id],
+      useModelStore.getState().objectPresentations[id]
+        ?? (fallbackPresentationId
+          ? useModelStore.getState().objectPresentations[fallbackPresentationId]
+          : undefined),
       fallbackColor
     );
     const changedScale = [object.scale.x, object.scale.y, object.scale.z]
@@ -2038,15 +2049,17 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
   object: 0.13,
   multiObject: 0.15,
   combined: 0.18,
-  highlight: 0.21
+  highlight: 0.21,
+  layout: 0.25
 } as const;
 
 /** 在 X/Z 水平面按真实毫米坐标绘制只读打印平台、安全区域和对象占地。 */
 interface PrintPlatformOverlayLayerProps {
   spacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
+  layoutPlan: PrintPlatformMultiObjectLayoutPlan | null;
 }
 
-function PrintPlatformOverlayLayer({ spacingDiagnostic }: PrintPlatformOverlayLayerProps) {
+function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatformOverlayLayerProps) {
   const overlay = useModelStore((state) => state.printPlatformOverlay);
   const multiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
   const bedGuide = resolvePrintPlatformBedGuide(overlay);
@@ -2254,6 +2267,56 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic }: PrintPlatformOverlayLa
           />
         )
       ))}
+      {layoutPlan?.status === 'ready' && layoutPlan.placements.map((placement, index) => {
+        const currentCenter = {
+          x: (placement.currentBoundsMm.minimumX + placement.currentBoundsMm.maximumX) / 2,
+          z: (placement.currentBoundsMm.minimumZ + placement.currentBoundsMm.maximumZ) / 2
+        };
+        const targetCenter = {
+          x: (placement.targetBoundsMm.minimumX + placement.targetBoundsMm.maximumX) / 2,
+          z: (placement.targetBoundsMm.minimumZ + placement.targetBoundsMm.maximumZ) / 2
+        };
+        return (
+          <group key={`自动排布目标-${placement.sourceIdentity}`}>
+            <Line
+              points={createPrintPlatformRectanglePoints(
+                placement.targetBoundsMm,
+                PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + index * 0.002
+              )}
+              color="#69e3ff"
+              lineWidth={2.8}
+              dashed
+              dashSize={5}
+              gapSize={1.8}
+              transparent
+              opacity={0.92}
+              depthTest={false}
+              depthWrite={false}
+              raycast={() => undefined}
+              renderOrder={27}
+            />
+            {placement.moved && (
+              <Line
+                points={[
+                  [currentCenter.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.01, currentCenter.z],
+                  [targetCenter.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.01, targetCenter.z]
+                ]}
+                color="#69e3ff"
+                lineWidth={1.8}
+                dashed
+                dashSize={2}
+                gapSize={1.2}
+                transparent
+                opacity={0.76}
+                depthTest={false}
+                depthWrite={false}
+                raycast={() => undefined}
+                renderOrder={27}
+              />
+            )}
+          </group>
+        );
+      })}
       {highlightedSides.map(([side]) => (
         <Line
           key={side}
@@ -2331,6 +2394,24 @@ function printPlatformSpacingPairText(pair: PrintPlatformObjectPairDiagnostic) {
     return `${labels}：当前最近间距 ${pair.distanceMm.toFixed(2)} 毫米，还需增加 ${pair.requiredAdditionalMm.toFixed(2)} 毫米`;
   }
   return `${labels}：最近间距 ${pair.distanceMm.toFixed(2)} 毫米，满足要求`;
+}
+
+function printPlatformLayoutStatusText(plan: PrintPlatformMultiObjectLayoutPlan) {
+  if (plan.status === 'empty') return '当前没有可排布的打印对象';
+  if (plan.status === 'unplaceable') return '当前安全有效区域无法生成完整排布方案';
+  if (plan.movedObjectCount === 0) return `全部 ${plan.objectCount} 个对象已位于本方案目标位置`;
+  return `已生成 ${plan.objectCount} 个对象、${plan.rowCount} 行的候选排布，其中 ${plan.movedObjectCount} 个对象需要移动`;
+}
+
+function printPlatformLayoutPlacementText(placement: PrintPlatformObjectLayoutPlacement) {
+  if (!placement.moved) return `${placement.objectLabel}：保持当前位置`;
+  const x = Math.abs(placement.deltaMm.x) <= 1e-4
+    ? 'X 轴不移动'
+    : `沿 X 轴${placement.deltaMm.x > 0 ? '正' : '负'}方向 ${Math.abs(placement.deltaMm.x).toFixed(2)} 毫米`;
+  const z = Math.abs(placement.deltaMm.z) <= 1e-4
+    ? 'Z 轴不移动'
+    : `沿 Z 轴${placement.deltaMm.z > 0 ? '正' : '负'}方向 ${Math.abs(placement.deltaMm.z).toFixed(2)} 毫米`;
+  return `${placement.objectLabel}：${x}，${z}，水平位移 ${placement.distanceMm.toFixed(2)} 毫米`;
 }
 
 interface PrintPlatformCameraControllerProps {
@@ -2496,12 +2577,14 @@ function PrintPlatformCameraController({
 interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
   printPlatformSpacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
+  printPlatformLayoutPlan: PrintPlatformMultiObjectLayoutPlan | null;
   onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
 function ModelScene({
   printPlatformViewRequest,
   printPlatformSpacingDiagnostic,
+  printPlatformLayoutPlan,
   onPrintPlatformReturnSnapshotSourceChange
 }: ModelSceneProps) {
   const parameters = useModelStore((state) => state.parameters);
@@ -2767,30 +2850,40 @@ function ModelScene({
               const basePosition = partPosition(part.role);
               if (manufacturingResult?.sourcePartId === part.id) {
                 return (
-                  <TransformableObject
-                    key={`${part.id}-${manufacturingResult.revision}`}
-                    id={part.id}
-                    label={part.label}
-                    fallbackColor="#d9d4c8"
-                    basePosition={basePosition}
-                  >
-                    <CadMesh
-                      id={part.id}
-                      fileName="manufacturing-negative.stl"
-                      revision={manufacturingResult.revision}
-                      color="#c9d9e8"
-                      position={splitPartPosition(manufacturingResult.validation.axis, -1, exploded, [0, 0, 0])}
-                      preserveCoordinates
-                    />
-                    <CadMesh
-                      id={part.id}
-                      fileName="manufacturing-positive.stl"
-                      revision={manufacturingResult.revision}
-                      color="#e7d4b6"
-                      position={splitPartPosition(manufacturingResult.validation.axis, 1, exploded, [0, 0, 0])}
-                      preserveCoordinates
-                    />
-                  </TransformableObject>
+                  <group key={`${part.id}-${manufacturingResult.revision}`}>
+                    <TransformableObject
+                      id={`${part.id}-negative`}
+                      label={`${part.label}负方向拆件`}
+                      fallbackColor="#c9d9e8"
+                      fallbackPresentationId={part.id}
+                      basePosition={basePosition}
+                    >
+                      <CadMesh
+                        id={`${part.id}-negative`}
+                        fileName="manufacturing-negative.stl"
+                        revision={manufacturingResult.revision}
+                        color="#c9d9e8"
+                        position={splitPartPosition(manufacturingResult.validation.axis, -1, exploded, [0, 0, 0])}
+                        preserveCoordinates
+                      />
+                    </TransformableObject>
+                    <TransformableObject
+                      id={`${part.id}-positive`}
+                      label={`${part.label}正方向拆件`}
+                      fallbackColor="#e7d4b6"
+                      fallbackPresentationId={part.id}
+                      basePosition={basePosition}
+                    >
+                      <CadMesh
+                        id={`${part.id}-positive`}
+                        fileName="manufacturing-positive.stl"
+                        revision={manufacturingResult.revision}
+                        color="#e7d4b6"
+                        position={splitPartPosition(manufacturingResult.validation.axis, 1, exploded, [0, 0, 0])}
+                        preserveCoordinates
+                      />
+                    </TransformableObject>
+                  </group>
                 );
               }
               const partColor = part.role === 'cover' ? '#eeeae1' : '#d9d4c8';
@@ -2862,7 +2955,10 @@ function ModelScene({
         fadeStrength={1}
         infiniteGrid
       />
-      <PrintPlatformOverlayLayer spacingDiagnostic={printPlatformSpacingDiagnostic} />
+      <PrintPlatformOverlayLayer
+        spacingDiagnostic={printPlatformSpacingDiagnostic}
+        layoutPlan={printPlatformLayoutPlan}
+      />
       <ContactShadows position={[0, 0.02, 0]} opacity={0.5} scale={150} blur={2.6} far={80} />
     </>
   );
@@ -2876,6 +2972,7 @@ export function ModelViewport() {
   const [printPlatformViewRequest, setPrintPlatformViewRequest] = useState<PrintPlatformViewRequest | null>(null);
   const [printPlatformReturnSourceIdentity, setPrintPlatformReturnSourceIdentity] = useState<string | null>(null);
   const [printPlatformSpacingClearanceInput, setPrintPlatformSpacingClearanceInput] = useState('2');
+  const [printPlatformLayoutPreviewSourceIdentity, setPrintPlatformLayoutPreviewSourceIdentity] = useState<string | null>(null);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const cadError = useModelStore((state) => state.cadError);
@@ -2906,6 +3003,8 @@ export function ModelViewport() {
   const versionGeometryComparisonSnapshot = useModelStore((state) => state.versionGeometryComparisonSnapshot);
   const printPlatformOverlay = useModelStore((state) => state.printPlatformOverlay);
   const printPlatformMultiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
+  const objectPresentations = useModelStore((state) => state.objectPresentations);
+  const applyObjectPresentationBatch = useModelStore((state) => state.applyObjectPresentationBatch);
   const printPlatformSpacingState = useMemo(() => {
     if (!printPlatformMultiObjectPreview) return { diagnostic: null, error: null };
     const parsedClearance = printPlatformSpacingClearanceInput.trim() === ''
@@ -2926,6 +3025,21 @@ export function ModelViewport() {
       };
     }
   }, [printPlatformMultiObjectPreview, printPlatformSpacingClearanceInput]);
+  const printPlatformLayoutPlan = useMemo(() => {
+    if (!printPlatformMultiObjectPreview || !printPlatformOverlay || !printPlatformSpacingState.diagnostic) return null;
+    try {
+      return createPrintPlatformMultiObjectLayoutPlan(
+        printPlatformMultiObjectPreview,
+        printPlatformOverlay.effectiveBoundsMm,
+        printPlatformSpacingState.diagnostic.clearanceMm
+      );
+    } catch {
+      return null;
+    }
+  }, [printPlatformMultiObjectPreview, printPlatformOverlay, printPlatformSpacingState.diagnostic]);
+  const activePrintPlatformLayoutPlan = printPlatformLayoutPlan?.sourceIdentity === printPlatformLayoutPreviewSourceIdentity
+    ? printPlatformLayoutPlan
+    : null;
   const setVersionGeometryComparisonMode = useModelStore((state) => state.setVersionGeometryComparisonMode);
   const closeVersionGeometryComparison = useModelStore((state) => state.closeVersionGeometryComparison);
   const primaryPart = findCadPartByRole(cadResult, 'primary') ?? cadResult?.parts[0] ?? null;
@@ -2948,7 +3062,57 @@ export function ModelViewport() {
   useEffect(() => {
     setPrintPlatformViewRequest(null);
     setPrintPlatformReturnSourceIdentity(null);
+    setPrintPlatformLayoutPreviewSourceIdentity(null);
   }, [printPlatformOverlay?.sourceIdentity]);
+
+  const applyPrintPlatformLayout = () => {
+    if (
+      !activePrintPlatformLayoutPlan
+      || activePrintPlatformLayoutPlan.status !== 'ready'
+      || activePrintPlatformLayoutPlan.movedObjectCount === 0
+    ) return;
+    const updates = activePrintPlatformLayoutPlan.placements.map((placement) => {
+      const splitSourceId = manufacturingResult?.sourceKind === 'cad-part'
+        && (placement.objectId === `${manufacturingResult.sourcePartId}-negative`
+          || placement.objectId === `${manufacturingResult.sourcePartId}-positive`)
+        ? manufacturingResult.sourcePartId
+        : null;
+      const cadPart = cadResult?.parts.find((part) => part.id === (splitSourceId ?? placement.objectId));
+      const fallbackColor = placement.objectId.endsWith('-negative')
+        ? '#c9d9e8'
+        : placement.objectId.endsWith('-positive')
+          ? '#e7d4b6'
+          : placement.objectId === 'uploaded-model'
+            ? '#d7dde4'
+            : cadPart?.role === 'cover' || placement.objectId === 'cover'
+              ? '#eeeae1'
+              : '#d9d4c8';
+      const current = normalizeObjectPresentation(
+        objectPresentations[placement.objectId]
+          ?? (splitSourceId ? objectPresentations[splitSourceId] : undefined),
+        fallbackColor
+      );
+      return {
+        objectId: placement.objectId,
+        presentation: {
+          ...current,
+          transform: {
+            ...current.transform,
+            positionMm: {
+              ...current.transform.positionMm,
+              x: current.transform.positionMm.x + placement.deltaMm.x,
+              z: current.transform.positionMm.z + placement.deltaMm.z
+            }
+          }
+        }
+      };
+    });
+    const applied = applyObjectPresentationBatch(
+      updates,
+      `自动排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
+    );
+    if (applied) setPrintPlatformLayoutPreviewSourceIdentity(null);
+  };
 
   const statusText = {
     loading: '读取精确模型',
@@ -3015,6 +3179,7 @@ export function ModelViewport() {
         <ModelScene
           printPlatformViewRequest={printPlatformViewRequest}
           printPlatformSpacingDiagnostic={printPlatformSpacingState.diagnostic}
+          printPlatformLayoutPlan={activePrintPlatformLayoutPlan}
           onPrintPlatformReturnSnapshotSourceChange={setPrintPlatformReturnSourceIdentity}
         />
       </Canvas>
@@ -3091,6 +3256,63 @@ export function ModelViewport() {
                     </small>
                     <div className="print-platform-overlay-legend-row"><i className="is-spacing-overlap" />水平重叠区域</div>
                     <div className="print-platform-overlay-legend-row"><i className="is-spacing-close" />间距不足连线</div>
+                    {printPlatformLayoutPlan && !activePrintPlatformLayoutPlan && (
+                      <button
+                        type="button"
+                        className="print-platform-layout-preview-button"
+                        data-print-platform-layout-create
+                        onClick={() => setPrintPlatformLayoutPreviewSourceIdentity(printPlatformLayoutPlan.sourceIdentity)}
+                      >
+                        生成自动排布预览
+                      </button>
+                    )}
+                    {activePrintPlatformLayoutPlan && (
+                      <section
+                        className={`print-platform-layout-preview is-${activePrintPlatformLayoutPlan.status}`}
+                        aria-label="多对象自动排布预览"
+                        data-print-platform-layout-status={activePrintPlatformLayoutPlan.status}
+                      >
+                        <strong>多对象自动排布预览</strong>
+                        <div className="print-platform-layout-actions">
+                          <button
+                            type="button"
+                            data-print-platform-layout-apply
+                            disabled={activePrintPlatformLayoutPlan.status !== 'ready' || activePrintPlatformLayoutPlan.movedObjectCount === 0}
+                            onClick={applyPrintPlatformLayout}
+                          >
+                            应用全部排布
+                          </button>
+                          <button
+                            type="button"
+                            className="is-secondary"
+                            data-print-platform-layout-cancel
+                            onClick={() => setPrintPlatformLayoutPreviewSourceIdentity(null)}
+                          >
+                            取消预览
+                          </button>
+                        </div>
+                        <span>{printPlatformLayoutStatusText(activePrintPlatformLayoutPlan)}</span>
+                        {activePrintPlatformLayoutPlan.failureReason && (
+                          <small className="print-platform-layout-error">{activePrintPlatformLayoutPlan.failureReason}</small>
+                        )}
+                        {activePrintPlatformLayoutPlan.status === 'ready' && (
+                          <>
+                            <small>
+                              目标整体占地 {activePrintPlatformLayoutPlan.combinedTargetWidthMm.toFixed(2)} × {activePrintPlatformLayoutPlan.combinedTargetDepthMm.toFixed(2)} 毫米 · 安全间距 {activePrintPlatformLayoutPlan.clearanceMm.toFixed(2)} 毫米
+                            </small>
+                            {activePrintPlatformLayoutPlan.placements.map((placement) => (
+                              <small
+                                key={placement.sourceIdentity}
+                                data-print-platform-layout-placement={placement.objectId}
+                              >
+                                {printPlatformLayoutPlacementText(placement)}
+                              </small>
+                            ))}
+                            <div className="print-platform-overlay-legend-row"><i className="is-layout-target" />候选目标占地与位移</div>
+                          </>
+                        )}
+                      </section>
+                    )}
                   </section>
                 )}
               </section>

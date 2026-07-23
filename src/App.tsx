@@ -41,6 +41,7 @@ import {
 import {
   createTransformedExportObject,
   manufacturingSplitPresentationId,
+  resolveManufacturingSplitPresentation,
   type TransformedExportRequest
 } from './model/objectExport';
 import { exportGeneratedFile, exportTransformedModel, isDesktopRuntime } from './platform/backend';
@@ -233,6 +234,14 @@ function App() {
         manufacturingResult?.sourcePartId ?? 'uploaded-model',
         direction
       );
+      const splitPresentation = manufacturingResult
+        ? resolveManufacturingSplitPresentation(
+            objectPresentations,
+            manufacturingResult.sourceKind,
+            manufacturingResult.sourcePartId,
+            direction
+          )
+        : objectPresentations[id];
       return {
         outputFileName,
         format: 'stl',
@@ -240,7 +249,7 @@ function App() {
           id,
           positive ? '正方向拆件' : '负方向拆件',
           fileName,
-          objectPresentations[id],
+          splitPresentation,
           positive ? '#e7d4b6' : '#c9d9e8'
         )]
       };

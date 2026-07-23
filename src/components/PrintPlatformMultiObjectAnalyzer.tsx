@@ -88,17 +88,22 @@ export function PrintPlatformMultiObjectAnalyzer() {
         ) {
           ([-1, 1] as const).forEach((direction) => {
             const suffix = direction < 0 ? 'negative' : 'positive';
+            const objectId = `${part.id}-${suffix}`;
             const directionLabel = direction < 0 ? '负方向拆件' : '正方向拆件';
+            const splitTransform = normalizeObjectPresentation(
+              objectPresentations[objectId] ?? objectPresentations[part.id],
+              direction < 0 ? '#c9d9e8' : '#e7d4b6'
+            ).transform;
             result.push(withIdentity({
-              objectId: `${part.id}-${suffix}`,
+              objectId,
               objectLabel: `${part.label}（${directionLabel}）`,
               sourceKind: 'cad',
               fileName: `manufacturing-${suffix}.stl`,
               revision: manufacturingResult.revision,
               visible: true,
-              rotationDeg: transform.rotationDeg,
-              positionMm: transform.positionMm,
-              uniformScale: transform.scale,
+              rotationDeg: splitTransform.rotationDeg,
+              positionMm: splitTransform.positionMm,
+              uniformScale: splitTransform.scale,
               normalizationSpace: 'preserved',
               basePositionDisplayMm
             }));

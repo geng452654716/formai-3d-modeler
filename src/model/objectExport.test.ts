@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   displayToSourcePoint,
   manufacturingSplitPresentationId,
+  resolveManufacturingSplitPresentation,
   rotateDisplayPointXyz,
   sourceToDisplayPoint,
   transformSourcePointForExport,
@@ -50,9 +51,50 @@ describe('变换导出请求校验', () => {
     expect(validateTransformedExportRequest({ outputFileName: '../model.stl', format: 'stl', objects: [object] })).toBe('导出文件名不合法');
   });
 
+
+  it('CAD 拆件优先使用独立展示状态，不存在时兼容继承父零件状态', () => {
+    const parent = { transform: identity, color: '#112233' };
+    const independent = {
+      transform: { ...identity, positionMm: { x: 12, y: 0, z: -8 } },
+      color: '#445566'
+    };
+    expect(resolveManufacturingSplitPresentation(
+      { body: parent },
+      'cad-part',
+      'body',
+      'negative'
+    )).toBe(parent);
+    expect(resolveManufacturingSplitPresentation(
+      { body: parent, 'body-negative': independent },
+      'cad-part',
+      'body',
+      'negative'
+    )).toBe(independent);
+  });
+
+  it('上传 STL 拆件只使用自己的独立展示状态，不误继承父对象状态', () => {
+    const parent = { transform: identity, color: '#112233' };
+    const independent = {
+      transform: { ...identity, positionMm: { x: -5, y: 0, z: 9 } },
+      color: '#778899'
+    };
+    expect(resolveManufacturingSplitPresentation(
+      { 'uploaded-model': parent },
+      'uploaded-stl',
+      'uploaded-model',
+      'positive'
+    )).toBeUndefined();
+    expect(resolveManufacturingSplitPresentation(
+      { 'uploaded-model': parent, 'uploaded-model-positive': independent },
+      'uploaded-stl',
+      'uploaded-model',
+      'positive'
+    )).toBe(independent);
+  });
+
   it('拆件导出复用与视口一致的对象标识', () => {
-    expect(manufacturingSplitPresentationId('cad-part', 'body', 'negative')).toBe('body');
-    expect(manufacturingSplitPresentationId('cad-part', 'custom-shell', 'positive')).toBe('custom-shell');
+    expect(manufacturingSplitPresentationId('cad-part', 'body', 'negative')).toBe('body-negative');
+    expect(manufacturingSplitPresentationId('cad-part', 'custom-shell', 'positive')).toBe('custom-shell-positive');
     expect(manufacturingSplitPresentationId('uploaded-stl', 'uploaded-model', 'negative')).toBe('uploaded-model-negative');
     expect(manufacturingSplitPresentationId('uploaded-stl', 'uploaded-model', 'positive')).toBe('uploaded-model-positive');
   });

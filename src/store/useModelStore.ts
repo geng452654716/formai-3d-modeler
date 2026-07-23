@@ -118,6 +118,11 @@ export type VersionGeometryComparisonStatus = 'idle' | 'loading' | 'ready' | 'er
 export type MeshElementEditStatus = 'idle' | 'editing' | 'error';
 export type VersionRestoreStatus = 'idle' | 'restoring' | 'error';
 
+export interface ObjectPresentationBatchUpdate {
+  objectId: SceneObjectId;
+  presentation: ObjectPresentation;
+}
+
 interface ModelStore {
   parameters: EnclosureParameters;
   versions: ModelVersion[];
@@ -197,6 +202,7 @@ interface ModelStore {
   updateObjectPresentation: (id: SceneObjectId, value: Partial<ObjectPresentation>, fallbackColor?: string) => void;
   finishObjectPresentationEdit: (id: SceneObjectId, label: string, fallbackColor?: string) => void;
   resetObjectPresentation: (id: SceneObjectId, label: string, fallbackColor?: string) => void;
+  applyObjectPresentationBatch: (updates: readonly ObjectPresentationBatchUpdate[], label: string) => boolean;
   setExploded: (value: boolean) => void;
   setShowBoard: (value: boolean) => void;
   setPrintPlatformOverlay: (overlay: PrintPlatformOverlay) => void;
@@ -727,6 +733,39 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     persistObjectPresentations(objectPresentations);
     set({ objectPresentations });
     get().commitVersion(label, 'presentation');
+  },
+  applyObjectPresentationBatch: (updates, label) => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) throw new Error('批量对象展示版本名称不能为空');
+    const normalizedUpdates = new Map<SceneObjectId, ObjectPresentation>();
+    updates.forEach((update) => {
+      const objectId = update.objectId.trim();
+      if (!objectId) throw new Error('批量对象展示更新缺少对象身份');
+      if (normalizedUpdates.has(objectId)) throw new Error(`批量对象展示更新包含重复对象“${objectId}”`);
+      normalizedUpdates.set(
+        objectId,
+        normalizeObjectPresentation(update.presentation, update.presentation.color)
+      );
+    });
+    if (normalizedUpdates.size === 0) return false;
+    const currentPresentations = get().objectPresentations;
+    const objectPresentations = { ...currentPresentations };
+    let changed = false;
+    normalizedUpdates.forEach((next, objectId) => {
+      const current = normalizeObjectPresentation(currentPresentations[objectId], next.color);
+      if (sameObjectPresentation(current, next)) return;
+      objectPresentations[objectId] = next;
+      changed = true;
+    });
+    if (!changed) return false;
+    persistObjectPresentations(objectPresentations);
+    set({
+      objectPresentations,
+      printPlatformOverlay: null,
+      printPlatformMultiObjectPreview: null
+    });
+    get().commitVersion(trimmedLabel, 'presentation');
+    return true;
   },
   setExploded: (exploded) => set({ exploded }),
   setShowBoard: (showBoard) => set({ showBoard }),

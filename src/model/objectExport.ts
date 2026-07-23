@@ -25,11 +25,23 @@ export interface TransformedExportRequest {
 
 /** 拆件导出必须复用视口中的对象标识，确保 CAD 拆件和上传 STL 拆件都能带上实际变换。 */
 export function manufacturingSplitPresentationId(
-  sourceKind: 'cad-part' | 'uploaded-stl',
+  _sourceKind: 'cad-part' | 'uploaded-stl',
   sourcePartId: string,
   direction: 'negative' | 'positive'
 ) {
-  return sourceKind === 'cad-part' ? sourcePartId : `uploaded-model-${direction}`;
+  return `${sourcePartId}-${direction}`;
+}
+
+/** CAD 拆件首次独立编辑前继承父零件展示状态；上传 STL 拆件始终只读取自己的独立状态。 */
+export function resolveManufacturingSplitPresentation(
+  presentations: Readonly<Record<string, ObjectPresentation | undefined>>,
+  sourceKind: 'cad-part' | 'uploaded-stl',
+  sourcePartId: string,
+  direction: 'negative' | 'positive'
+): ObjectPresentation | undefined {
+  const splitId = manufacturingSplitPresentationId(sourceKind, sourcePartId, direction);
+  return presentations[splitId]
+    ?? (sourceKind === 'cad-part' ? presentations[sourcePartId] : undefined);
 }
 
 export function sourceToDisplayPoint(point: ObjectVector3): ObjectVector3 {
