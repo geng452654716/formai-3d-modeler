@@ -964,8 +964,21 @@ nestingDepth: 二维包含深度
 - `src/model/printPlatformManualLayout.ts` 是不依赖 React、Three.js 和 Zustand 的纯会话协议。`createPrintPlatformManualLayoutSession(...)` 从 `PrintPlatformMultiObjectPreview.objects` 建立稳定对象放置集合，保存当前/目标边界、原始/吸附中心、位移、锁定状态和中文失败原因；`movePrintPlatformManualLayoutObject(...)` 只更新指定未锁定对象，`setPrintPlatformManualLayoutSnapToGrid(...)` 重新应用全部对象最后一次原始交点。
 - 协议使用固定 `gridSizeMm: 1`，通过矩形边界容差判断安全有效区域，通过 X/Z 轴间隔区分水平重叠和安全间距不足，并把成对冲突写回双方。`canApply` 仅在至少一个未锁定对象实际移动且全部放置状态为 `valid` 时成立；未知对象身份和锁定对象移动请求保持会话不变。
 - `ModelViewport` 中的 `PrintPlatformManualLayoutDragLayer` 使用 React Three Fiber 指针事件、Three.js `Plane` 和 `event.ray.intersectPlane(...)` 将平台平面交点换算为毫米中心坐标，并在指针按下时保存抓取偏移。模型本体不随临时会话变换，拖动层只呈现目标边界、透明命中平面和中文 HTML 标签，且锁定对象不注册拖动事件。
-- 手工会话存在时关闭 `OrbitControls`，自动发出既有“俯视并适配平台”请求，并隐藏自动排布预览入口；来源身份、锁定签名、安全间距或有效区域身份变化通过 React 状态清理旧会话。面板以 `has-manual-layout` 限制图例最大高度并启用内部滚动，保留底部操作按钮的可达性。
+- 手工会话存在时关闭 `OrbitControls`，自动发出既有“俯视并适配平台”请求，并隐藏自动排布预览入口；来源身份、锁定签名、安全间距或有效区域身份变化通过 React 状态清理旧会话。面板以通用 `has-scrollable-layout` 限制图例最大高度并启用内部滚动，手工排布和对齐预览共同复用，保留底部操作按钮的可达性。
 - 确认路径过滤 `!locked && moved && status === 'valid'` 的放置结果，只为这些对象生成保留原 Y、旋转、缩放和颜色的展示变更，再复用 `applyObjectPresentationBatch(...)` 原子写入一个版本；取消只丢弃组件会话。该模块不修改网格、CAD BRep、STL、STEP、3MF、制造结果或上传模型修订。
 - `src/model/printPlatformManualLayout.test.ts` 以 9 个纯协议测试覆盖锁定、1 毫米吸附、关闭吸附恢复原始交点、边界临界值、越界、重叠双方失效、安全间距、连续移动和未知对象身份。阶段完整回归为 34 个测试文件 368/368，生产构建通过；浏览器覆盖临时预览、吸附、冲突、取消、锁定、确认、撤销、重做和面板可达性，Console 为 0 个错误、0 个警告。
 
 **下一阶段架构方向：**在纯前端新增多对象选择与对齐/等距分布计划协议，按稳定对象身份计算 X/Z 边界或中心目标，复用手工排布的边界、间距状态语义及批量展示提交路径；预览不得直接写 Store。
+
+### 88. 打印平台多对象对齐与等距分布架构（已实现）
+
+- `src/model/printPlatformAlignmentLayout.ts` 是独立于 React、Three.js 和 Zustand 的纯计划协议。`createPrintPlatformAlignmentPlan(...)` 接收联合占地、有效区域、安全间距、锁定集合、已选集合、操作和可选基准身份，输出稳定 `sourceIdentity`、逐对象当前/目标边界、中心、位移、角色、状态与整批 `canApply`。
+- `isAlignmentOperation(...)` 为六种对齐操作提供显式 TypeScript 类型收窄；默认基准按 `sourceIdentity`、`objectId` 稳定排序。边界对齐根据不同尺寸对象的最小/中心/最大边界换算目标中心，不假设对象等大。
+- 分布操作按目标轴当前中心排序，中心相同时复用稳定身份排序；首尾 placement 标记 `distributionEndpoint` 并保持中心不动，中间对象使用首尾中心线性插值。协议保持另一个水平轴不变，不生成旋转或缩放数据。
+- 校验层复用矩形水平占地语义：先验证安全有效区域，再对至少包含一个已选对象的对象对判断水平重叠和安全间距不足；未选与锁定对象保持 `fixed`，但目标边界参与约束。任一已选目标非法时计划为 `invalid`，空位移计划保持 `ready` 但 `canApply=false`。
+- `ModelViewport` 以组件本地状态保存已选对象、显式基准和预览请求，不把临时选择写入模型 Store。选择、基准、锁定、间距、有效区域和来源通过方案身份或 effect 使旧请求失效；自动排布、手工拖动和对齐预览互相清理，保证同时只有一种临时排布语义。
+- `PrintPlatformOverlayLayer` 只渲染已选目标的幽灵矩形与中心位移线，基准黄色、合法青色、非法红色，关闭射线命中和深度写入。中文 DOM 暴露选择、操作、基准、计划状态、逐对象状态、确认和取消测试属性；`has-scrollable-layout` 保证长预览面板内部滚动。
+- 确认路径过滤 `selected && moved && status === 'valid'`，基于当前展示状态只叠加 X/Z 位移并复用 `applyObjectPresentationBatch(...)` 原子创建一个中文版本；Y、三轴旋转、缩放、颜色、网格、BRep、STL、STEP、3MF 和制造结果不变。
+- `src/model/printPlatformAlignmentLayout.test.ts` 新增 11 个纯协议测试；阶段完整回归为 35 个测试文件 379/379，TypeScript/Vite 构建与差异检查通过。浏览器覆盖默认/显式基准、冲突禁用、取消、合法确认、版本、撤销重做、锁定对象和面板可达性，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**在现有选择与计划身份上新增固定净间距协议，按 X/Z 空间顺序使用相邻目标边界递推中心坐标；目标净间距必须独立于用于碰撞校验的最小安全间距，并继续复用整批预览和批量展示提交路径。

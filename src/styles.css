@@ -1467,7 +1467,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   gap: 7px;
   pointer-events: none;
 }
-.print-platform-overlay-stack.has-manual-layout .print-platform-overlay-legend {
+.print-platform-overlay-stack.has-scrollable-layout .print-platform-overlay-legend {
   max-height: calc(100vh - 310px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1696,6 +1696,104 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   color: #ffc982;
 }
 .print-platform-overlay-legend-row i.is-layout-locked { color: #9aa4ad; border-top-style: dashed; border-top-width: 3px; }
+
+.print-platform-alignment-selection {
+  display: grid;
+  gap: 5px;
+  margin-top: 3px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(105, 227, 255, .22);
+  pointer-events: auto;
+}
+.print-platform-alignment-selection > strong { color: #c9f4fb; font-size: 9px; }
+.print-platform-alignment-selection > small { color: #858f95; font-size: 8px; line-height: 1.45; }
+.print-platform-alignment-object-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.print-platform-alignment-object-list button,
+.print-platform-alignment-operations button {
+  min-height: 22px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .04);
+  color: #aeb4b8;
+  font-size: 8px;
+}
+.print-platform-alignment-object-list button.is-selected {
+  border-color: rgba(105, 227, 255, .56);
+  background: rgba(31, 105, 125, .3);
+  color: #c5f6ff;
+}
+.print-platform-alignment-object-list button:disabled,
+.print-platform-alignment-operations button:disabled { cursor: not-allowed; opacity: .4; }
+.print-platform-alignment-reference {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: #cfd5d9;
+  font-size: 8px;
+}
+.print-platform-alignment-reference select {
+  min-width: 0;
+  height: 24px;
+  border: 1px solid rgba(105, 227, 255, .32);
+  border-radius: 5px;
+  background: rgba(18, 27, 31, .96);
+  color: #d7f6fb;
+  font-size: 8px;
+  padding: 0 5px;
+}
+.print-platform-alignment-reference select:disabled { opacity: .45; }
+.print-platform-alignment-operations {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.print-platform-alignment-operations.is-distribution { grid-template-columns: 1fr 1fr; }
+.print-platform-alignment-operations button:not(:disabled):hover { background: rgba(31, 105, 125, .42); color: #d8faff; }
+.print-platform-alignment-preview {
+  display: grid;
+  gap: 4px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(105, 227, 255, .25);
+  pointer-events: none;
+}
+.print-platform-alignment-preview > strong { color: #b9f3ff; font-size: 9px; }
+.print-platform-alignment-preview > span,
+.print-platform-alignment-preview > small { color: #aeb4b8; font-size: 8px; line-height: 1.45; }
+.print-platform-alignment-preview.is-ready > span { color: #8fe9fa; }
+.print-platform-alignment-preview.is-invalid > span,
+.print-platform-alignment-preview > small.is-outside,
+.print-platform-alignment-preview > small.is-overlap,
+.print-platform-alignment-preview > small.is-too-close,
+.print-platform-alignment-error { color: #ff8895 !important; }
+.print-platform-alignment-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  pointer-events: auto;
+}
+.print-platform-alignment-actions button {
+  min-height: 24px;
+  border: 1px solid rgba(105, 227, 255, .44);
+  border-radius: 5px;
+  background: rgba(31, 105, 125, .36);
+  color: #b9f3ff;
+  font-size: 8px;
+}
+.print-platform-alignment-actions button.is-secondary {
+  border-color: rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .05);
+  color: #c3c8cc;
+}
+.print-platform-alignment-actions button:disabled { cursor: not-allowed; opacity: .42; }
+.print-platform-overlay-legend-row i.is-alignment-reference { color: #ffd166; border-top-style: dashed; border-top-width: 4px; }
+.print-platform-overlay-legend-row i.is-alignment-valid { color: #69e3ff; border-top-style: dashed; border-top-width: 3px; }
+.print-platform-overlay-legend-row i.is-alignment-invalid { color: #ff5f70; border-top-style: dashed; border-top-width: 4px; }
 
 .print-platform-manual-start-button {
   min-height: 25px;

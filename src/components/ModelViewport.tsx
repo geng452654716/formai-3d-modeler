@@ -68,6 +68,12 @@ import {
   type PrintPlatformManualLayoutSession
 } from '../model/printPlatformManualLayout';
 import {
+  createPrintPlatformAlignmentPlan,
+  type PrintPlatformAlignmentOperation,
+  type PrintPlatformAlignmentPlacement,
+  type PrintPlatformAlignmentPlan
+} from '../model/printPlatformAlignmentLayout';
+import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
   createMeshPlanarRegionExtrusionPreviewGuides,
@@ -2065,9 +2071,10 @@ const PRINT_PLATFORM_OVERLAY_HEIGHTS_MM = {
 interface PrintPlatformOverlayLayerProps {
   spacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
   layoutPlan: PrintPlatformMultiObjectLockedRotationLayoutPlan | null;
+  alignmentPlan: PrintPlatformAlignmentPlan | null;
 }
 
-function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatformOverlayLayerProps) {
+function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan, alignmentPlan }: PrintPlatformOverlayLayerProps) {
   const overlay = useModelStore((state) => state.printPlatformOverlay);
   const multiObjectPreview = useModelStore((state) => state.printPlatformMultiObjectPreview);
   const bedGuide = resolvePrintPlatformBedGuide(overlay);
@@ -2348,6 +2355,51 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatf
           </group>
         );
       })}
+      {alignmentPlan?.placements.filter((placement) => placement.selected).map((placement, index) => {
+        const color = placement.status === 'valid'
+          ? placement.reference ? '#ffd166' : '#69e3ff'
+          : '#ff5f70';
+        return (
+          <group key={`对齐分布目标-${placement.sourceIdentity}`}>
+            <Line
+              points={createPrintPlatformRectanglePoints(
+                placement.targetBoundsMm,
+                PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.04 + index * 0.002
+              )}
+              color={color}
+              lineWidth={placement.reference ? 3.3 : placement.status === 'valid' ? 2.8 : 4}
+              dashed
+              dashSize={placement.reference ? 7 : 5}
+              gapSize={1.6}
+              transparent
+              opacity={0.94}
+              depthTest={false}
+              depthWrite={false}
+              raycast={() => undefined}
+              renderOrder={29}
+            />
+            {placement.moved && (
+              <Line
+                points={[
+                  [placement.currentCenterMm.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.05, placement.currentCenterMm.z],
+                  [placement.targetCenterMm.x, PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.05, placement.targetCenterMm.z]
+                ]}
+                color={color}
+                lineWidth={2}
+                dashed
+                dashSize={2}
+                gapSize={1.2}
+                transparent
+                opacity={0.82}
+                depthTest={false}
+                depthWrite={false}
+                raycast={() => undefined}
+                renderOrder={30}
+              />
+            )}
+          </group>
+        );
+      })}
       {highlightedSides.map(([side]) => (
         <Line
           key={side}
@@ -2568,6 +2620,36 @@ function printPlatformLayoutPlacementText(placement: PrintPlatformObjectLockedRo
   return `${placement.objectLabel}：${x}，${z}，水平位移 ${placement.distanceMm.toFixed(2)} 毫米；${rotation}；${target}`;
 }
 
+function printPlatformAlignmentOperationText(operation: PrintPlatformAlignmentOperation) {
+  return {
+    'align-x-min': 'X 轴左边界对齐',
+    'align-x-center': 'X 轴中心对齐',
+    'align-x-max': 'X 轴右边界对齐',
+    'align-z-min': 'Z 轴后边界对齐',
+    'align-z-center': 'Z 轴中心对齐',
+    'align-z-max': 'Z 轴前边界对齐',
+    'distribute-x-centers': 'X 轴中心等距分布',
+    'distribute-z-centers': 'Z 轴中心等距分布'
+  }[operation];
+}
+
+function printPlatformAlignmentStatusText(plan: PrintPlatformAlignmentPlan) {
+  if (plan.status === 'invalid') return `当前${printPlatformAlignmentOperationText(plan.operation)}预览存在 ${plan.invalidObjectCount} 个非法目标`;
+  if (plan.changedObjectCount === 0) return plan.failureReason ?? '当前操作不会改变任何已选对象的位置';
+  return `已为 ${plan.selectedObjectCount} 个对象生成${printPlatformAlignmentOperationText(plan.operation)}预览，其中 ${plan.changedObjectCount} 个对象需要移动`;
+}
+
+function printPlatformAlignmentPlacementText(placement: PrintPlatformAlignmentPlacement) {
+  const role = placement.reference
+    ? '基准对象'
+    : placement.distributionEndpoint
+      ? '分布端点，中心保持不动'
+      : placement.moved ? '需要移动' : '位置保持不动';
+  const target = `目标中心 X ${placement.targetCenterMm.x.toFixed(2)}、Z ${placement.targetCenterMm.z.toFixed(2)} 毫米`;
+  const delta = `位移 X ${placement.deltaMm.x.toFixed(2)}、Z ${placement.deltaMm.z.toFixed(2)} 毫米`;
+  return `${placement.objectLabel}：${role}；${target}；${delta}${placement.failureReason ? `；${placement.failureReason}` : '；位置合法'}`;
+}
+
 function printPlatformManualLayoutStatusText(session: PrintPlatformManualLayoutSession) {
   if (session.invalidObjectCount > 0) {
     return `当前有 ${session.invalidObjectCount} 个对象越界或与其他对象冲突，修正前不能确认`;
@@ -2748,6 +2830,7 @@ interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
   printPlatformSpacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
   printPlatformLayoutPlan: PrintPlatformMultiObjectLockedRotationLayoutPlan | null;
+  printPlatformAlignmentPlan: PrintPlatformAlignmentPlan | null;
   printPlatformManualLayoutSession: PrintPlatformManualLayoutSession | null;
   onMovePrintPlatformManualObject: (objectId: string, centerMm: PrintPlatformManualLayoutPoint) => void;
   onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
@@ -2757,6 +2840,7 @@ function ModelScene({
   printPlatformViewRequest,
   printPlatformSpacingDiagnostic,
   printPlatformLayoutPlan,
+  printPlatformAlignmentPlan,
   printPlatformManualLayoutSession,
   onMovePrintPlatformManualObject,
   onPrintPlatformReturnSnapshotSourceChange
@@ -3132,6 +3216,7 @@ function ModelScene({
       <PrintPlatformOverlayLayer
         spacingDiagnostic={printPlatformSpacingDiagnostic}
         layoutPlan={printPlatformLayoutPlan}
+        alignmentPlan={printPlatformAlignmentPlan}
       />
       <PrintPlatformManualLayoutDragLayer
         session={printPlatformManualLayoutSession}
@@ -3152,6 +3237,12 @@ export function ModelViewport() {
   const [printPlatformSpacingClearanceInput, setPrintPlatformSpacingClearanceInput] = useState('2');
   const [printPlatformLayoutPreviewSourceIdentity, setPrintPlatformLayoutPreviewSourceIdentity] = useState<string | null>(null);
   const [printPlatformLockedObjectIds, setPrintPlatformLockedObjectIds] = useState<string[]>([]);
+  const [printPlatformAlignmentSelectedObjectIds, setPrintPlatformAlignmentSelectedObjectIds] = useState<string[]>([]);
+  const [printPlatformAlignmentReferenceObjectId, setPrintPlatformAlignmentReferenceObjectId] = useState<string | null>(null);
+  const [printPlatformAlignmentPreviewRequest, setPrintPlatformAlignmentPreviewRequest] = useState<{
+    operation: PrintPlatformAlignmentOperation;
+    sourceIdentity: string;
+  } | null>(null);
   const [printPlatformManualLayoutSession, setPrintPlatformManualLayoutSession] = useState<PrintPlatformManualLayoutSession | null>(null);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
@@ -3221,6 +3312,47 @@ export function ModelViewport() {
   const activePrintPlatformLayoutPlan = printPlatformLayoutPlan?.sourceIdentity === printPlatformLayoutPreviewSourceIdentity
     ? printPlatformLayoutPlan
     : null;
+  const printPlatformAlignmentSelectedObjects = useMemo(() => (
+    printPlatformMultiObjectPreview?.objects
+      .filter((object) => printPlatformAlignmentSelectedObjectIds.includes(object.objectId))
+      .sort((first, second) => first.sourceIdentity.localeCompare(second.sourceIdentity, 'zh-CN') || first.objectId.localeCompare(second.objectId, 'zh-CN'))
+    ?? []
+  ), [printPlatformMultiObjectPreview, printPlatformAlignmentSelectedObjectIds]);
+  const resolvedPrintPlatformAlignmentReferenceObjectId = printPlatformAlignmentSelectedObjectIds.includes(printPlatformAlignmentReferenceObjectId ?? '')
+    ? printPlatformAlignmentReferenceObjectId
+    : printPlatformAlignmentSelectedObjects[0]?.objectId ?? null;
+  const printPlatformAlignmentPlan = useMemo(() => {
+    if (
+      !printPlatformAlignmentPreviewRequest
+      || !printPlatformMultiObjectPreview
+      || !printPlatformOverlay
+      || !printPlatformSpacingState.diagnostic
+    ) return null;
+    try {
+      return createPrintPlatformAlignmentPlan(
+        printPlatformMultiObjectPreview,
+        printPlatformOverlay.effectiveBoundsMm,
+        printPlatformSpacingState.diagnostic.clearanceMm,
+        printPlatformLockedObjectIds,
+        printPlatformAlignmentSelectedObjectIds,
+        printPlatformAlignmentPreviewRequest.operation,
+        resolvedPrintPlatformAlignmentReferenceObjectId
+      );
+    } catch {
+      return null;
+    }
+  }, [
+    printPlatformAlignmentPreviewRequest,
+    printPlatformMultiObjectPreview,
+    printPlatformOverlay,
+    printPlatformSpacingState.diagnostic,
+    printPlatformLockedObjectIds,
+    printPlatformAlignmentSelectedObjectIds,
+    resolvedPrintPlatformAlignmentReferenceObjectId
+  ]);
+  const activePrintPlatformAlignmentPlan = printPlatformAlignmentPlan?.sourceIdentity === printPlatformAlignmentPreviewRequest?.sourceIdentity
+    ? printPlatformAlignmentPlan
+    : null;
   const setVersionGeometryComparisonMode = useModelStore((state) => state.setVersionGeometryComparisonMode);
   const closeVersionGeometryComparison = useModelStore((state) => state.closeVersionGeometryComparison);
   const primaryPart = findCadPartByRole(cadResult, 'primary') ?? cadResult?.parts[0] ?? null;
@@ -3244,17 +3376,29 @@ export function ModelViewport() {
     setPrintPlatformViewRequest(null);
     setPrintPlatformReturnSourceIdentity(null);
     setPrintPlatformLayoutPreviewSourceIdentity(null);
+    setPrintPlatformAlignmentPreviewRequest(null);
     setPrintPlatformManualLayoutSession(null);
   }, [printPlatformOverlay?.sourceIdentity]);
 
   useEffect(() => {
     setPrintPlatformLockedObjectIds([]);
+    setPrintPlatformAlignmentSelectedObjectIds([]);
+    setPrintPlatformAlignmentReferenceObjectId(null);
+    setPrintPlatformAlignmentPreviewRequest(null);
     setPrintPlatformManualLayoutSession(null);
   }, [printPlatformMultiObjectPreview?.sourceIdentity]);
 
   useEffect(() => {
+    setPrintPlatformAlignmentPreviewRequest(null);
     setPrintPlatformManualLayoutSession(null);
   }, [printPlatformSpacingState.diagnostic?.sourceIdentity, printPlatformLockedObjectIds.join('\u0000')]);
+
+  useEffect(() => {
+    setPrintPlatformAlignmentPreviewRequest(null);
+    setPrintPlatformAlignmentReferenceObjectId((current) => (
+      current && printPlatformAlignmentSelectedObjectIds.includes(current) ? current : null
+    ));
+  }, [printPlatformAlignmentSelectedObjectIds.join('\u0000')]);
 
   const togglePrintPlatformObjectLock = (objectId: string) => {
     setPrintPlatformLockedObjectIds((previous) => (
@@ -3262,11 +3406,39 @@ export function ModelViewport() {
         ? previous.filter((candidate) => candidate !== objectId)
         : [...previous, objectId].sort()
     ));
+    setPrintPlatformAlignmentSelectedObjectIds((previous) => previous.filter((candidate) => candidate !== objectId));
+  };
+
+  const togglePrintPlatformAlignmentObject = (objectId: string) => {
+    if (printPlatformLockedObjectIds.includes(objectId)) return;
+    setPrintPlatformAlignmentSelectedObjectIds((previous) => (
+      previous.includes(objectId)
+        ? previous.filter((candidate) => candidate !== objectId)
+        : [...previous, objectId].sort()
+    ));
+  };
+
+  const createPrintPlatformAlignmentPreview = (operation: PrintPlatformAlignmentOperation) => {
+    if (!printPlatformMultiObjectPreview || !printPlatformOverlay || !printPlatformSpacingState.diagnostic) return;
+    const plan = createPrintPlatformAlignmentPlan(
+      printPlatformMultiObjectPreview,
+      printPlatformOverlay.effectiveBoundsMm,
+      printPlatformSpacingState.diagnostic.clearanceMm,
+      printPlatformLockedObjectIds,
+      printPlatformAlignmentSelectedObjectIds,
+      operation,
+      resolvedPrintPlatformAlignmentReferenceObjectId
+    );
+    setPrintPlatformLayoutPreviewSourceIdentity(null);
+    setPrintPlatformManualLayoutSession(null);
+    setPrintPlatformAlignmentPreviewRequest({ operation, sourceIdentity: plan.sourceIdentity });
+    setPrintPlatformViewRequest((previous) => createNextPrintPlatformViewRequest(previous, printPlatformOverlay));
   };
 
   const startPrintPlatformManualLayout = () => {
     if (!printPlatformMultiObjectPreview || !printPlatformOverlay || !printPlatformSpacingState.diagnostic) return;
     setPrintPlatformLayoutPreviewSourceIdentity(null);
+    setPrintPlatformAlignmentPreviewRequest(null);
     setPrintPlatformManualLayoutSession(createPrintPlatformManualLayoutSession(
       printPlatformMultiObjectPreview,
       printPlatformOverlay.effectiveBoundsMm,
@@ -3336,6 +3508,53 @@ export function ModelViewport() {
         : `旋转寻优排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
     );
     if (applied) setPrintPlatformLayoutPreviewSourceIdentity(null);
+  };
+
+  const applyPrintPlatformAlignmentPlan = () => {
+    if (!activePrintPlatformAlignmentPlan?.canApply) return;
+    const updates = activePrintPlatformAlignmentPlan.placements
+      .filter((placement) => placement.selected && placement.moved && placement.status === 'valid')
+      .map((placement) => {
+        const splitSourceId = manufacturingResult?.sourceKind === 'cad-part'
+          && (placement.objectId === `${manufacturingResult.sourcePartId}-negative`
+            || placement.objectId === `${manufacturingResult.sourcePartId}-positive`)
+          ? manufacturingResult.sourcePartId
+          : null;
+        const cadPart = cadResult?.parts.find((part) => part.id === (splitSourceId ?? placement.objectId));
+        const fallbackColor = placement.objectId.endsWith('-negative')
+          ? '#c9d9e8'
+          : placement.objectId.endsWith('-positive')
+            ? '#e7d4b6'
+            : placement.objectId === 'uploaded-model'
+              ? '#d7dde4'
+              : cadPart?.role === 'cover' || placement.objectId === 'cover'
+                ? '#eeeae1'
+                : '#d9d4c8';
+        const current = normalizeObjectPresentation(
+          objectPresentations[placement.objectId]
+            ?? (splitSourceId ? objectPresentations[splitSourceId] : undefined),
+          fallbackColor
+        );
+        return {
+          objectId: placement.objectId,
+          presentation: {
+            ...current,
+            transform: {
+              ...current.transform,
+              positionMm: {
+                ...current.transform.positionMm,
+                x: current.transform.positionMm.x + placement.deltaMm.x,
+                z: current.transform.positionMm.z + placement.deltaMm.z
+              }
+            }
+          }
+        };
+      });
+    const applied = applyObjectPresentationBatch(
+      updates,
+      `${printPlatformAlignmentOperationText(activePrintPlatformAlignmentPlan.operation)} ${activePrintPlatformAlignmentPlan.selectedObjectCount} 个打印对象`
+    );
+    if (applied) setPrintPlatformAlignmentPreviewRequest(null);
   };
 
   const applyPrintPlatformManualLayout = () => {
@@ -3451,13 +3670,14 @@ export function ModelViewport() {
           printPlatformViewRequest={printPlatformViewRequest}
           printPlatformSpacingDiagnostic={printPlatformSpacingState.diagnostic}
           printPlatformLayoutPlan={activePrintPlatformLayoutPlan}
+          printPlatformAlignmentPlan={activePrintPlatformAlignmentPlan}
           printPlatformManualLayoutSession={printPlatformManualLayoutSession}
           onMovePrintPlatformManualObject={movePrintPlatformManualObject}
           onPrintPlatformReturnSnapshotSourceChange={setPrintPlatformReturnSourceIdentity}
         />
       </Canvas>
       {printPlatformOverlay && (
-        <div className={`print-platform-overlay-stack${printPlatformManualLayoutSession ? ' has-manual-layout' : ''}`}>
+        <div className={`print-platform-overlay-stack${printPlatformManualLayoutSession || activePrintPlatformAlignmentPlan ? ' has-scrollable-layout' : ''}`}>
           <aside
             className={`print-platform-overlay-legend is-${printPlatformOverlay.status}`}
             aria-label="打印平台三维视口图例"
@@ -3547,7 +3767,142 @@ export function ModelViewport() {
                         );
                       })}
                     </section>
-                    {!printPlatformManualLayoutSession && (
+                    {!printPlatformManualLayoutSession && !activePrintPlatformLayoutPlan && (
+                      <section
+                        className="print-platform-alignment-selection"
+                        aria-label="打印对象对齐与等距分布"
+                        data-print-platform-alignment-selection
+                      >
+                        <strong>对齐与等距分布（已选 {printPlatformAlignmentSelectedObjects.length} 个）</strong>
+                        <div className="print-platform-alignment-object-list">
+                          {printPlatformMultiObjectPreview.objects.map((object) => {
+                            const locked = printPlatformLockedObjectIds.includes(object.objectId);
+                            const selected = printPlatformAlignmentSelectedObjectIds.includes(object.objectId);
+                            return (
+                              <button
+                                key={object.sourceIdentity}
+                                type="button"
+                                className={selected ? 'is-selected' : ''}
+                                aria-pressed={selected}
+                                disabled={locked || Boolean(activePrintPlatformAlignmentPlan)}
+                                data-print-platform-alignment-object={object.objectId}
+                                data-print-platform-alignment-selected={selected ? 'true' : 'false'}
+                                onClick={() => togglePrintPlatformAlignmentObject(object.objectId)}
+                              >
+                                {object.objectLabel}：{locked ? '已锁定' : selected ? '已选择' : '未选择'}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <label className="print-platform-alignment-reference">
+                          <span>对齐基准对象</span>
+                          <select
+                            aria-label="对齐基准对象"
+                            data-print-platform-alignment-reference
+                            value={resolvedPrintPlatformAlignmentReferenceObjectId ?? ''}
+                            disabled={printPlatformAlignmentSelectedObjects.length === 0 || Boolean(activePrintPlatformAlignmentPlan)}
+                            onChange={(event) => {
+                              setPrintPlatformAlignmentReferenceObjectId(event.target.value || null);
+                              setPrintPlatformAlignmentPreviewRequest(null);
+                            }}
+                          >
+                            {printPlatformAlignmentSelectedObjects.length === 0 && <option value="">请先选择对象</option>}
+                            {printPlatformAlignmentSelectedObjects.map((object) => (
+                              <option key={object.sourceIdentity} value={object.objectId}>{object.objectLabel}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="print-platform-alignment-operations" aria-label="对齐操作">
+                          {([
+                            ['align-x-min', 'X 左边界'],
+                            ['align-x-center', 'X 中心'],
+                            ['align-x-max', 'X 右边界'],
+                            ['align-z-min', 'Z 后边界'],
+                            ['align-z-center', 'Z 中心'],
+                            ['align-z-max', 'Z 前边界']
+                          ] as const).map(([operation, label]) => (
+                            <button
+                              key={operation}
+                              type="button"
+                              disabled={printPlatformAlignmentSelectedObjects.length < 2 || Boolean(activePrintPlatformAlignmentPlan)}
+                              data-print-platform-alignment-operation={operation}
+                              onClick={() => createPrintPlatformAlignmentPreview(operation)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="print-platform-alignment-operations is-distribution" aria-label="等距分布操作">
+                          {([
+                            ['distribute-x-centers', 'X 等距分布'],
+                            ['distribute-z-centers', 'Z 等距分布']
+                          ] as const).map(([operation, label]) => (
+                            <button
+                              key={operation}
+                              type="button"
+                              disabled={printPlatformAlignmentSelectedObjects.length < 3 || Boolean(activePrintPlatformAlignmentPlan)}
+                              data-print-platform-alignment-operation={operation}
+                              onClick={() => createPrintPlatformAlignmentPreview(operation)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <small>对齐至少选择 2 个对象；等距分布至少选择 3 个对象。锁定对象保持原位并继续参与间距校验。</small>
+                        {activePrintPlatformAlignmentPlan && (
+                          <section
+                            className={`print-platform-alignment-preview is-${activePrintPlatformAlignmentPlan.status}`}
+                            aria-label="多对象对齐与等距分布预览"
+                            data-print-platform-alignment-preview
+                            data-print-platform-alignment-status={activePrintPlatformAlignmentPlan.status}
+                          >
+                            <strong>{printPlatformAlignmentOperationText(activePrintPlatformAlignmentPlan.operation)}预览</strong>
+                            <span>{printPlatformAlignmentStatusText(activePrintPlatformAlignmentPlan)}</span>
+                            <small>
+                              已选 {activePrintPlatformAlignmentPlan.selectedObjectCount} 个 · 实际移动 {activePrintPlatformAlignmentPlan.changedObjectCount} 个 · 锁定约束 {activePrintPlatformAlignmentPlan.lockedObjectCount} 个 · 总位移 {activePrintPlatformAlignmentPlan.totalDistanceMm.toFixed(2)} 毫米 · 安全间距 {activePrintPlatformAlignmentPlan.clearanceMm.toFixed(2)} 毫米
+                            </small>
+                            {activePrintPlatformAlignmentPlan.failureReason && (
+                              <small className="print-platform-alignment-error">{activePrintPlatformAlignmentPlan.failureReason}</small>
+                            )}
+                            {activePrintPlatformAlignmentPlan.placements
+                              .filter((placement) => placement.selected)
+                              .map((placement) => (
+                                <small
+                                  key={placement.sourceIdentity}
+                                  className={`is-${placement.status}`}
+                                  data-print-platform-alignment-placement={placement.objectId}
+                                  data-print-platform-alignment-placement-status={placement.status}
+                                  data-print-platform-alignment-reference-object={placement.reference ? 'true' : 'false'}
+                                >
+                                  {printPlatformAlignmentPlacementText(placement)}
+                                </small>
+                              ))}
+                            <div className="print-platform-alignment-actions">
+                              <button
+                                type="button"
+                                data-print-platform-alignment-apply
+                                disabled={!activePrintPlatformAlignmentPlan.canApply}
+                                onClick={applyPrintPlatformAlignmentPlan}
+                              >
+                                确认全部目标位置
+                              </button>
+                              <button
+                                type="button"
+                                className="is-secondary"
+                                data-print-platform-alignment-cancel
+                                onClick={() => setPrintPlatformAlignmentPreviewRequest(null)}
+                              >
+                                取消预览
+                              </button>
+                            </div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-alignment-reference" />基准对象</div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-alignment-valid" />合法目标</div>
+                            <div className="print-platform-overlay-legend-row"><i className="is-alignment-invalid" />越界或间距冲突</div>
+                          </section>
+                        )}
+                      </section>
+                    )}
+                    {!printPlatformManualLayoutSession && !activePrintPlatformAlignmentPlan && !activePrintPlatformLayoutPlan && (
                       <button
                         type="button"
                         className="print-platform-manual-start-button"
@@ -3614,17 +3969,20 @@ export function ModelViewport() {
                         <div className="print-platform-overlay-legend-row"><i className="is-manual-invalid" />越界或间距冲突</div>
                       </section>
                     )}
-                    {printPlatformLayoutPlan && !activePrintPlatformLayoutPlan && !printPlatformManualLayoutSession && (
+                    {printPlatformLayoutPlan && !activePrintPlatformLayoutPlan && !printPlatformManualLayoutSession && !activePrintPlatformAlignmentPlan && (
                       <button
                         type="button"
                         className="print-platform-layout-preview-button"
                         data-print-platform-layout-create
-                        onClick={() => setPrintPlatformLayoutPreviewSourceIdentity(printPlatformLayoutPlan.sourceIdentity)}
+                        onClick={() => {
+                          setPrintPlatformAlignmentPreviewRequest(null);
+                          setPrintPlatformLayoutPreviewSourceIdentity(printPlatformLayoutPlan.sourceIdentity);
+                        }}
                       >
                         生成锁定与 90 度旋转寻优预览
                       </button>
                     )}
-                    {activePrintPlatformLayoutPlan && !printPlatformManualLayoutSession && (
+                    {activePrintPlatformLayoutPlan && !printPlatformManualLayoutSession && !activePrintPlatformAlignmentPlan && (
                       <section
                         className={`print-platform-layout-preview is-${activePrintPlatformLayoutPlan.status}`}
                         aria-label="多对象锁定与 90 度旋转寻优排布预览"
@@ -3683,7 +4041,9 @@ export function ModelViewport() {
             ))}
             <small>{printPlatformManualLayoutSession
               ? '拖动只修改当前临时预览；取消不会移动模型，确认后才会一次创建一个版本。'
-              : '只读叠加，不移动对象、不创建版本，也不参与选择。'}</small>
+              : activePrintPlatformAlignmentPlan
+                ? '对齐与分布只显示只读幽灵目标；取消不会移动模型，确认后才会一次创建一个版本。'
+                : '只读叠加，不移动对象、不创建版本，也不参与选择。'}</small>
           </aside>
           <div className="print-platform-view-actions">
             <button
