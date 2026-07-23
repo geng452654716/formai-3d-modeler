@@ -958,3 +958,14 @@ nestingDepth: 二维包含深度
 2026-07-23 第 86 阶段验证：针对性测试 6 个文件 65/65，完整前端测试 33 个文件 359/359，TypeScript/Vite 构建和差异检查通过。自动测试覆盖保持锁定、剩余空间排布、锁定越界、锁定冲突、未锁定旋转、全部锁定和顺序稳定；浏览器验证中文锁定控件、视觉区分、取消、原子应用及撤销重做，Console 为 0 个错误、0 个警告。
 
 **下一阶段架构方向：**新增纯前端手工排布会话，使用射线与平台平面求交计算未锁定对象候选 X/Z，再通过毫米网格、平台边界和矩形安全间距协议产生吸附与冲突结果；确认时复用批量展示动作。
+
+### 87. 打印平台多对象手工拖动排布与毫米吸附架构（已实现）
+
+- `src/model/printPlatformManualLayout.ts` 是不依赖 React、Three.js 和 Zustand 的纯会话协议。`createPrintPlatformManualLayoutSession(...)` 从 `PrintPlatformMultiObjectPreview.objects` 建立稳定对象放置集合，保存当前/目标边界、原始/吸附中心、位移、锁定状态和中文失败原因；`movePrintPlatformManualLayoutObject(...)` 只更新指定未锁定对象，`setPrintPlatformManualLayoutSnapToGrid(...)` 重新应用全部对象最后一次原始交点。
+- 协议使用固定 `gridSizeMm: 1`，通过矩形边界容差判断安全有效区域，通过 X/Z 轴间隔区分水平重叠和安全间距不足，并把成对冲突写回双方。`canApply` 仅在至少一个未锁定对象实际移动且全部放置状态为 `valid` 时成立；未知对象身份和锁定对象移动请求保持会话不变。
+- `ModelViewport` 中的 `PrintPlatformManualLayoutDragLayer` 使用 React Three Fiber 指针事件、Three.js `Plane` 和 `event.ray.intersectPlane(...)` 将平台平面交点换算为毫米中心坐标，并在指针按下时保存抓取偏移。模型本体不随临时会话变换，拖动层只呈现目标边界、透明命中平面和中文 HTML 标签，且锁定对象不注册拖动事件。
+- 手工会话存在时关闭 `OrbitControls`，自动发出既有“俯视并适配平台”请求，并隐藏自动排布预览入口；来源身份、锁定签名、安全间距或有效区域身份变化通过 React 状态清理旧会话。面板以 `has-manual-layout` 限制图例最大高度并启用内部滚动，保留底部操作按钮的可达性。
+- 确认路径过滤 `!locked && moved && status === 'valid'` 的放置结果，只为这些对象生成保留原 Y、旋转、缩放和颜色的展示变更，再复用 `applyObjectPresentationBatch(...)` 原子写入一个版本；取消只丢弃组件会话。该模块不修改网格、CAD BRep、STL、STEP、3MF、制造结果或上传模型修订。
+- `src/model/printPlatformManualLayout.test.ts` 以 9 个纯协议测试覆盖锁定、1 毫米吸附、关闭吸附恢复原始交点、边界临界值、越界、重叠双方失效、安全间距、连续移动和未知对象身份。阶段完整回归为 34 个测试文件 368/368，生产构建通过；浏览器覆盖临时预览、吸附、冲突、取消、锁定、确认、撤销、重做和面板可达性，Console 为 0 个错误、0 个警告。
+
+**下一阶段架构方向：**在纯前端新增多对象选择与对齐/等距分布计划协议，按稳定对象身份计算 X/Z 边界或中心目标，复用手工排布的边界、间距状态语义及批量展示提交路径；预览不得直接写 Store。

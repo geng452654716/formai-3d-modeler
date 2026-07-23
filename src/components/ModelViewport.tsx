@@ -9,7 +9,7 @@ import {
   PerspectiveCamera,
   TransformControls
 } from '@react-three/drei';
-import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, DoubleSide, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Path, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
+import { BoxGeometry, BufferGeometry, Color, CylinderGeometry, DoubleSide, ExtrudeGeometry, Float32BufferAttribute, Matrix3, Matrix4, Mesh, Path, Plane, Quaternion, Raycaster, Shape, Vector2, Vector3 } from 'three';
 import type { Camera, Group, Object3D } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
@@ -59,6 +59,14 @@ import {
   resolvePrintPlatformGridGuide,
   type PrintPlatformOverlay
 } from '../model/printPlatformOverlay';
+import {
+  createPrintPlatformManualLayoutSession,
+  movePrintPlatformManualLayoutObject,
+  setPrintPlatformManualLayoutSnapToGrid,
+  type PrintPlatformManualLayoutPlacement,
+  type PrintPlatformManualLayoutPoint,
+  type PrintPlatformManualLayoutSession
+} from '../model/printPlatformManualLayout';
 import {
   collectMeshElementBoxSelection,
   createMeshElementSelectionSet,
@@ -2359,6 +2367,124 @@ function PrintPlatformOverlayLayer({ spacingDiagnostic, layoutPlan }: PrintPlatf
   );
 }
 
+interface PrintPlatformManualLayoutDragLayerProps {
+  session: PrintPlatformManualLayoutSession | null;
+  onMoveObject: (objectId: string, centerMm: PrintPlatformManualLayoutPoint) => void;
+}
+
+/** 在平台平面上接收拖动，只回传临时中心坐标；模型对象本身直到确认前都不会移动。 */
+function PrintPlatformManualLayoutDragLayer({
+  session,
+  onMoveObject
+}: PrintPlatformManualLayoutDragLayerProps) {
+  const draggingObjectId = useRef<string | null>(null);
+  const dragOffsetMm = useRef<PrintPlatformManualLayoutPoint>({ x: 0, z: 0 });
+  const dragPlane = useMemo(() => new Plane(new Vector3(0, 1, 0), -0.38), []);
+
+  if (!session) return null;
+
+  const planePoint = (event: ThreeEvent<PointerEvent>) => {
+    const point = event.ray.intersectPlane(dragPlane, new Vector3());
+    return point ? { x: point.x, z: point.z } : null;
+  };
+
+  const releasePointer = (event: ThreeEvent<PointerEvent>) => {
+    draggingObjectId.current = null;
+    const target = event.target as EventTarget & { releasePointerCapture?: (pointerId: number) => void };
+    target.releasePointerCapture?.(event.pointerId);
+  };
+
+  return (
+    <group>
+      {session.placements.map((placement, index) => {
+        const widthMm = placement.targetBoundsMm.maximumX - placement.targetBoundsMm.minimumX;
+        const depthMm = placement.targetBoundsMm.maximumZ - placement.targetBoundsMm.minimumZ;
+        const center = placement.targetCenterMm;
+        const valid = placement.status === 'valid';
+        const color = placement.locked ? '#9aa4ad' : valid ? '#69e3ff' : '#ff5f70';
+        return (
+          <group key={`手工排布拖动-${placement.objectId}`}>
+            <Line
+              points={createPrintPlatformRectanglePoints(
+                placement.targetBoundsMm,
+                PRINT_PLATFORM_OVERLAY_HEIGHTS_MM.layout + 0.08 + index * 0.002
+              )}
+              color={color}
+              lineWidth={placement.locked ? 2 : valid ? 3.2 : 4}
+              dashed
+              dashSize={placement.locked ? 3 : 5}
+              gapSize={1.5}
+              depthTest={false}
+              depthWrite={false}
+              raycast={() => undefined}
+              renderOrder={31}
+            />
+            <mesh
+              position={[center.x, 0.38, center.z]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              renderOrder={30}
+              onPointerDown={placement.locked ? undefined : (event) => {
+                if (event.button !== 0) return;
+                event.stopPropagation();
+                const point = planePoint(event);
+                if (!point) return;
+                draggingObjectId.current = placement.objectId;
+                dragOffsetMm.current = {
+                  x: placement.targetCenterMm.x - point.x,
+                  z: placement.targetCenterMm.z - point.z
+                };
+                const target = event.target as EventTarget & { setPointerCapture?: (pointerId: number) => void };
+                target.setPointerCapture?.(event.pointerId);
+              }}
+              onPointerMove={placement.locked ? undefined : (event) => {
+                if (draggingObjectId.current !== placement.objectId) return;
+                event.stopPropagation();
+                const point = planePoint(event);
+                if (!point) return;
+                onMoveObject(placement.objectId, {
+                  x: point.x + dragOffsetMm.current.x,
+                  z: point.z + dragOffsetMm.current.z
+                });
+              }}
+              onPointerUp={placement.locked ? undefined : (event) => {
+                event.stopPropagation();
+                releasePointer(event);
+              }}
+              onPointerCancel={placement.locked ? undefined : releasePointer}
+            >
+              <planeGeometry args={[Math.max(widthMm, 2), Math.max(depthMm, 2)]} />
+              <meshBasicMaterial
+                color={color}
+                side={DoubleSide}
+                transparent
+                opacity={placement.locked ? 0.035 : valid ? 0.12 : 0.2}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </mesh>
+            <Html
+              position={[center.x, 0.52, center.z]}
+              center
+              zIndexRange={[8, 0]}
+              style={{ pointerEvents: 'none' }}
+            >
+              <span
+                className={`print-platform-manual-object-label is-${placement.status}${placement.locked ? ' is-locked' : ''}`}
+                data-print-platform-manual-object={placement.objectId}
+                data-print-platform-manual-status={placement.status}
+                data-print-platform-manual-x={placement.targetCenterMm.x}
+                data-print-platform-manual-z={placement.targetCenterMm.z}
+              >
+                {placement.objectLabel}{placement.locked ? ' · 已锁定' : ''}
+              </span>
+            </Html>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
 function printPlatformOverlayStatusText(overlay: PrintPlatformOverlay) {
   if (overlay.status === 'inside') return `“${overlay.objectLabel}”位于安全有效区域`;
   if (overlay.status === 'too-large') {
@@ -2440,6 +2566,22 @@ function printPlatformLayoutPlacementText(placement: PrintPlatformObjectLockedRo
     : `保持 Y 轴 ${placement.currentRotationYDeg.toFixed(2)}°`;
   const target = `目标占地 X ${placement.targetBoundsMm.minimumX.toFixed(2)} 至 ${placement.targetBoundsMm.maximumX.toFixed(2)} 毫米、Z ${placement.targetBoundsMm.minimumZ.toFixed(2)} 至 ${placement.targetBoundsMm.maximumZ.toFixed(2)} 毫米`;
   return `${placement.objectLabel}：${x}，${z}，水平位移 ${placement.distanceMm.toFixed(2)} 毫米；${rotation}；${target}`;
+}
+
+function printPlatformManualLayoutStatusText(session: PrintPlatformManualLayoutSession) {
+  if (session.invalidObjectCount > 0) {
+    return `当前有 ${session.invalidObjectCount} 个对象越界或与其他对象冲突，修正前不能确认`;
+  }
+  if (session.changedObjectCount === 0) return '拖动青色对象边界以设置临时位置，当前尚无位置变化';
+  return `已有 ${session.changedObjectCount} 个对象形成合法临时位置，可以一次确认全部变化`;
+}
+
+function printPlatformManualLayoutPlacementText(placement: PrintPlatformManualLayoutPlacement) {
+  if (placement.locked) return `${placement.objectLabel}：已锁定，不可拖动`;
+  const raw = `吸附前 X ${placement.rawCenterMm.x.toFixed(2)}、Z ${placement.rawCenterMm.z.toFixed(2)} 毫米`;
+  const target = `目标 X ${placement.targetCenterMm.x.toFixed(2)}、Z ${placement.targetCenterMm.z.toFixed(2)} 毫米`;
+  const delta = `位移 X ${placement.deltaMm.x.toFixed(2)}、Z ${placement.deltaMm.z.toFixed(2)} 毫米`;
+  return `${placement.objectLabel}：${raw}；${target}；${delta}${placement.failureReason ? `；${placement.failureReason}` : '；位置合法'}`;
 }
 
 interface PrintPlatformCameraControllerProps {
@@ -2606,6 +2748,8 @@ interface ModelSceneProps {
   printPlatformViewRequest: PrintPlatformViewRequest | null;
   printPlatformSpacingDiagnostic: PrintPlatformMultiObjectSpacingDiagnostic | null;
   printPlatformLayoutPlan: PrintPlatformMultiObjectLockedRotationLayoutPlan | null;
+  printPlatformManualLayoutSession: PrintPlatformManualLayoutSession | null;
+  onMovePrintPlatformManualObject: (objectId: string, centerMm: PrintPlatformManualLayoutPoint) => void;
   onPrintPlatformReturnSnapshotSourceChange: (sourceIdentity: string | null) => void;
 }
 
@@ -2613,6 +2757,8 @@ function ModelScene({
   printPlatformViewRequest,
   printPlatformSpacingDiagnostic,
   printPlatformLayoutPlan,
+  printPlatformManualLayoutSession,
+  onMovePrintPlatformManualObject,
   onPrintPlatformReturnSnapshotSourceChange
 }: ModelSceneProps) {
   const parameters = useModelStore((state) => state.parameters);
@@ -2721,7 +2867,7 @@ function ModelScene({
       <PerspectiveCamera makeDefault position={[92, 70, 92]} fov={34} far={5000} />
       <OrbitControls
         makeDefault
-        enabled={cadFaceSelectionMode !== 'box' && !(showUploadedStl && meshElementEditMode !== 'off' && meshElementSelectionMethod === 'box')}
+        enabled={!printPlatformManualLayoutSession && cadFaceSelectionMode !== 'box' && !(showUploadedStl && meshElementEditMode !== 'off' && meshElementSelectionMethod === 'box')}
         target={[0, 11, 0]}
         minDistance={55}
         maxDistance={1_000_000}
@@ -2987,6 +3133,10 @@ function ModelScene({
         spacingDiagnostic={printPlatformSpacingDiagnostic}
         layoutPlan={printPlatformLayoutPlan}
       />
+      <PrintPlatformManualLayoutDragLayer
+        session={printPlatformManualLayoutSession}
+        onMoveObject={onMovePrintPlatformManualObject}
+      />
       <ContactShadows position={[0, 0.02, 0]} opacity={0.5} scale={150} blur={2.6} far={80} />
     </>
   );
@@ -3002,6 +3152,7 @@ export function ModelViewport() {
   const [printPlatformSpacingClearanceInput, setPrintPlatformSpacingClearanceInput] = useState('2');
   const [printPlatformLayoutPreviewSourceIdentity, setPrintPlatformLayoutPreviewSourceIdentity] = useState<string | null>(null);
   const [printPlatformLockedObjectIds, setPrintPlatformLockedObjectIds] = useState<string[]>([]);
+  const [printPlatformManualLayoutSession, setPrintPlatformManualLayoutSession] = useState<PrintPlatformManualLayoutSession | null>(null);
   const cadStatus = useModelStore((state) => state.cadStatus);
   const cadResult = useModelStore((state) => state.cadResult);
   const cadError = useModelStore((state) => state.cadError);
@@ -3093,17 +3244,42 @@ export function ModelViewport() {
     setPrintPlatformViewRequest(null);
     setPrintPlatformReturnSourceIdentity(null);
     setPrintPlatformLayoutPreviewSourceIdentity(null);
+    setPrintPlatformManualLayoutSession(null);
   }, [printPlatformOverlay?.sourceIdentity]);
 
   useEffect(() => {
     setPrintPlatformLockedObjectIds([]);
+    setPrintPlatformManualLayoutSession(null);
   }, [printPlatformMultiObjectPreview?.sourceIdentity]);
+
+  useEffect(() => {
+    setPrintPlatformManualLayoutSession(null);
+  }, [printPlatformSpacingState.diagnostic?.sourceIdentity, printPlatformLockedObjectIds.join('\u0000')]);
 
   const togglePrintPlatformObjectLock = (objectId: string) => {
     setPrintPlatformLockedObjectIds((previous) => (
       previous.includes(objectId)
         ? previous.filter((candidate) => candidate !== objectId)
         : [...previous, objectId].sort()
+    ));
+  };
+
+  const startPrintPlatformManualLayout = () => {
+    if (!printPlatformMultiObjectPreview || !printPlatformOverlay || !printPlatformSpacingState.diagnostic) return;
+    setPrintPlatformLayoutPreviewSourceIdentity(null);
+    setPrintPlatformManualLayoutSession(createPrintPlatformManualLayoutSession(
+      printPlatformMultiObjectPreview,
+      printPlatformOverlay.effectiveBoundsMm,
+      printPlatformSpacingState.diagnostic.clearanceMm,
+      printPlatformLockedObjectIds,
+      true
+    ));
+    setPrintPlatformViewRequest((previous) => createNextPrintPlatformViewRequest(previous, printPlatformOverlay));
+  };
+
+  const movePrintPlatformManualObject = (objectId: string, centerMm: PrintPlatformManualLayoutPoint) => {
+    setPrintPlatformManualLayoutSession((current) => (
+      current ? movePrintPlatformManualLayoutObject(current, objectId, centerMm) : current
     ));
   };
 
@@ -3160,6 +3336,53 @@ export function ModelViewport() {
         : `旋转寻优排布 ${activePrintPlatformLayoutPlan.objectCount} 个打印对象`
     );
     if (applied) setPrintPlatformLayoutPreviewSourceIdentity(null);
+  };
+
+  const applyPrintPlatformManualLayout = () => {
+    if (!printPlatformManualLayoutSession?.canApply) return;
+    const updates = printPlatformManualLayoutSession.placements
+      .filter((placement) => !placement.locked && placement.moved && placement.status === 'valid')
+      .map((placement) => {
+        const splitSourceId = manufacturingResult?.sourceKind === 'cad-part'
+          && (placement.objectId === `${manufacturingResult.sourcePartId}-negative`
+            || placement.objectId === `${manufacturingResult.sourcePartId}-positive`)
+          ? manufacturingResult.sourcePartId
+          : null;
+        const cadPart = cadResult?.parts.find((part) => part.id === (splitSourceId ?? placement.objectId));
+        const fallbackColor = placement.objectId.endsWith('-negative')
+          ? '#c9d9e8'
+          : placement.objectId.endsWith('-positive')
+            ? '#e7d4b6'
+            : placement.objectId === 'uploaded-model'
+              ? '#d7dde4'
+              : cadPart?.role === 'cover' || placement.objectId === 'cover'
+                ? '#eeeae1'
+                : '#d9d4c8';
+        const current = normalizeObjectPresentation(
+          objectPresentations[placement.objectId]
+            ?? (splitSourceId ? objectPresentations[splitSourceId] : undefined),
+          fallbackColor
+        );
+        return {
+          objectId: placement.objectId,
+          presentation: {
+            ...current,
+            transform: {
+              ...current.transform,
+              positionMm: {
+                ...current.transform.positionMm,
+                x: current.transform.positionMm.x + placement.deltaMm.x,
+                z: current.transform.positionMm.z + placement.deltaMm.z
+              }
+            }
+          }
+        };
+      });
+    const applied = applyObjectPresentationBatch(
+      updates,
+      `手工排布 ${updates.length} 个打印对象（1 毫米吸附）`
+    );
+    if (applied) setPrintPlatformManualLayoutSession(null);
   };
 
   const statusText = {
@@ -3228,11 +3451,13 @@ export function ModelViewport() {
           printPlatformViewRequest={printPlatformViewRequest}
           printPlatformSpacingDiagnostic={printPlatformSpacingState.diagnostic}
           printPlatformLayoutPlan={activePrintPlatformLayoutPlan}
+          printPlatformManualLayoutSession={printPlatformManualLayoutSession}
+          onMovePrintPlatformManualObject={movePrintPlatformManualObject}
           onPrintPlatformReturnSnapshotSourceChange={setPrintPlatformReturnSourceIdentity}
         />
       </Canvas>
       {printPlatformOverlay && (
-        <div className="print-platform-overlay-stack">
+        <div className={`print-platform-overlay-stack${printPlatformManualLayoutSession ? ' has-manual-layout' : ''}`}>
           <aside
             className={`print-platform-overlay-legend is-${printPlatformOverlay.status}`}
             aria-label="打印平台三维视口图例"
@@ -3322,7 +3547,74 @@ export function ModelViewport() {
                         );
                       })}
                     </section>
-                    {printPlatformLayoutPlan && !activePrintPlatformLayoutPlan && (
+                    {!printPlatformManualLayoutSession && (
+                      <button
+                        type="button"
+                        className="print-platform-manual-start-button"
+                        data-print-platform-manual-start
+                        disabled={printPlatformMultiObjectPreview.objectCount === printPlatformLockedObjectIds.length}
+                        onClick={startPrintPlatformManualLayout}
+                      >
+                        开始俯视手工排布
+                      </button>
+                    )}
+                    {printPlatformManualLayoutSession && (
+                      <section
+                        className={`print-platform-manual-layout ${printPlatformManualLayoutSession.invalidObjectCount > 0 ? 'is-invalid' : 'is-valid'}`}
+                        aria-label="打印平台手工拖动排布"
+                        data-print-platform-manual-session
+                        data-print-platform-manual-valid={printPlatformManualLayoutSession.invalidObjectCount === 0 ? 'true' : 'false'}
+                      >
+                        <strong>俯视手工排布</strong>
+                        <label className="print-platform-manual-snap">
+                          <input
+                            type="checkbox"
+                            checked={printPlatformManualLayoutSession.snapToGrid}
+                            data-print-platform-manual-snap
+                            onChange={(event) => setPrintPlatformManualLayoutSession((current) => (
+                              current ? setPrintPlatformManualLayoutSnapToGrid(current, event.target.checked) : current
+                            ))}
+                          />
+                          <span>启用固定 1 毫米网格吸附</span>
+                        </label>
+                        <span>{printPlatformManualLayoutStatusText(printPlatformManualLayoutSession)}</span>
+                        <small>
+                          可拖动 {printPlatformManualLayoutSession.adjustableObjectCount} 个 · 锁定 {printPlatformManualLayoutSession.lockedObjectCount} 个 · 已变化 {printPlatformManualLayoutSession.changedObjectCount} 个 · 安全间距 {printPlatformManualLayoutSession.clearanceMm.toFixed(2)} 毫米
+                        </small>
+                        {printPlatformManualLayoutSession.placements.map((placement) => (
+                          <small
+                            key={placement.objectId}
+                            className={`is-${placement.status}`}
+                            data-print-platform-manual-placement={placement.objectId}
+                            data-print-platform-manual-placement-status={placement.status}
+                            data-print-platform-manual-locked={placement.locked ? 'true' : 'false'}
+                          >
+                            {printPlatformManualLayoutPlacementText(placement)}
+                          </small>
+                        ))}
+                        <div className="print-platform-manual-actions">
+                          <button
+                            type="button"
+                            data-print-platform-manual-apply
+                            disabled={!printPlatformManualLayoutSession.canApply}
+                            onClick={applyPrintPlatformManualLayout}
+                          >
+                            确认全部临时位置
+                          </button>
+                          <button
+                            type="button"
+                            className="is-secondary"
+                            data-print-platform-manual-cancel
+                            onClick={() => setPrintPlatformManualLayoutSession(null)}
+                          >
+                            取消手工排布
+                          </button>
+                        </div>
+                        <div className="print-platform-overlay-legend-row"><i className="is-manual-valid" />合法临时位置</div>
+                        <div className="print-platform-overlay-legend-row"><i className="is-manual-invalid" />越界或间距冲突</div>
+                      </section>
+                    )}
+                    {printPlatformLayoutPlan && !activePrintPlatformLayoutPlan && !printPlatformManualLayoutSession && (
                       <button
                         type="button"
                         className="print-platform-layout-preview-button"
@@ -3332,7 +3624,7 @@ export function ModelViewport() {
                         生成锁定与 90 度旋转寻优预览
                       </button>
                     )}
-                    {activePrintPlatformLayoutPlan && (
+                    {activePrintPlatformLayoutPlan && !printPlatformManualLayoutSession && (
                       <section
                         className={`print-platform-layout-preview is-${activePrintPlatformLayoutPlan.status}`}
                         aria-label="多对象锁定与 90 度旋转寻优排布预览"
@@ -3389,7 +3681,9 @@ export function ModelViewport() {
             {printPlatformOverflowDescriptions(printPlatformOverlay).map((description) => (
               <span key={description} className="print-platform-overlay-overflow">{description}</span>
             ))}
-            <small>只读叠加，不移动对象、不创建版本，也不参与选择。</small>
+            <small>{printPlatformManualLayoutSession
+              ? '拖动只修改当前临时预览；取消不会移动模型，确认后才会一次创建一个版本。'
+              : '只读叠加，不移动对象、不创建版本，也不参与选择。'}</small>
           </aside>
           <div className="print-platform-view-actions">
             <button

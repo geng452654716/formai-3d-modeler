@@ -1467,6 +1467,14 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   gap: 7px;
   pointer-events: none;
 }
+.print-platform-overlay-stack.has-manual-layout .print-platform-overlay-legend {
+  max-height: calc(100vh - 310px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  scrollbar-color: rgba(105, 227, 255, .38) rgba(255, 255, 255, .04);
+  scrollbar-width: thin;
+}
 .print-platform-overlay-legend {
   display: flex;
   flex-direction: column;
@@ -1688,3 +1696,87 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
   color: #ffc982;
 }
 .print-platform-overlay-legend-row i.is-layout-locked { color: #9aa4ad; border-top-style: dashed; border-top-width: 3px; }
+
+.print-platform-manual-start-button {
+  min-height: 25px;
+  margin-top: 3px;
+  border: 1px solid rgba(105, 227, 255, .46);
+  border-radius: 5px;
+  background: rgba(22, 113, 132, .34);
+  color: #c5f6ff;
+  font-size: 8px;
+  pointer-events: auto;
+}
+.print-platform-manual-start-button:hover { background: rgba(27, 132, 153, .5); }
+.print-platform-manual-start-button:disabled { cursor: not-allowed; opacity: .4; }
+.print-platform-manual-layout {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(105, 227, 255, .26);
+  pointer-events: none;
+}
+.print-platform-manual-layout > strong { color: #b9f3ff; font-size: 9px; }
+.print-platform-manual-layout > span,
+.print-platform-manual-layout > small { color: #aeb4b8; font-size: 8px; line-height: 1.45; }
+.print-platform-manual-layout.is-valid > span { color: #8fe9fa; }
+.print-platform-manual-layout.is-invalid > span,
+.print-platform-manual-layout > small.is-outside,
+.print-platform-manual-layout > small.is-overlap,
+.print-platform-manual-layout > small.is-too-close { color: #ff8895; }
+.print-platform-manual-snap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #d5dee3;
+  font-size: 8px;
+  pointer-events: auto;
+}
+.print-platform-manual-snap input { accent-color: #45cfe8; }
+.print-platform-manual-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  pointer-events: auto;
+}
+.print-platform-manual-actions button {
+  min-height: 24px;
+  border: 1px solid rgba(105, 227, 255, .44);
+  border-radius: 5px;
+  background: rgba(31, 105, 125, .36);
+  color: #b9f3ff;
+  font-size: 8px;
+}
+.print-platform-manual-actions button.is-secondary {
+  border-color: rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .05);
+  color: #c3c8cc;
+}
+.print-platform-manual-actions button:disabled { cursor: not-allowed; opacity: .42; }
+.print-platform-overlay-legend-row i.is-manual-valid { color: #69e3ff; border-top-style: dashed; border-top-width: 3px; }
+.print-platform-overlay-legend-row i.is-manual-invalid { color: #ff5f70; border-top-style: dashed; border-top-width: 4px; }
+.print-platform-manual-object-label {
+  display: inline-flex;
+  max-width: 120px;
+  padding: 2px 5px;
+  border: 1px solid rgba(105, 227, 255, .64);
+  border-radius: 4px;
+  background: rgba(16, 37, 43, .9);
+  color: #c5f6ff;
+  font-size: 8px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.print-platform-manual-object-label.is-outside,
+.print-platform-manual-object-label.is-overlap,
+.print-platform-manual-object-label.is-too-close {
+  border-color: rgba(255, 95, 112, .8);
+  background: rgba(79, 22, 30, .9);
+  color: #ffd1d6;
+}
+.print-platform-manual-object-label.is-locked {
+  border-color: rgba(154, 164, 173, .65);
+  background: rgba(42, 46, 50, .9);
+  color: #c2c8cd;
+}
