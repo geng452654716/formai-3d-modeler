@@ -1754,6 +1754,33 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 }
 .print-platform-alignment-operations.is-distribution { grid-template-columns: 1fr 1fr; }
 .print-platform-alignment-operations button:not(:disabled):hover { background: rgba(31, 105, 125, .42); color: #d8faff; }
+
+.print-platform-fixed-gap-controls {
+  display: grid;
+  gap: 4px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 209, 102, .2);
+}
+.print-platform-fixed-gap-controls > small { color: #858f95; font-size: 8px; line-height: 1.45; }
+.print-platform-fixed-gap-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  color: #cfd5d9;
+  font-size: 8px;
+}
+.print-platform-fixed-gap-input input {
+  min-width: 0;
+  height: 24px;
+  border: 1px solid rgba(255, 209, 102, .34);
+  border-radius: 5px;
+  background: rgba(18, 27, 31, .96);
+  color: #fff0bd;
+  font-size: 8px;
+  padding: 0 6px;
+}
+.print-platform-fixed-gap-input input:disabled { opacity: .45; }
 .print-platform-alignment-preview {
   display: grid;
   gap: 4px;
